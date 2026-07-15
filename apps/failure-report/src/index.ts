@@ -8,3 +8,7 @@ export {
   type EveRootTurn,
   type RootSessionStore,
 } from "./eve-root-invoker.js";
+export {
+  createMcpRootInvoker,
+  type McpRootCompositionOptions,
+} from "./mcp-composition.js";

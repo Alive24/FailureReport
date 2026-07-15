@@ -1,13 +1,24 @@
-import { defineAgent } from "eve";
+import { defineAgent, defineDynamic } from "eve";
 
-import policyJson from "./config/backend/policy.json" with { type: "json" };
+import backendJson from "./config/backend/codex-app-server.json" with { type: "json" };
 
-import { parseBackendPolicy } from "../../../src/backend-policy.js";
+import { parseCkbBackendConfig } from "../../../src/backend-config.js";
+import {
+  createBlockedCkbModel,
+  createCkbCodexModelResolver,
+} from "../../../src/backends/ckb-codex-model.js";
 
-const policy = parseBackendPolicy(policyJson);
+const backend = parseCkbBackendConfig(backendJson);
+const resolveModel = createCkbCodexModelResolver(backend);
 
 export default defineAgent({
   description:
     "Diagnose CKB smart-contract, transaction-assembly, Nostr, and debugger-script failures with evidence-backed recommendations.",
-  model: policy.agent.model,
+  model: defineDynamic({
+    fallback: createBlockedCkbModel(),
+    events: {
+      "step.started": (_event, context) => resolveModel(context.messages),
+    },
+  }),
+  modelContextWindowTokens: backend.model_context_window_tokens,
 });

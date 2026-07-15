@@ -37,6 +37,9 @@ importers:
       ai:
         specifier: ^7.0.26
         version: 7.0.28(zod@4.4.3)
+      ai-sdk-provider-codex-app-server:
+        specifier: 1.1.7
+        version: 1.1.7(zod@4.4.3)
       eve:
         specifier: ^0.24.3
         version: 0.24.3(@opentelemetry/api@1.9.1)(ai@7.0.28(zod@4.4.3))(vite@8.1.4(@types/node@24.13.3))
@@ -93,6 +96,15 @@ packages:
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
+  "@ai-sdk/provider-utils@4.0.39":
+    resolution:
+      {
+        integrity: sha512-XPR6o7561RYUkfYlLYouWsvm6Gv2tYIQy5pttGRkvML98u138ClPThn5yiQg5rMQutTtZLB+GUC8qFFCzDKQQQ==,
+      }
+    engines: { node: ">=18" }
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
   "@ai-sdk/provider-utils@5.0.10":
     resolution:
       {
@@ -101,6 +113,13 @@ packages:
     engines: { node: ">=22" }
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
+
+  "@ai-sdk/provider@3.0.14":
+    resolution:
+      {
+        integrity: sha512-5X1k57JBJ4H7H1QjX7CnJYAB1I19r/trVZTMcSms7/kLNZ8RaU4Nt2agcwZzv82Hfx6Q7/TOLU7agAKeFfc8cA==,
+      }
+    engines: { node: ">=18" }
 
   "@ai-sdk/provider@4.0.3":
     resolution:
@@ -545,6 +564,15 @@ packages:
         integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==,
       }
     engines: { node: ">= 0.6" }
+
+  ai-sdk-provider-codex-app-server@1.1.7:
+    resolution:
+      {
+        integrity: sha512-5fDJ6dte0vaN/capeHPaP4JgjovUcBN7MLA7Kdz3L09Jo0uczp/nBmfvsicCzcGOdmahZEAPWmHBaV7ujFa3iw==,
+      }
+    engines: { node: ">=18" }
+    peerDependencies:
+      zod: ^3.0.0 || ^4.0.0
 
   ai@7.0.28:
     resolution:
@@ -1906,6 +1934,13 @@ snapshots:
       "@vercel/oidc": 3.2.0
       zod: 4.4.3
 
+  "@ai-sdk/provider-utils@4.0.39(zod@4.4.3)":
+    dependencies:
+      "@ai-sdk/provider": 3.0.14
+      "@standard-schema/spec": 1.1.0
+      eventsource-parser: 3.1.0
+      zod: 4.4.3
+
   "@ai-sdk/provider-utils@5.0.10(zod@4.4.3)":
     dependencies:
       "@ai-sdk/provider": 4.0.3
@@ -1913,6 +1948,10 @@ snapshots:
       "@workflow/serde": 4.1.0
       eventsource-parser: 3.1.0
       zod: 4.4.3
+
+  "@ai-sdk/provider@3.0.14":
+    dependencies:
+      json-schema: 0.4.0
 
   "@ai-sdk/provider@4.0.3":
     dependencies:
@@ -2151,6 +2190,12 @@ snapshots:
     dependencies:
       mime-types: 3.0.2
       negotiator: 1.0.0
+
+  ai-sdk-provider-codex-app-server@1.1.7(zod@4.4.3):
+    dependencies:
+      "@ai-sdk/provider": 3.0.14
+      "@ai-sdk/provider-utils": 4.0.39(zod@4.4.3)
+      zod: 4.4.3
 
   ai@7.0.28(zod@4.4.3):
     dependencies:

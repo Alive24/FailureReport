@@ -1,11 +1,15 @@
-import { defineAgent } from "eve";
+import { defineAgent, type AgentDefinition } from "eve";
 
-import policyJson from "./config/backend/policy.json" with { type: "json" };
+import backendJson from "./config/backend/root.json" with { type: "json" };
 
-import { parseBackendPolicy } from "../src/backend-policy.js";
+import { parseRootBackendConfig } from "../src/backend-config.js";
+import { createRootModel } from "../src/backends/root-model.js";
 
-const policy = parseBackendPolicy(policyJson);
+const backend = parseRootBackendConfig(backendJson);
 
-export default defineAgent({
-  model: policy.agent.model,
+const agent: AgentDefinition = defineAgent({
+  model: createRootModel(backend),
+  modelContextWindowTokens: backend.model_context_window_tokens,
 });
+
+export default agent;

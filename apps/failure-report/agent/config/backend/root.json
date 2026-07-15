@@ -1,0 +1,6 @@
+{
+  "schema_version": "failure-report/root-backend/v1",
+  "kind": "experimental_chatgpt",
+  "model": "gpt-5.6-sol",
+  "model_context_window_tokens": 200000
+}

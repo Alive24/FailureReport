@@ -72,4 +72,28 @@ describe("FailureReport protocol", () => {
 
     expect(withIssue.shared_context?.workpad_revision).toBe(3);
   });
+
+  it("keeps Codex execution state typed and outside shared Issue context", async () => {
+    const report = failureReportSchema.parse(
+      await loadFixture("issue-54.json"),
+    );
+    const withExecution = failureReportSchema.parse({
+      ...report,
+      execution_state: {
+        backend_id: "codex_app_server",
+        codex_thread_id: "thr_ckb_54",
+        worktree: {
+          path: "/tmp/failure-report/ckb-54",
+          identity: "ckb-issue-54",
+          branch: "failure-report/ckb-issue-54",
+          base_revision: report.target.revision,
+          head_revision: report.target.revision,
+        },
+        last_execution_at: report.updated_at,
+      },
+    });
+
+    expect(withExecution.execution_state?.codex_thread_id).toBe("thr_ckb_54");
+    expect(withExecution.shared_context).toBeUndefined();
+  });
 });

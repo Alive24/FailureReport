@@ -93,6 +93,25 @@ export const githubIssueContextSchema = z
   })
   .strict();
 
+export const executionWorktreeSchema = z
+  .object({
+    path: z.string().min(1),
+    identity: z.string().min(1),
+    branch: z.string().min(1),
+    base_revision: z.string().min(1),
+    head_revision: z.string().min(1),
+  })
+  .strict();
+
+export const executionStateSchema = z
+  .object({
+    backend_id: identifierSchema,
+    codex_thread_id: z.string().min(1).optional(),
+    worktree: executionWorktreeSchema,
+    last_execution_at: timestampSchema.optional(),
+  })
+  .strict();
+
 export const failureReportSchema = z
   .object({
     $schema: z.string().optional(),
@@ -112,6 +131,7 @@ export const failureReportSchema = z
     created_at: timestampSchema,
     updated_at: timestampSchema,
     shared_context: githubIssueContextSchema.optional(),
+    execution_state: executionStateSchema.optional(),
     origin: z
       .object({
         source: z.enum([
@@ -353,6 +373,8 @@ export const rootResultSchema = z
 
 export type FailureReport = z.infer<typeof failureReportSchema>;
 export type GithubIssueContext = z.infer<typeof githubIssueContextSchema>;
+export type ExecutionState = z.infer<typeof executionStateSchema>;
+export type ExecutionWorktree = z.infer<typeof executionWorktreeSchema>;
 export type RootRequest = z.infer<typeof rootRequestSchema>;
 export type RootResult = z.infer<typeof rootResultSchema>;
 

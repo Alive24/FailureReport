@@ -25,6 +25,7 @@
     "@failure-report/protocol": "workspace:*",
     "@failure-report/runtime-port": "workspace:*",
     "ai": "^7.0.26",
+    "ai-sdk-provider-codex-app-server": "1.1.7",
     "eve": "^0.24.3",
     "zod": "^4.4.3"
   }
