@@ -1,0 +1,25 @@
+{
+  "id": "ckboost/issue-45-cell-and-fee-handling",
+  "kind": "sparse_evidence_diagnosis",
+  "source_artifacts": [
+    {
+      "ref": "issue.json",
+      "kind": "github_issue_capture"
+    },
+    {
+      "ref": "fix.patch",
+      "kind": "linked_fix_patch"
+    }
+  ],
+  "expected_observations": [
+    "The Issue reports a need for extra cells as a workaround.",
+    "The only linked fix consolidates transaction fee handling into one function.",
+    "The patch changes transaction-wrapper and multiple service call sites."
+  ],
+  "required_uncertainty": [
+    "No original runtime error is retained.",
+    "No reproduction trace or debugger output is retained.",
+    "The public Issue does not independently verify end-user success after the fix."
+  ],
+  "recommended_next_action": "Request a failing transaction or reproduce the single-cell scenario with a targeted CKB debugger script before asserting a root cause."
+}

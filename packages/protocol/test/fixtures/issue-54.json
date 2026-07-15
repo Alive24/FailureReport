@@ -1,0 +1,791 @@
+{
+  "$schema": "../../../schemas/failure-report.schema.json",
+  "id": "ckboost/issue-54-nostr-reliability",
+  "schema_version": "failure-report/v1",
+  "status": "todo_ready",
+  "created_at": "2026-07-09T22:35:19Z",
+  "updated_at": "2026-07-11T00:00:00Z",
+  "origin": {
+    "source": "github_issue",
+    "reporter": "external CKBoost participant",
+    "related_work": [
+      {
+        "kind": "github_issue",
+        "ref": "https://github.com/Alive24/CKBoost/issues/54"
+      },
+      {
+        "kind": "conversation",
+        "ref": "conversation-evidence.md"
+      },
+      {
+        "kind": "commit",
+        "ref": "28fa51fb1f9885ac4adef00b51e9fa5a3923c00d"
+      },
+      {
+        "kind": "commit",
+        "ref": "fe8d8bda0d12ac810d8a750e13ef922186f812d4"
+      },
+      {
+        "kind": "commit",
+        "ref": "a2f98850862a8bc9ef9bb08c364ef6e8f03461a0"
+      }
+    ]
+  },
+  "target": {
+    "repository": "Alive24/CKBoost",
+    "revision": "396113ce312617edc7c9515919b1dedaca4a0b86",
+    "worktree_identity": "/Volumes/Bohemialive/GitHub/CKBoost",
+    "components": [
+      "quest submission UI",
+      "Nostr publication",
+      "Nostr retrieval",
+      "CKB user submission record"
+    ],
+    "environment": [
+      { "name": "platform", "value": "CKBoost" },
+      { "name": "browser", "value": "Chrome Desktop" },
+      { "name": "wallet", "value": "CKB wallet connected" },
+      { "name": "network_status", "value": "All synced" }
+    ]
+  },
+  "severity": "high",
+  "symptom": {
+    "observed_behavior": [
+      "An on-chain submission reference remained present while the referenced Nostr content could not be loaded.",
+      "All eight human-readable responses were unavailable to the participant.",
+      "The UI exposed a raw event reference and reported storage as Not Accessible.",
+      "Refresh, reopen, delay, and Resubmit Content did not produce durable recovery for the reporter."
+    ],
+    "expected_behavior": [
+      "A saved submission remains readable and editable across refresh and later sessions.",
+      "The durable chain reference advances only after the exact event is independently readable from the required relay quorum.",
+      "A failed replacement preserves the previous valid reference and exposes an actionable recovery state.",
+      "Absent, invalid, and unavailable relay states are distinguished."
+    ],
+    "raw_error_summary": "Unable to load submission content from decentralized storage; the event could not be retrieved from Nostr relays.",
+    "first_seen_at": "2026-07-09T00:00:00Z",
+    "reproduction": {
+      "preconditions": [
+        "A wallet owns an existing quest submission.",
+        "The user cell contains a Nostr event reference.",
+        "At least one queried relay returns empty or is unavailable while another relay may contain the event."
+      ],
+      "steps": [
+        "Open the completed quest with the same wallet.",
+        "Load the existing submission.",
+        "Observe whether an early empty relay result prevents a later valid event from being returned.",
+        "Attempt recovery or resubmission.",
+        "Refresh and reopen the quest to verify durable readability."
+      ],
+      "frequency": "Consistent for the reporter; deterministic with controlled relay timing."
+    }
+  },
+  "inputs": [
+    {
+      "id": "input-issue",
+      "kind": "github_issue",
+      "artifact": {
+        "ref": "https://github.com/Alive24/CKBoost/issues/54",
+        "media_type": "text/markdown",
+        "sensitivity": "public",
+        "retention": "durable"
+      },
+      "provenance": {
+        "phase": "intake",
+        "source_type": "issue",
+        "source_ref": "https://github.com/Alive24/CKBoost/issues/54",
+        "collector": "Failure Forge",
+        "collected_at": "2026-07-10T12:04:00Z"
+      }
+    },
+    {
+      "id": "input-event-reference",
+      "kind": "nostr_event_reference",
+      "artifact": {
+        "ref": "protected://ckboost/issue-54/replacement-nevent",
+        "sensitivity": "restricted",
+        "retention": "fixture"
+      },
+      "provenance": {
+        "phase": "intake",
+        "source_type": "human",
+        "source_ref": "original Codex session input",
+        "collector": "Codex",
+        "collected_at": "2026-07-10T12:04:00Z"
+      }
+    },
+    {
+      "id": "input-user-cell-reference",
+      "kind": "ckb_user_cell_reference",
+      "artifact": {
+        "ref": "protected://ckboost/issue-54/user-cell",
+        "sensitivity": "restricted",
+        "retention": "fixture"
+      },
+      "provenance": {
+        "phase": "intake",
+        "source_type": "human",
+        "source_ref": "original Codex session input",
+        "collector": "Codex",
+        "collected_at": "2026-07-10T12:04:00Z"
+      }
+    },
+    {
+      "id": "input-conversation",
+      "kind": "codex_conversation_digest",
+      "artifact": {
+        "ref": "conversation-evidence.md",
+        "media_type": "text/markdown",
+        "sensitivity": "internal",
+        "retention": "fixture"
+      },
+      "provenance": {
+        "phase": "investigation",
+        "source_type": "conversation",
+        "source_ref": "conversation-evidence.md",
+        "collector": "Fixture reconstruction",
+        "collected_at": "2026-07-11T00:00:00Z"
+      }
+    }
+  ],
+  "evidence": [
+    {
+      "id": "e-reported-failure",
+      "kind": "reported_observation",
+      "observed_fact": "The participant could not load or edit eight previously displayed responses while an on-chain reference remained present.",
+      "epistemic_status": "reported",
+      "provenance": {
+        "phase": "intake",
+        "source_type": "issue",
+        "source_ref": "https://github.com/Alive24/CKBoost/issues/54",
+        "collector": "Failure Forge"
+      },
+      "artifacts": [
+        {
+          "ref": "https://github.com/Alive24/CKBoost/issues/54",
+          "sensitivity": "public",
+          "retention": "durable"
+        }
+      ]
+    },
+    {
+      "id": "e-resubmit-not-durable",
+      "kind": "reported_observation",
+      "observed_fact": "Resubmit Content did not restore durable access for the reporter after refresh or reopen.",
+      "epistemic_status": "reported",
+      "provenance": {
+        "phase": "intake",
+        "source_type": "issue",
+        "source_ref": "https://github.com/Alive24/CKBoost/issues/54",
+        "collector": "Failure Forge"
+      },
+      "artifacts": []
+    },
+    {
+      "id": "e-event-valid",
+      "kind": "tool_observation",
+      "observed_fact": "The replacement event was valid, used kind 30078, contained all eight responses, and passed event identity validation.",
+      "interpretation": "The replacement event was not globally lost or corrupt.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "investigation",
+        "source_type": "tool",
+        "source_ref": "conversation-evidence.md#first-discrimination",
+        "collector": "Codex",
+        "collected_at": "2026-07-10T12:05:49Z",
+        "method": "Independent per-relay query and event validation"
+      },
+      "artifacts": [
+        {
+          "ref": "protected://ckboost/issue-54/replacement-event",
+          "sensitivity": "restricted",
+          "retention": "fixture"
+        }
+      ]
+    },
+    {
+      "id": "e-relay-timing",
+      "kind": "tool_observation",
+      "observed_fact": "A relay returning empty completed before slower relays returned the valid replacement event; another relay failed to connect.",
+      "interpretation": "An early terminal result could race a later valid event.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "investigation",
+        "source_type": "tool",
+        "source_ref": "conversation-evidence.md#first-discrimination",
+        "collector": "Codex",
+        "collected_at": "2026-07-10T12:05:49Z",
+        "method": "Timed per-relay queries"
+      },
+      "artifacts": []
+    },
+    {
+      "id": "e-chain-record-current",
+      "kind": "tool_observation",
+      "observed_fact": "CKB user-cell history contained one matching campaign and quest record updated to the replacement event reference.",
+      "interpretation": "Stale chain pointer, failed resubmit transaction, and duplicate record selection were excluded.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "investigation",
+        "source_type": "tool",
+        "source_ref": "conversation-evidence.md#chain-and-history-check",
+        "collector": "Codex",
+        "collected_at": "2026-07-10T12:12:18Z",
+        "method": "CKB user-cell history inspection"
+      },
+      "artifacts": [
+        {
+          "ref": "protected://ckboost/issue-54/user-cell-history",
+          "sensitivity": "restricted",
+          "retention": "fixture"
+        }
+      ]
+    },
+    {
+      "id": "e-old-event-discrepancy",
+      "kind": "tool_observation",
+      "observed_fact": "The previous event had eight subtask slots but only one non-empty answer, while the replacement event had all eight.",
+      "interpretation": "The old event cannot explain the reporter's remembered eight-answer UI state.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "investigation",
+        "source_type": "tool",
+        "source_ref": "conversation-evidence.md#chain-and-history-check",
+        "collector": "Codex",
+        "collected_at": "2026-07-10T12:13:06Z"
+      },
+      "artifacts": []
+    },
+    {
+      "id": "e-publish-first-success",
+      "kind": "repository_fact",
+      "observed_fact": "Pre-fix publication tried relays sequentially and returned after the first accepted write.",
+      "interpretation": "The application established only one demonstrated relay copy in the common path.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "investigation",
+        "source_type": "repository",
+        "source_ref": "repository://Alive24/CKBoost@396113c/dapp/hooks/use-nostr-storage.tsx",
+        "collector": "Codex",
+        "collected_at": "2026-07-10T12:13:06Z"
+      },
+      "artifacts": []
+    },
+    {
+      "id": "e-nevent-unverified-relays",
+      "kind": "repository_fact",
+      "observed_fact": "The pre-fix nevent encoded candidate relays that had not all demonstrated a readable copy.",
+      "interpretation": "Advertised redundancy exceeded verified redundancy.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "investigation",
+        "source_type": "repository",
+        "source_ref": "repository://Alive24/CKBoost@396113c/dapp/hooks/use-nostr-storage.tsx",
+        "collector": "Codex",
+        "collected_at": "2026-07-10T12:13:06Z"
+      },
+      "artifacts": []
+    },
+    {
+      "id": "e-fetch-eose-race",
+      "kind": "derived_finding",
+      "observed_fact": "Pre-fix retrieval could terminate after an early empty or EOSE result before a slower valid relay returned.",
+      "interpretation": "The read path could produce a false missing result for an available event.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "investigation",
+        "source_type": "agent",
+        "source_ref": "conversation-evidence.md#source-diagnosis",
+        "collector": "Codex",
+        "collected_at": "2026-07-10T12:13:06Z",
+        "method": "Relay timing correlated with source control flow"
+      },
+      "artifacts": []
+    },
+    {
+      "id": "e-retry-reused-promise",
+      "kind": "repository_fact",
+      "observed_fact": "The retry path reused the same fetch promise instead of creating a fresh network request.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "investigation",
+        "source_type": "repository",
+        "source_ref": "repository://Alive24/CKBoost@396113c/dapp/hooks/use-nostr-fetch.ts",
+        "collector": "Codex",
+        "collected_at": "2026-07-10T12:13:06Z"
+      },
+      "artifacts": []
+    },
+    {
+      "id": "e-human-relay-only",
+      "kind": "human_decision",
+      "observed_fact": "The user required Nostr relays to remain the only persistent event store and rejected Netlify Blobs or database persistence.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "human_decision",
+        "source_type": "human",
+        "source_ref": "conversation-evidence.md#human-architecture-decision",
+        "collector": "Codex",
+        "collected_at": "2026-07-10T17:45:51Z"
+      },
+      "artifacts": []
+    },
+    {
+      "id": "e-review-write-pollution",
+      "kind": "review_finding",
+      "observed_fact": "Relays opened for reads could accumulate in the pool and become unintended future write targets.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "review",
+        "source_type": "conversation",
+        "source_ref": "conversation-evidence.md#read-relays-polluting-write-targets",
+        "collector": "Side review and Codex verification",
+        "collected_at": "2026-07-10T19:15:08Z"
+      },
+      "artifacts": []
+    },
+    {
+      "id": "e-review-social-quorum",
+      "kind": "review_finding",
+      "observed_fact": "The first repair accidentally imposed submission quorum 2 on comments, likes, and other social events.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "review",
+        "source_type": "conversation",
+        "source_ref": "conversation-evidence.md#social-events-inheriting-submission-quorum",
+        "collector": "Side review and Codex verification",
+        "collected_at": "2026-07-10T19:15:08Z"
+      },
+      "artifacts": []
+    },
+    {
+      "id": "e-review-duplicate-repair",
+      "kind": "review_finding",
+      "observed_fact": "Skipping read-back after duplicate or rejected publish responses could leave repair tasks retrying forever.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "review",
+        "source_type": "conversation",
+        "source_ref": "conversation-evidence.md#duplicate-publish-causing-infinite-repair",
+        "collector": "Side review and Codex verification",
+        "collected_at": "2026-07-10T19:15:08Z"
+      },
+      "artifacts": []
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "h-event-lost-or-corrupt",
+      "statement": "The replacement event is globally unavailable or corrupt.",
+      "status": "rejected",
+      "supporting_evidence": ["e-reported-failure"],
+      "contradicting_evidence": ["e-event-valid", "e-relay-timing"],
+      "history": [
+        {
+          "status": "open",
+          "rationale": "The issue reported failed retrieval.",
+          "provenance": {
+            "phase": "intake",
+            "source_type": "issue",
+            "source_ref": "https://github.com/Alive24/CKBoost/issues/54",
+            "collector": "Failure Forge"
+          }
+        },
+        {
+          "status": "rejected",
+          "rationale": "Independent relays returned a valid replacement event containing all eight responses.",
+          "provenance": {
+            "phase": "investigation",
+            "source_type": "tool",
+            "source_ref": "e-event-valid",
+            "collector": "Codex"
+          }
+        }
+      ]
+    },
+    {
+      "id": "h-stale-or-duplicate-chain-record",
+      "statement": "The participant page selects a stale or duplicate on-chain submission record.",
+      "status": "rejected",
+      "supporting_evidence": [],
+      "contradicting_evidence": ["e-chain-record-current"],
+      "history": [
+        {
+          "status": "open",
+          "rationale": "The replacement event was created after the issue and could have been appended incorrectly.",
+          "provenance": {
+            "phase": "investigation",
+            "source_type": "agent",
+            "source_ref": "conversation-evidence.md#chain-and-history-check",
+            "collector": "Codex"
+          }
+        },
+        {
+          "status": "rejected",
+          "rationale": "History showed exactly one matching record updated to the replacement reference.",
+          "provenance": {
+            "phase": "investigation",
+            "source_type": "tool",
+            "source_ref": "e-chain-record-current",
+            "collector": "Codex"
+          }
+        }
+      ]
+    },
+    {
+      "id": "h-false-relay-redundancy",
+      "statement": "Publication establishes fewer readable copies than the nevent advertises.",
+      "status": "confirmed",
+      "supporting_evidence": [
+        "e-publish-first-success",
+        "e-nevent-unverified-relays",
+        "e-relay-timing"
+      ],
+      "contradicting_evidence": [],
+      "history": [
+        {
+          "status": "confirmed",
+          "rationale": "Source returned after first success and encoded unverified candidate relays; live probes showed uneven copies.",
+          "provenance": {
+            "phase": "investigation",
+            "source_type": "agent",
+            "source_ref": "conversation-evidence.md#source-diagnosis",
+            "collector": "Codex"
+          }
+        }
+      ]
+    },
+    {
+      "id": "h-fast-empty-relay-race",
+      "statement": "A fast empty or EOSE relay can beat a slower relay containing the valid event.",
+      "status": "confirmed",
+      "supporting_evidence": ["e-relay-timing", "e-fetch-eose-race"],
+      "contradicting_evidence": [],
+      "history": [
+        {
+          "status": "confirmed",
+          "rationale": "Timed relay probes reproduced the ordering required by the pre-fix early-terminal control flow.",
+          "provenance": {
+            "phase": "investigation",
+            "source_type": "agent",
+            "source_ref": "conversation-evidence.md#first-discrimination",
+            "collector": "Codex"
+          }
+        }
+      ]
+    },
+    {
+      "id": "h-retry-is-not-fresh",
+      "statement": "The apparent retry does not create a new relay request.",
+      "status": "confirmed",
+      "supporting_evidence": ["e-retry-reused-promise"],
+      "contradicting_evidence": [],
+      "history": [
+        {
+          "status": "confirmed",
+          "rationale": "Source inspection showed reuse of the same promise.",
+          "provenance": {
+            "phase": "investigation",
+            "source_type": "repository",
+            "source_ref": "e-retry-reused-promise",
+            "collector": "Codex"
+          }
+        }
+      ]
+    },
+    {
+      "id": "h-reporter-network-trigger",
+      "statement": "The reporter's browser could not reach the relay holding the available copy at the time of failure.",
+      "status": "supported",
+      "supporting_evidence": ["e-relay-timing", "e-reported-failure"],
+      "contradicting_evidence": [],
+      "history": [
+        {
+          "status": "supported",
+          "rationale": "Availability differed by relay and the participant path failed despite a valid event existing elsewhere.",
+          "provenance": {
+            "phase": "investigation",
+            "source_type": "agent",
+            "source_ref": "conversation-evidence.md#confirmed-rejected-and-open-conclusions",
+            "collector": "Codex"
+          }
+        }
+      ]
+    },
+    {
+      "id": "h-old-ui-content-source",
+      "statement": "Local UI state or another artifact supplied the eight answers previously seen by the reporter.",
+      "status": "open",
+      "supporting_evidence": ["e-old-event-discrepancy"],
+      "contradicting_evidence": [],
+      "history": [
+        {
+          "status": "open",
+          "rationale": "The old persisted event contains only one non-empty answer and cannot explain the remembered UI state.",
+          "provenance": {
+            "phase": "investigation",
+            "source_type": "tool",
+            "source_ref": "e-old-event-discrepancy",
+            "collector": "Codex"
+          }
+        }
+      ]
+    }
+  ],
+  "decisions": [
+    {
+      "id": "d-relay-only-persistence",
+      "kind": "architecture",
+      "statement": "Nostr relays are the only persistent store; validated browser cache and repair tasks are permitted, while centralized persistent backup is prohibited.",
+      "status": "accepted",
+      "authority": "human",
+      "rationale": "Preserve the intended decentralized and privacy-first storage architecture.",
+      "evidence_refs": ["e-human-relay-only"],
+      "provenance": {
+        "phase": "human_decision",
+        "source_type": "human",
+        "source_ref": "conversation-evidence.md#human-architecture-decision",
+        "collector": "Codex",
+        "collected_at": "2026-07-10T17:45:51Z"
+      }
+    },
+    {
+      "id": "d-submission-quorum-two",
+      "kind": "architecture",
+      "statement": "Submission-class events require two distinct verified relay copies before chain finalization.",
+      "status": "accepted",
+      "authority": "human",
+      "rationale": "A single accepted write did not provide sufficient durable availability.",
+      "evidence_refs": [
+        "e-publish-first-success",
+        "e-nevent-unverified-relays"
+      ],
+      "provenance": {
+        "phase": "human_decision",
+        "source_type": "conversation",
+        "source_ref": "conversation-evidence.md#human-architecture-decision",
+        "collector": "Codex"
+      }
+    },
+    {
+      "id": "d-configured-write-targets",
+      "kind": "safety",
+      "statement": "Only configured relays are write targets; advertised or read-opened relays remain read-only inputs.",
+      "status": "accepted",
+      "authority": "human",
+      "rationale": "Prevent unbounded or malicious relay-state pollution of future writes.",
+      "evidence_refs": ["e-review-write-pollution"],
+      "provenance": {
+        "phase": "review",
+        "source_type": "conversation",
+        "source_ref": "conversation-evidence.md#read-relays-polluting-write-targets",
+        "collector": "Codex"
+      }
+    },
+    {
+      "id": "d-social-single-copy",
+      "kind": "scope",
+      "statement": "Comments and likes retain single-verified-copy availability semantics unless separately redesigned.",
+      "status": "accepted",
+      "authority": "human",
+      "rationale": "The submission reliability repair must not silently break existing social features.",
+      "evidence_refs": ["e-review-social-quorum"],
+      "provenance": {
+        "phase": "review",
+        "source_type": "conversation",
+        "source_ref": "conversation-evidence.md#social-events-inheriting-submission-quorum",
+        "collector": "Codex"
+      }
+    },
+    {
+      "id": "d-no-unapproved-public-repair",
+      "kind": "safety",
+      "statement": "Diagnosis and tests must not publish repair events to public relays without explicit authorization.",
+      "status": "accepted",
+      "authority": "human",
+      "rationale": "Keep diagnosis read-only and avoid mutating public infrastructure unexpectedly.",
+      "evidence_refs": ["e-human-relay-only"],
+      "provenance": {
+        "phase": "human_decision",
+        "source_type": "human",
+        "source_ref": "conversation-evidence.md#human-architecture-decision",
+        "collector": "Codex"
+      }
+    }
+  ],
+  "experiments": [
+    {
+      "id": "x-per-relay-probe",
+      "question": "Is the replacement event globally absent, or does availability differ by relay and response timing?",
+      "proposed_action": "Query the exact event independently on each relevant relay and validate returned events.",
+      "approval": { "required": false, "status": "not_required" },
+      "baseline_evidence": ["e-reported-failure"],
+      "result_evidence": ["e-event-valid", "e-relay-timing"],
+      "outcome": "rejected",
+      "interpretation": "Global event loss was rejected; relay-dependent availability and timing were observed."
+    },
+    {
+      "id": "x-chain-history",
+      "question": "Did resubmission fail to update chain, append a duplicate, or leave a stale record selected?",
+      "proposed_action": "Inspect the user-cell history and matching campaign/quest record cardinality.",
+      "approval": { "required": false, "status": "not_required" },
+      "baseline_evidence": ["e-resubmit-not-durable"],
+      "result_evidence": ["e-chain-record-current"],
+      "outcome": "rejected",
+      "interpretation": "Stale chain and duplicate-record explanations were rejected."
+    },
+    {
+      "id": "x-source-correlation",
+      "question": "Can pre-fix publication and retrieval control flow explain the observed relay results?",
+      "proposed_action": "Trace publish, relay encoding, request completion, and retry code at the parent revision.",
+      "approval": { "required": false, "status": "not_required" },
+      "baseline_evidence": ["e-event-valid", "e-relay-timing"],
+      "result_evidence": [
+        "e-publish-first-success",
+        "e-nevent-unverified-relays",
+        "e-fetch-eose-race",
+        "e-retry-reused-promise"
+      ],
+      "outcome": "confirmed",
+      "interpretation": "Write-side false redundancy and read-side early completion jointly explain the failure class."
+    },
+    {
+      "id": "x-regression-review",
+      "question": "Does the first repair preserve write-target boundaries, social availability, and repair completion semantics?",
+      "proposed_action": "Review the changed call graph and test uncovered cross-feature behavior before release.",
+      "approval": { "required": false, "status": "not_required" },
+      "baseline_evidence": [],
+      "result_evidence": [
+        "e-review-write-pollution",
+        "e-review-social-quorum",
+        "e-review-duplicate-repair"
+      ],
+      "outcome": "confirmed",
+      "interpretation": "Three real regressions were found and required a follow-up correction."
+    }
+  ],
+  "conclusion": {
+    "diagnosis": "The replacement event was valid and referenced on chain, but pre-fix publication established only one demonstrated copy while encoding unverified relay hints. Retrieval could let a fast empty relay beat a slower valid relay, retry reused the same request, and failure states collapsed into a generic missing result.",
+    "confidence": {
+      "level": "high",
+      "basis": "Independent relay probes, CKB history, event validation, response timing, and pre-fix source control flow agree."
+    },
+    "remaining_uncertainty": [
+      "The exact browser or network condition that triggered the reporter's failure.",
+      "Why the reporter previously saw eight answers when the old persisted event had only one non-empty response.",
+      "Whether the reporter completed successful post-deployment UAT."
+    ],
+    "recommended_remediation": [
+      "Publish to configured relays and count only distinct validated read-backs toward submission quorum.",
+      "Advance the chain reference only after quorum and preserve the previous reference on failure.",
+      "Query advertised and configured relays independently, use fresh retry requests, and classify EOSE, timeout, failure, and invalid events separately.",
+      "Use validated local cache and a best-effort relay repair queue without centralized persistent backup.",
+      "Keep configured write targets separate from read-opened relays and preserve social-event availability policy.",
+      "Require affected-user or equivalent UAT before declaring the incident resolved."
+    ]
+  },
+  "handoff": {
+    "todo_status": "ready_with_assumptions",
+    "gate_decision": "Ready With Assumptions",
+    "uat_required": true,
+    "goal": "Make Nostr-backed quest submissions fail safely, remain diagnosable, and recover without allowing an unverified replacement to become the durable chain reference.",
+    "why_now": "The failure blocks an active hackathon participant from reviewing and editing required submission content and exposes a broader reliability gap.",
+    "scope_in": [
+      "Shared relay publication, retrieval, validation, and retry behavior.",
+      "Submission quorum gate and old-reference preservation.",
+      "Validated browser cache, relay repair queue, and generic exact-event backfill.",
+      "Structured safe diagnostics and participant recovery UI.",
+      "Regression protection for write targets and social-event policy."
+    ],
+    "scope_out": [
+      "Centralized persistent event backup.",
+      "Resigning historical events.",
+      "Automatic public-relay repair during diagnosis.",
+      "Changing the CKB or nevent data structures.",
+      "Claiming affected-user recovery without UAT."
+    ],
+    "guardrails": [
+      "Do not expose submission content, wallet identifiers, private keys, or signatures in fixture output or logs.",
+      "Do not treat a publish ACK as proof of readable persistence.",
+      "Do not classify timeout or aborted requests as confirmed event absence.",
+      "Do not persist signed events to Netlify Blobs, a database, or another centralized service.",
+      "Do not sign, broadcast, or run public backfill without explicit authorization.",
+      "Do not let read-opened relays become write targets or silently change comments and likes to quorum 2."
+    ],
+    "required_outcomes": [
+      "The exact valid event is readable from the required number of distinct configured relays before chain finalization.",
+      "A failed replacement leaves the previous submission reference unchanged.",
+      "The nevent contains only verified relay hints.",
+      "A fast empty relay cannot hide a slower valid result and every retry creates a new request.",
+      "Repair completion depends on valid read-back after every publish outcome, including duplicate rejection.",
+      "Users receive distinct absent, unavailable, and invalid states with an actionable recovery path."
+    ],
+    "verification": {
+      "automated": [
+        "Verify distinct read-back quorum and failure before chain finalization.",
+        "Verify duplicate publish plus valid read-back, slow-valid versus fast-empty, fresh retries, EOSE versus timeout, and invalid event rejection.",
+        "Verify validated cache, repair queue, exact-event backfill, write-target isolation, and social single-copy policy.",
+        "Verify campaign and quest-specific submission replacement behavior."
+      ],
+      "uat": [
+        "Load the affected submission or a controlled equivalent after deployment.",
+        "Confirm all fields render after refresh and a new browser session.",
+        "Edit and save while preserving readability.",
+        "Confirm a failed replacement preserves the old reference and shows an actionable recovery state."
+      ],
+      "context": [
+        "Confirm the implementation still follows the relay-only persistence decision.",
+        "Confirm no sensitive identifiers or content enter logs or Issues.",
+        "Confirm the GitHub issue remains open until reporter or equivalent UAT evidence is recorded."
+      ]
+    },
+    "remaining_assumptions": [
+      "Two verified relay copies are sufficient for submission-class durability.",
+      "One verified copy remains acceptable for generic social events.",
+      "The replacement event is the authoritative eight-answer content for recovery."
+    ]
+  },
+  "domain": {
+    "pack_id": "ckb",
+    "pack_version": "0.1.0",
+    "schema_ref": "../../../schemas/ckb-extension.schema.json",
+    "extension_data": {
+      "network": "CKB testnet",
+      "campaign": "Gone in 60ms: Fiber Network Infrastructure Hackathon",
+      "quest": "Share project details",
+      "failure_surfaces": [
+        "chain_reference",
+        "nostr_publication",
+        "nostr_retrieval",
+        "user_interface"
+      ],
+      "artifacts": {
+        "event_reference": {
+          "ref": "protected://ckboost/issue-54/replacement-nevent",
+          "redacted": true
+        },
+        "user_cell_reference": {
+          "ref": "protected://ckboost/issue-54/user-cell",
+          "redacted": true
+        },
+        "transaction_reference": {
+          "ref": "protected://ckboost/issue-54/resubmission-transaction",
+          "redacted": true
+        },
+        "event_kind": 30078
+      },
+      "storage_context": {
+        "persistent_store": "nostr_relays",
+        "local_cache_allowed": true,
+        "central_backup_allowed": false,
+        "relay_policy": {
+          "write_target_source": "configured_relays",
+          "submission_required_copies": 2,
+          "social_required_copies": 1,
+          "read_after_write": true,
+          "advertised_relays_read_only": true
+        }
+      }
+    }
+  }
+}

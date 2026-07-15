@@ -1,0 +1,30 @@
+{
+  "name": "@failure-report/temporal-adapter",
+  "version": "0.1.0",
+  "description": "Deterministic Temporal workflow and Root activity adapter for FailureReport.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./workflow": {
+      "types": "./dist/workflow.d.ts",
+      "default": "./dist/workflow.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@failure-report/protocol": "workspace:*",
+    "@failure-report/runtime-port": "workspace:*",
+    "@temporalio/workflow": "^1.20.2"
+  }
+}

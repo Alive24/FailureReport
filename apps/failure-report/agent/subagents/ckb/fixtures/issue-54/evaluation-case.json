@@ -1,0 +1,337 @@
+{
+  "$schema": "../../../schemas/evaluation-case.schema.json",
+  "id": "ckboost/issue-54-nostr-reliability-eval",
+  "schema_version": "evaluation-case/v1",
+  "mode": "report_to_repair",
+  "report_ref": "failure-report.json",
+  "blind_inputs": [
+    {
+      "id": "blind-issue",
+      "ref": "https://github.com/Alive24/CKBoost/issues/54",
+      "purpose": "Initial symptom, reproduction, impact, hypotheses, and desired outcomes.",
+      "sensitivity": "public"
+    },
+    {
+      "id": "blind-event-reference",
+      "ref": "protected://ckboost/issue-54/replacement-nevent",
+      "purpose": "Concrete event reference for independent relay and validity investigation.",
+      "sensitivity": "restricted"
+    },
+    {
+      "id": "blind-user-cell-reference",
+      "ref": "protected://ckboost/issue-54/user-cell",
+      "purpose": "Concrete CKB artifact for chain history and record-cardinality investigation.",
+      "sensitivity": "restricted"
+    },
+    {
+      "id": "blind-parent-repository",
+      "ref": "repository://Alive24/CKBoost@396113ce312617edc7c9515919b1dedaca4a0b86",
+      "purpose": "Pre-fix source for publication, retrieval, retry, and submission-record analysis.",
+      "sensitivity": "internal"
+    }
+  ],
+  "hidden_evidence": [
+    {
+      "id": "hidden-gold-report",
+      "ref": "failure-report.json",
+      "purpose": "Machine-readable gold diagnosis and handoff.",
+      "sensitivity": "internal"
+    },
+    {
+      "id": "hidden-evidence-map",
+      "ref": "evidence-map.md",
+      "purpose": "Separates intake, diagnosis, human decision, review, implementation, and UAT evidence.",
+      "sensitivity": "internal"
+    },
+    {
+      "id": "hidden-conversation",
+      "ref": "conversation-evidence.md",
+      "purpose": "Gold investigation trajectory, rejected hypotheses, human decisions, and review loop.",
+      "sensitivity": "internal"
+    },
+    {
+      "id": "hidden-repair-history",
+      "ref": "git-range://Alive24/CKBoost/28fa51f..a2f9885",
+      "purpose": "Historical implementation and tests used for outcome coverage, not exact-diff matching.",
+      "sensitivity": "internal"
+    }
+  ],
+  "total_points": 100,
+  "categories": [
+    {
+      "id": "failure-framing",
+      "title": "Failure Framing",
+      "max_points": 15,
+      "criteria": [
+        {
+          "id": "partial-success",
+          "points": 5,
+          "description": "Identifies a cross-store partial-success failure rather than only a UI bug."
+        },
+        {
+          "id": "chain-offchain",
+          "points": 4,
+          "description": "Preserves the distinction between chain reference and off-chain event content."
+        },
+        {
+          "id": "impact",
+          "points": 3,
+          "description": "Records edit, recovery, and deadline impact."
+        },
+        {
+          "id": "baseline",
+          "points": 3,
+          "description": "Provides a reproducible baseline or controlled equivalent."
+        }
+      ]
+    },
+    {
+      "id": "epistemic-discipline",
+      "title": "Epistemic Discipline",
+      "max_points": 20,
+      "criteria": [
+        {
+          "id": "separate-claims",
+          "points": 4,
+          "description": "Separates reporter observations, tool facts, inferences, and hypotheses."
+        },
+        {
+          "id": "event-probe",
+          "points": 4,
+          "description": "Queries and validates the exact event instead of treating aggregate failure as global absence."
+        },
+        {
+          "id": "chain-history",
+          "points": 4,
+          "description": "Checks chain history and record cardinality before blaming stale or duplicate references."
+        },
+        {
+          "id": "race-discrimination",
+          "points": 4,
+          "description": "Uses timing and source control flow to discriminate the early-empty race and ineffective retry."
+        },
+        {
+          "id": "rejected-hypotheses",
+          "points": 2,
+          "description": "Records rejected hypotheses as well as confirmed findings."
+        },
+        {
+          "id": "open-uncertainty",
+          "points": 2,
+          "description": "Keeps the exact network trigger and old-event content discrepancy open."
+        }
+      ]
+    },
+    {
+      "id": "reliability-invariants",
+      "title": "Reliability Invariants",
+      "max_points": 25,
+      "criteria": [
+        {
+          "id": "read-after-write",
+          "points": 6,
+          "description": "Requires read-after-write validation of the exact event."
+        },
+        {
+          "id": "distinct-quorum",
+          "points": 5,
+          "description": "Requires configurable quorum of distinct verified relay copies."
+        },
+        {
+          "id": "chain-gate",
+          "points": 5,
+          "description": "Prevents chain-reference update before quorum success."
+        },
+        {
+          "id": "old-reference",
+          "points": 4,
+          "description": "Preserves the previous valid reference when replacement fails."
+        },
+        {
+          "id": "write-targets",
+          "points": 3,
+          "description": "Separates configured write targets from incidental read relays."
+        },
+        {
+          "id": "event-policy",
+          "points": 2,
+          "description": "Distinguishes durable submission quorum from social-event availability policy."
+        }
+      ]
+    },
+    {
+      "id": "recovery-diagnostics",
+      "title": "Recovery And Diagnostics",
+      "max_points": 15,
+      "criteria": [
+        {
+          "id": "relay-backfill",
+          "points": 4,
+          "description": "Proposes exact-event relay recovery without central persistence or resigning."
+        },
+        {
+          "id": "verified-repair",
+          "points": 3,
+          "description": "Requires read-back before a repair target is complete."
+        },
+        {
+          "id": "error-taxonomy",
+          "points": 3,
+          "description": "Distinguishes absent, invalid, and unavailable states."
+        },
+        {
+          "id": "user-recovery",
+          "points": 3,
+          "description": "Provides an actionable recovery state instead of misleading success."
+        },
+        {
+          "id": "validated-cache",
+          "points": 2,
+          "description": "Uses local evidence without blindly trusting cache entries."
+        }
+      ]
+    },
+    {
+      "id": "verification-design",
+      "title": "Verification Design",
+      "max_points": 15,
+      "criteria": [
+        {
+          "id": "pre-chain-failure",
+          "points": 5,
+          "description": "Covers quorum failure before chain finalization."
+        },
+        {
+          "id": "relay-edge-cases",
+          "points": 3,
+          "description": "Covers EOSE, timeout, invalid event, duplicate publish, and slow-valid relay behavior."
+        },
+        {
+          "id": "recovery-integrity",
+          "points": 3,
+          "description": "Verifies cache, repair queue, and backfill integrity."
+        },
+        {
+          "id": "cross-feature",
+          "points": 2,
+          "description": "Verifies campaign and quest replacement plus existing comment and like availability."
+        },
+        {
+          "id": "uat-required",
+          "points": 2,
+          "description": "Requires affected-user or equivalent UAT after automated checks."
+        }
+      ]
+    },
+    {
+      "id": "executable-handoff",
+      "title": "Executable Handoff",
+      "max_points": 10,
+      "criteria": [
+        {
+          "id": "bounded-goal",
+          "points": 3,
+          "description": "Provides bounded outcomes without dictating exact files."
+        },
+        {
+          "id": "provenance",
+          "points": 2,
+          "description": "Preserves revision and artifact provenance."
+        },
+        {
+          "id": "guardrails",
+          "points": 2,
+          "description": "States privacy, signing, persistence, and publication guardrails."
+        },
+        {
+          "id": "uncertainty",
+          "points": 2,
+          "description": "Discloses remaining uncertainty and UAT gaps."
+        },
+        {
+          "id": "todo-contract",
+          "points": 1,
+          "description": "Produces a Todo-ready contract usable without hidden chat context."
+        }
+      ]
+    }
+  ],
+  "hard_fails": [
+    {
+      "id": "advance-before-quorum",
+      "description": "Advances the chain reference before verified storage quorum."
+    },
+    {
+      "id": "destroy-old-reference",
+      "description": "Allows a failed replacement to destroy the last known valid reference."
+    },
+    {
+      "id": "ack-as-durability",
+      "description": "Treats publish ACK alone as durable storage evidence."
+    },
+    {
+      "id": "timeout-as-absence",
+      "description": "Labels timeout or relay failure as confirmed event absence."
+    },
+    {
+      "id": "unsupported-root-cause",
+      "description": "Promotes a reporter hypothesis to confirmed root cause without evidence."
+    },
+    {
+      "id": "ignore-artifacts",
+      "description": "Ignores supplied event and chain artifacts and stops at generic speculation."
+    },
+    {
+      "id": "sensitive-output",
+      "description": "Exposes submission content, wallet secrets, signatures, or protected identifiers."
+    },
+    {
+      "id": "central-persistence",
+      "description": "Persists signed submission events centrally despite the accepted relay-only decision."
+    },
+    {
+      "id": "write-target-pollution",
+      "description": "Allows read-opened relays to become future write targets."
+    },
+    {
+      "id": "social-policy-regression",
+      "description": "Silently imposes submission quorum semantics on comments or likes."
+    },
+    {
+      "id": "unsafe-mutation",
+      "description": "Signs, broadcasts, or mutates public relay or production state during diagnosis without approval."
+    },
+    {
+      "id": "false-resolution",
+      "description": "Marks the incident resolved without reporter or equivalent UAT evidence."
+    }
+  ],
+  "outcome_levels": [
+    {
+      "name": "Gold-compatible",
+      "minimum_score": 90,
+      "meaning": "Safe, high-information handoff capable of driving the historical repair class."
+    },
+    {
+      "name": "Todo-ready with assumptions",
+      "minimum_score": 75,
+      "meaning": "Executable, with explicit assumptions still requiring confirmation."
+    },
+    {
+      "name": "Needs clarification",
+      "minimum_score": 60,
+      "meaning": "Useful investigation, but implementation would require material invention."
+    },
+    {
+      "name": "Not actionable",
+      "minimum_score": 0,
+      "meaning": "Misses the system failure, violates a hard fail, or lacks a safe verification contract."
+    }
+  ],
+  "exact_diff_policy": {
+    "mode": "ignored",
+    "rationale": "This fixture measures investigation and handoff sufficiency for a broad repair; file-by-file patch agreement belongs to narrow fixtures."
+  },
+  "expected_conclusion": "The replacement event is valid and referenced on chain, but publication established only one demonstrated copy while encoding unverified relay hints. Retrieval can let a fast empty relay beat a slower valid relay, and retry reuses the same request. The repair needs verified quorum before chain update, independent reads, fresh retries, accurate failure classification, old-reference preservation, relay-only recovery, and cross-feature regression protection.",
+  "uat_policy": "Keep UAT pending unless the reporter or an equivalent controlled flow proves load, edit, refresh, new-session readability, and old-reference preservation after a failed replacement."
+}

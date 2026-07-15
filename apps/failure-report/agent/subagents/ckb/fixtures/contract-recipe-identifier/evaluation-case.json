@@ -1,0 +1,220 @@
+{
+  "$schema": "../../../schemas/evaluation-case.schema.json",
+  "id": "ckboost/commit-44b1c88-recipe-identifier-eval",
+  "schema_version": "evaluation-case/v1",
+  "mode": "exact_root_cause",
+  "report_ref": "failure-report.json",
+  "blind_inputs": [
+    {
+      "id": "blind-parent-repository",
+      "ref": "repository://Alive24/CKBoost@9665745d1d39f0aa6395569e5e1b0fe6f3400695",
+      "purpose": "Pre-fix contract, framework integration, and tests.",
+      "sensitivity": "internal"
+    },
+    {
+      "id": "blind-contract-surface",
+      "ref": "repository://Alive24/CKBoost@9665745d/contracts/contracts/ckboost-protocol-type",
+      "purpose": "Protocol dispatch, witness construction, and validation rules.",
+      "sensitivity": "internal"
+    },
+    {
+      "id": "blind-test-surface",
+      "ref": "repository://Alive24/CKBoost@9665745d/contracts/tests",
+      "purpose": "Protocol and transaction-context test call sites.",
+      "sensitivity": "internal"
+    }
+  ],
+  "hidden_evidence": [
+    {
+      "id": "hidden-fix-commit",
+      "ref": "git://Alive24/CKBoost/44b1c88481df2d176c0ee96226996017fcad85f5",
+      "purpose": "Historical one-line repair.",
+      "sensitivity": "internal"
+    },
+    {
+      "id": "hidden-framework-source",
+      "ref": "repository://ckb_deterministic/ckb_deterministic/src/validation.rs",
+      "purpose": "Exact method-path comparison and WrongMethodPath behavior.",
+      "sensitivity": "internal"
+    },
+    {
+      "id": "hidden-provenance-gap",
+      "ref": "evidence-map.md#provenance",
+      "purpose": "Confirms the original conversation and runtime log were not recovered.",
+      "sensitivity": "internal"
+    }
+  ],
+  "total_points": 100,
+  "categories": [
+    {
+      "id": "failure-framing",
+      "title": "Failure Framing",
+      "max_points": 15,
+      "criteria": [
+        {
+          "id": "method-boundary",
+          "points": 5,
+          "description": "Identifies exact method-path agreement as the contract boundary."
+        },
+        {
+          "id": "script-layer",
+          "points": 4,
+          "description": "Identifies the protocol type-script validation layer."
+        },
+        {
+          "id": "not-business-first",
+          "points": 3,
+          "description": "Distinguishes dispatch validation from deeper business-rule failure."
+        },
+        {
+          "id": "provenance-gap",
+          "points": 3,
+          "description": "Records the absence of original runtime and UAT evidence."
+        }
+      ]
+    },
+    {
+      "id": "source-correlation",
+      "title": "Source Correlation",
+      "max_points": 30,
+      "criteria": [
+        {
+          "id": "call-site-search",
+          "points": 8,
+          "description": "Searches dispatch, SSRI, fallback, module, witness, and test call sites."
+        },
+        {
+          "id": "short-rule",
+          "points": 8,
+          "description": "Finds the short rule identifier in recipes.rs."
+        },
+        {
+          "id": "framework-semantics",
+          "points": 8,
+          "description": "Confirms exact comparison and WrongMethodPath behavior."
+        },
+        {
+          "id": "canonical-path",
+          "points": 6,
+          "description": "Establishes the qualified path from multiple independent callers."
+        }
+      ]
+    },
+    {
+      "id": "root-cause",
+      "title": "Root Cause",
+      "max_points": 25,
+      "criteria": [
+        {
+          "id": "exact-mismatch",
+          "points": 15,
+          "description": "States that update_protocol mismatches CKBoostProtocol.update_protocol."
+        },
+        {
+          "id": "failure-order",
+          "points": 5,
+          "description": "Explains why deeper cell and business checks are not reached."
+        },
+        {
+          "id": "reject-alternatives",
+          "points": 5,
+          "description": "Rejects malformed witness, wrong business rule, and public-method rename as primary causes."
+        }
+      ]
+    },
+    {
+      "id": "remediation",
+      "title": "Remediation",
+      "max_points": 15,
+      "criteria": [
+        {
+          "id": "minimal-fix",
+          "points": 10,
+          "description": "Proposes the smallest correction that aligns the rule identifier."
+        },
+        {
+          "id": "preserve-contract",
+          "points": 5,
+          "description": "Preserves public method names, witness encoding, data schema, and unrelated validation behavior."
+        }
+      ]
+    },
+    {
+      "id": "verification",
+      "title": "Verification",
+      "max_points": 15,
+      "criteria": [
+        {
+          "id": "valid-path",
+          "points": 5,
+          "description": "Validates a protocol fixture without WrongMethodPath."
+        },
+        {
+          "id": "invalid-paths",
+          "points": 4,
+          "description": "Preserves invalid lock and type-script rejection behavior."
+        },
+        {
+          "id": "consistency-search",
+          "points": 3,
+          "description": "Checks canonical path consistency across source and tests."
+        },
+        {
+          "id": "harness-limit",
+          "points": 3,
+          "description": "Reports ignored-test or witness-position limits separately."
+        }
+      ]
+    }
+  ],
+  "hard_fails": [
+    {
+      "id": "rename-public-api",
+      "description": "Renames the public method or callers to the short path without proving the qualified path is non-canonical."
+    },
+    {
+      "id": "broad-refactor",
+      "description": "Rewrites protocol business rules instead of fixing the identifier mismatch."
+    },
+    {
+      "id": "invent-runtime",
+      "description": "Claims runtime, deployment, or chain evidence not present in the fixture inputs."
+    },
+    {
+      "id": "misread-test-limit",
+      "description": "Treats ignored witness-position tests as proof against the method-path diagnosis."
+    },
+    {
+      "id": "unsafe-mutation",
+      "description": "Deploys or broadcasts during diagnosis."
+    }
+  ],
+  "outcome_levels": [
+    {
+      "name": "Gold-compatible",
+      "minimum_score": 90,
+      "meaning": "Exact root cause, minimal remediation, and correctly scoped verification."
+    },
+    {
+      "name": "Todo-ready with assumptions",
+      "minimum_score": 75,
+      "meaning": "Correct diagnosis with a small explicit verification gap."
+    },
+    {
+      "name": "Needs clarification",
+      "minimum_score": 60,
+      "meaning": "Useful source exploration but material uncertainty remains."
+    },
+    {
+      "name": "Not actionable",
+      "minimum_score": 0,
+      "meaning": "Misses the mismatch, violates a hard fail, or proposes broad unrelated work."
+    }
+  ],
+  "exact_diff_policy": {
+    "mode": "scored",
+    "rationale": "This narrow fixture is intended to test exact root-cause localization and the smallest compatible repair."
+  },
+  "expected_conclusion": "TransactionValidationRules stores update_protocol while the recipe witness and canonical protocol callers use CKBoostProtocol.update_protocol. Exact comparison returns WrongMethodPath before deeper validation. Align the rule constructor with the qualified path and leave the public API, witness encoding, and business rules unchanged.",
+  "uat_policy": "No user-facing UAT is required; report deterministic test results and keep deployment or chain verification out of scope."
+}

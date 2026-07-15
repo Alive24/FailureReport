@@ -1,0 +1,25 @@
+{
+  "name": "failure-report",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Eve-first Failure in the Loop system for durable, shared AI-agent diagnosis workflows.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.15.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "check": "turbo run check",
+    "test": "turbo run test",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "prettier": "^3.6.2",
+    "turbo": "^2.5.8",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
+  }
+}
