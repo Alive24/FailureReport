@@ -1,14 +1,7 @@
 import { spawn } from "node:child_process";
 
-import type { FailureReport } from "@failure-report/protocol";
-
-import {
-  type GithubIssueSnapshot,
-  type IssueWorkpadMutation,
-  findExistingWorkpad,
-  prepareIssueWorkpadMutation,
-  upsertIssueNarrative,
-} from "./issue-workpad.js";
+import { type GithubIssueSnapshot } from "./issue-workpad.js";
+import { IssueWorkpadGateway } from "./issue-gateway.js";
 
 type GithubIssueResponse = {
   body: string | null;
@@ -23,15 +16,15 @@ type GithubIssueCommentResponse = {
   updated_at: string;
 };
 
-export type PublishedSharedContext = {
-  issue: GithubIssueSnapshot;
-  report: FailureReport;
-  workpad_comment_ref: string;
-  workpad_revision: number;
-};
-
-export class GithubCliIssueGateway {
-  constructor(private readonly executable = "gh") {}
+/**
+ * Explicit legacy fallback for fixture capture or local diagnosis. Production
+ * composition uses OctokitIssueGateway and does not route Issue API calls
+ * through `gh api`.
+ */
+export class GithubCliIssueGateway extends IssueWorkpadGateway {
+  constructor(private readonly executable = "gh") {
+    super();
+  }
 
   async readIssue(
     repository: string,
@@ -65,39 +58,7 @@ export class GithubCliIssueGateway {
     };
   }
 
-  async publishSharedContext(
-    repository: string,
-    issueNumber: number,
-    report: FailureReport,
-    syncedAt: string,
-  ): Promise<PublishedSharedContext> {
-    let issue = await this.readIssue(repository, issueNumber);
-    // Reject a stale report before it can modify either the Issue narrative or workpad.
-    let mutation = prepareIssueWorkpadMutation(issue, report, syncedAt);
-    const nextBody = upsertIssueNarrative(issue.body, mutation.report);
-    if (nextBody !== issue.body) {
-      await this.writeIssueBody(repository, issueNumber, nextBody);
-      issue = await this.readIssue(repository, issueNumber);
-      mutation = prepareIssueWorkpadMutation(issue, report, syncedAt);
-    }
-
-    const latest = await this.readIssue(repository, issueNumber);
-    assertFreshWorkpadMutation(latest, mutation);
-    const commentRef = await this.writeWorkpad(
-      repository,
-      issueNumber,
-      mutation,
-    );
-
-    return {
-      issue,
-      report: mutation.report,
-      workpad_comment_ref: commentRef,
-      workpad_revision: mutation.report.shared_context?.workpad_revision ?? 0,
-    };
-  }
-
-  private async writeIssueBody(
+  protected async updateIssueBody(
     repository: string,
     issueNumber: number,
     body: string,
@@ -115,34 +76,30 @@ export class GithubCliIssueGateway {
     );
   }
 
-  private async writeWorkpad(
+  protected async createWorkpadComment(
     repository: string,
     issueNumber: number,
-    mutation: IssueWorkpadMutation,
+    body: string,
   ): Promise<string> {
-    if (mutation.mode === "create") {
-      const created = await this.apiJson<GithubIssueCommentResponse>(
-        [
-          "api",
-          "--method",
-          "POST",
-          "repos/" +
-            repository +
-            "/issues/" +
-            String(issueNumber) +
-            "/comments",
-          "--input",
-          "-",
-        ],
-        JSON.stringify({ body: mutation.workpad_comment_body }),
-      );
-      return String(created.id);
-    }
+    const created = await this.apiJson<GithubIssueCommentResponse>(
+      [
+        "api",
+        "--method",
+        "POST",
+        "repos/" + repository + "/issues/" + String(issueNumber) + "/comments",
+        "--input",
+        "-",
+      ],
+      JSON.stringify({ body }),
+    );
+    return String(created.id);
+  }
 
-    const commentRef = mutation.workpad_comment_ref;
-    if (!commentRef) {
-      throw new Error("Missing workpad comment reference for an update.");
-    }
+  protected async updateWorkpadComment(
+    repository: string,
+    commentRef: string,
+    body: string,
+  ): Promise<string> {
     const updated = await this.apiJson<GithubIssueCommentResponse>(
       [
         "api",
@@ -152,7 +109,7 @@ export class GithubCliIssueGateway {
         "--input",
         "-",
       ],
-      JSON.stringify({ body: mutation.workpad_comment_body }),
+      JSON.stringify({ body }),
     );
     return String(updated.id);
   }
@@ -203,23 +160,5 @@ export class GithubCliIssueGateway {
       });
       child.stdin.end(input);
     });
-  }
-}
-
-function assertFreshWorkpadMutation(
-  issue: GithubIssueSnapshot,
-  mutation: IssueWorkpadMutation,
-): void {
-  if (issue.updated_at !== mutation.expected_issue_updated_at) {
-    throw new Error(
-      "GitHub Issue changed while preparing the FailureReport workpad.",
-    );
-  }
-  const current = findExistingWorkpad(issue);
-  const revision = current?.revision ?? null;
-  if (revision !== mutation.expected_workpad_revision) {
-    throw new Error(
-      "FailureReport workpad changed while preparing the update.",
-    );
   }
 }

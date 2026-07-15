@@ -1,7 +1,7 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import { GithubCliIssueGateway } from "../../integrations/github/github-cli.js";
+import { getDefaultGithubIssueGateway } from "../../integrations/github/gateway-factory.js";
 import { findExistingWorkpad } from "../../integrations/github/issue-workpad.js";
 
 export default defineTool({
@@ -14,10 +14,8 @@ export default defineTool({
     })
     .strict(),
   async execute(input) {
-    const issue = await new GithubCliIssueGateway().readIssue(
-      input.repository,
-      input.issue_number,
-    );
+    const gateway = await getDefaultGithubIssueGateway();
+    const issue = await gateway.readIssue(input.repository, input.issue_number);
     const workpad = findExistingWorkpad(issue);
 
     return {

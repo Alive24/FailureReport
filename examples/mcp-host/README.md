@@ -11,3 +11,7 @@ loop.
 Set `FAILURE_REPORT_EVE_HOST` for a deployed Eve Root and
 `FAILURE_REPORT_EVE_BEARER_TOKEN` when its eve channel requires bearer auth.
 The Codex plugin uses the resulting public `failure_report` tool only.
+
+GitHub I/O remains inside Eve Root. Its default GitHub credential source is the
+active `gh auth login` identity, supplied once to Octokit; the MCP adapter never
+calls GitHub or CKB directly.
