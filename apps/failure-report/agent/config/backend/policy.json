@@ -1,0 +1,15 @@
+{
+  "schema_version": "failure-report/backend-policy/v1",
+  "agent": {
+    "model": "openai/gpt-5.4-mini",
+    "reasoning_effort": "medium"
+  },
+  "investigator": {
+    "kind": "codex_app_server",
+    "command": "codex",
+    "arguments": ["app-server"],
+    "model": "gpt-5.4",
+    "timeout_ms": 900000,
+    "approval_policy": "on-request"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "schema_version": "failure-report/ckb-debugger/v1",
+  "scripts_root_environment_variable": "CKB_DEBUGGER_SCRIPTS_DIR",
+  "default_script_extensions": [".sh", ".ts", ".js", ".json", ".md"]
+}

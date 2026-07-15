@@ -1,0 +1,31 @@
+{
+  "name": "@failure-report/agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Eve Root and declared domain subagents for FailureReport.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "dev": "eve dev --no-ui",
+    "mcp": "node dist/src/mcp-host.js",
+    "eve:info": "eve info",
+    "eval": "eve eval"
+  },
+  "dependencies": {
+    "@failure-report/mcp-adapter": "workspace:*",
+    "@failure-report/protocol": "workspace:*",
+    "@failure-report/runtime-port": "workspace:*",
+    "ai": "^7.0.26",
+    "eve": "^0.24.3",
+    "zod": "^4.4.3"
+  }
+}

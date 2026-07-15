@@ -1,0 +1,18 @@
+{
+  "name": "codex-plugin",
+  "version": "0.1.0",
+  "description": "FailureReport Root MCP skill for durable failure investigation workflows.",
+  "author": {
+    "name": "Alive24"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "FailureReport",
+    "shortDescription": "Create and resume durable failure reports through Root MCP.",
+    "longDescription": "FailureReport helps Codex turn a software failure into an evidence-backed, GitHub Issue-shared investigation and handoff through the public Root MCP interface.",
+    "developerName": "Alive24",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Investigate this software failure through the configured FailureReport Root MCP server."
+  }
+}
