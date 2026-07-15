@@ -1,0 +1,12 @@
+node_modules/
+.pnpm-store/
+dist/
+.turbo/
+.eve/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+artifacts/
+generated/

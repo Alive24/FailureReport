@@ -1,0 +1,407 @@
+{
+  "$schema": "../../../schemas/failure-report.schema.json",
+  "id": "ckboost/commit-44b1c88-recipe-identifier",
+  "schema_version": "failure-report/v1",
+  "status": "todo_ready",
+  "created_at": "2026-07-11T00:00:00Z",
+  "updated_at": "2026-07-11T00:00:00Z",
+  "origin": {
+    "source": "manual",
+    "reporter": "repository-history reconstruction",
+    "related_work": [
+      {
+        "kind": "commit",
+        "ref": "44b1c88481df2d176c0ee96226996017fcad85f5"
+      },
+      {
+        "kind": "commit",
+        "ref": "9665745d1d39f0aa6395569e5e1b0fe6f3400695"
+      },
+      {
+        "kind": "document",
+        "ref": "evidence-map.md"
+      }
+    ]
+  },
+  "target": {
+    "repository": "Alive24/CKBoost",
+    "revision": "9665745d1d39f0aa6395569e5e1b0fe6f3400695",
+    "worktree_identity": "/Volumes/Bohemialive/GitHub/CKBoost",
+    "components": [
+      "ckboost-protocol-type",
+      "transaction recipe validation",
+      "protocol integration tests"
+    ],
+    "environment": [
+      { "name": "execution", "value": "CKB local contract test framework" },
+      { "name": "network", "value": "not recovered from history" }
+    ]
+  },
+  "severity": "medium",
+  "symptom": {
+    "observed_behavior": [
+      "A protocol update recipe carries the qualified method path CKBoostProtocol.update_protocol.",
+      "The validation rule for the same operation stores the shorter path update_protocol.",
+      "The validation framework rejects the recipe at method-path comparison before deeper rules run."
+    ],
+    "expected_behavior": [
+      "The rule method path exactly matches the method path in the recipe witness.",
+      "Valid protocol creation and update transactions reach cell and business-rule validation.",
+      "Invalid protocol mutations continue to fail for their specific rule violations."
+    ],
+    "raw_error_summary": "Reconstructed framework outcome: WrongMethodPath",
+    "first_seen_at": null,
+    "reproduction": {
+      "preconditions": [
+        "Use the parent revision of the protocol contract.",
+        "Construct a recipe witness with CKBoostProtocol.update_protocol.",
+        "Invoke the protocol update validation rules."
+      ],
+      "steps": [
+        "Build a valid protocol creation or update transaction context.",
+        "Read the recipe method path from the witness.",
+        "Read the method path stored by TransactionValidationRules.",
+        "Run validation and observe the exact path comparison before other rules."
+      ],
+      "frequency": "Deterministic for matching protocol validation inputs at the parent revision."
+    }
+  },
+  "inputs": [
+    {
+      "id": "input-parent-revision",
+      "kind": "repository_revision",
+      "artifact": {
+        "ref": "repository://Alive24/CKBoost@9665745d1d39f0aa6395569e5e1b0fe6f3400695",
+        "sensitivity": "internal",
+        "retention": "fixture"
+      },
+      "provenance": {
+        "phase": "intake",
+        "source_type": "repository",
+        "source_ref": "9665745d1d39f0aa6395569e5e1b0fe6f3400695",
+        "collector": "Fixture reconstruction"
+      }
+    },
+    {
+      "id": "input-fix-commit",
+      "kind": "historical_fix_commit",
+      "artifact": {
+        "ref": "git://Alive24/CKBoost/44b1c88481df2d176c0ee96226996017fcad85f5",
+        "sensitivity": "internal",
+        "retention": "fixture"
+      },
+      "provenance": {
+        "phase": "intake",
+        "source_type": "repository",
+        "source_ref": "44b1c88481df2d176c0ee96226996017fcad85f5",
+        "collector": "Fixture reconstruction"
+      }
+    },
+    {
+      "id": "input-contract-source",
+      "kind": "contract_source",
+      "artifact": {
+        "ref": "repository://Alive24/CKBoost@9665745d1d39f0aa6395569e5e1b0fe6f3400695/contracts/contracts/ckboost-protocol-type",
+        "sensitivity": "internal",
+        "retention": "fixture"
+      },
+      "provenance": {
+        "phase": "investigation",
+        "source_type": "repository",
+        "source_ref": "evidence-map.md#evidence-chain",
+        "collector": "Fixture reconstruction"
+      }
+    }
+  ],
+  "evidence": [
+    {
+      "id": "e-callers-qualified",
+      "kind": "repository_fact",
+      "observed_fact": "Fallback, SSRI entrypoint, protocol module, and integration-test witnesses use CKBoostProtocol.update_protocol.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "investigation",
+        "source_type": "repository",
+        "source_ref": "evidence-map.md#e1-canonical-call-site-identifier",
+        "collector": "Fixture reconstruction"
+      },
+      "artifacts": [
+        {
+          "ref": "repository://Alive24/CKBoost@9665745d/contracts/contracts/ckboost-protocol-type",
+          "sensitivity": "internal",
+          "retention": "fixture"
+        }
+      ]
+    },
+    {
+      "id": "e-rule-short",
+      "kind": "repository_fact",
+      "observed_fact": "The parent revision constructs the update_protocol validation rule with the short method path.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "investigation",
+        "source_type": "repository",
+        "source_ref": "repository://Alive24/CKBoost@9665745d/contracts/contracts/ckboost-protocol-type/src/recipes.rs",
+        "collector": "Fixture reconstruction"
+      },
+      "artifacts": []
+    },
+    {
+      "id": "e-framework-exact-compare",
+      "kind": "repository_fact",
+      "observed_fact": "TransactionValidationRules.validate compares context.recipe.method_path_bytes() and self.method_path exactly and returns WrongMethodPath on mismatch.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "investigation",
+        "source_type": "repository",
+        "source_ref": "repository://ckb_deterministic/ckb_deterministic/src/validation.rs",
+        "collector": "Fixture reconstruction"
+      },
+      "artifacts": []
+    },
+    {
+      "id": "e-fix-one-line",
+      "kind": "repository_fact",
+      "observed_fact": "The historical fix changes only update_protocol to CKBoostProtocol.update_protocol in the validation-rule constructor.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "implementation",
+        "source_type": "repository",
+        "source_ref": "44b1c88481df2d176c0ee96226996017fcad85f5",
+        "collector": "Fixture reconstruction"
+      },
+      "artifacts": []
+    },
+    {
+      "id": "e-original-conversation-missing",
+      "kind": "derived_finding",
+      "observed_fact": "No original Codex repair conversation or user-authored issue for this 2025 commit was found in the local session archive.",
+      "epistemic_status": "observed",
+      "provenance": {
+        "phase": "investigation",
+        "source_type": "tool",
+        "source_ref": "local session search for 44b1c88 and method path strings",
+        "collector": "Fixture reconstruction"
+      },
+      "artifacts": []
+    },
+    {
+      "id": "e-tests-ignore-context",
+      "kind": "repository_fact",
+      "observed_fact": "Several protocol integration tests are marked ignored because the test framework requires the TransactionRecipe witness in the last position.",
+      "epistemic_status": "verified",
+      "provenance": {
+        "phase": "investigation",
+        "source_type": "repository",
+        "source_ref": "repository://Alive24/CKBoost@9665745d/contracts/tests/src/transaction_context_integration_tests.rs",
+        "collector": "Fixture reconstruction"
+      },
+      "artifacts": []
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "h-path-mismatch",
+      "statement": "The validation rule method path is shorter than the canonical recipe method path.",
+      "status": "confirmed",
+      "supporting_evidence": [
+        "e-callers-qualified",
+        "e-rule-short",
+        "e-framework-exact-compare",
+        "e-fix-one-line"
+      ],
+      "contradicting_evidence": [],
+      "history": [
+        {
+          "status": "confirmed",
+          "rationale": "Multiple callers establish the qualified path, the rule stores the short path, and the framework compares them exactly.",
+          "provenance": {
+            "phase": "investigation",
+            "source_type": "repository",
+            "source_ref": "e-framework-exact-compare",
+            "collector": "Fixture reconstruction"
+          }
+        }
+      ]
+    },
+    {
+      "id": "h-malformed-witness",
+      "statement": "The recipe witness itself is malformed and is the primary cause.",
+      "status": "rejected",
+      "supporting_evidence": [],
+      "contradicting_evidence": [
+        "e-callers-qualified",
+        "e-framework-exact-compare"
+      ],
+      "history": [
+        {
+          "status": "rejected",
+          "rationale": "Callers and tests consistently construct the qualified method path; the mismatch is in the rule constructor.",
+          "provenance": {
+            "phase": "investigation",
+            "source_type": "repository",
+            "source_ref": "e-callers-qualified",
+            "collector": "Fixture reconstruction"
+          }
+        }
+      ]
+    },
+    {
+      "id": "h-business-rule-first",
+      "statement": "Protocol cell or business-rule logic is the first failing layer.",
+      "status": "rejected",
+      "supporting_evidence": [],
+      "contradicting_evidence": ["e-framework-exact-compare"],
+      "history": [
+        {
+          "status": "rejected",
+          "rationale": "The validator returns WrongMethodPath before cell and business rules execute.",
+          "provenance": {
+            "phase": "investigation",
+            "source_type": "repository",
+            "source_ref": "e-framework-exact-compare",
+            "collector": "Fixture reconstruction"
+          }
+        }
+      ]
+    },
+    {
+      "id": "h-public-method-rename",
+      "statement": "The public method should be renamed to the short path.",
+      "status": "rejected",
+      "supporting_evidence": [],
+      "contradicting_evidence": ["e-callers-qualified", "e-fix-one-line"],
+      "history": [
+        {
+          "status": "rejected",
+          "rationale": "The qualified path is used consistently across public entrypoints, modules, witnesses, and tests.",
+          "provenance": {
+            "phase": "investigation",
+            "source_type": "repository",
+            "source_ref": "e-callers-qualified",
+            "collector": "Fixture reconstruction"
+          }
+        }
+      ]
+    }
+  ],
+  "decisions": [],
+  "experiments": [
+    {
+      "id": "x-source-path-correlation",
+      "question": "Which method path is canonical and where does the mismatch enter?",
+      "proposed_action": "Search dispatch, witness construction, module logic, tests, and validation rule construction, then compare paths byte-for-byte.",
+      "approval": { "required": false, "status": "not_required" },
+      "baseline_evidence": ["e-callers-qualified", "e-rule-short"],
+      "result_evidence": ["e-framework-exact-compare", "e-fix-one-line"],
+      "outcome": "confirmed",
+      "interpretation": "The rule constructor is the single inconsistent path."
+    },
+    {
+      "id": "x-focused-runtime-test",
+      "question": "Does a valid protocol fixture pass after the identifier correction?",
+      "proposed_action": "Run focused protocol validation and integration tests, separating witness-position limitations from method-path behavior.",
+      "approval": { "required": false, "status": "not_required" },
+      "baseline_evidence": ["e-tests-ignore-context"],
+      "result_evidence": [],
+      "outcome": "not_run",
+      "interpretation": "The recovered history contains ignored tests and no original execution log; this remains a verification task for the implementation fixture."
+    }
+  ],
+  "conclusion": {
+    "diagnosis": "TransactionValidationRules stores update_protocol while the recipe witness and canonical protocol callers use CKBoostProtocol.update_protocol. Exact framework comparison therefore returns WrongMethodPath before deeper validation.",
+    "confidence": {
+      "level": "high",
+      "basis": "Call-site search, framework source, and the one-line historical fix agree; original runtime output is the only missing evidence."
+    },
+    "remaining_uncertainty": [
+      "The original failing transaction and runtime log are not recovered.",
+      "Ignored integration tests limit historical execution evidence."
+    ],
+    "recommended_remediation": [
+      "Align the validation-rule method path with the canonical qualified path.",
+      "Run focused valid and invalid protocol validation tests.",
+      "Keep witness encoding, public method names, protocol data, and unrelated rules unchanged."
+    ]
+  },
+  "handoff": {
+    "todo_status": "ready",
+    "gate_decision": "Ready",
+    "uat_required": false,
+    "goal": "Restore exact method-path agreement for protocol update validation without changing the public contract method or transaction format.",
+    "why_now": "The mismatch prevents the intended contract validation rules from running and masks the actual protocol transaction outcome.",
+    "scope_in": [
+      "Align the rule constructor with the canonical qualified method path.",
+      "Run focused protocol validation and source-consistency checks.",
+      "Report test-framework limitations separately."
+    ],
+    "scope_out": [
+      "Renaming SSRI methods or changing witness encoding.",
+      "Refactoring protocol business rules.",
+      "Changing cell counts, type IDs, or protocol data schemas.",
+      "Deployment or transaction broadcast."
+    ],
+    "guardrails": [
+      "Prefer the smallest correction.",
+      "Do not change the canonical public method path to match an isolated stale rule.",
+      "Do not claim runtime or deployment verification absent from evidence.",
+      "Do not broadcast or deploy as part of diagnosis."
+    ],
+    "required_outcomes": [
+      "A valid protocol fixture is not rejected with WrongMethodPath.",
+      "Invalid lock and type-script changes remain rejected.",
+      "The canonical qualified path is consistent across dispatch, witnesses, modules, tests, and rules."
+    ],
+    "verification": {
+      "automated": [
+        "Run focused valid protocol creation/update validation.",
+        "Run invalid admin-lock and type-script mutation checks.",
+        "Search and compare all method-path producers and consumers."
+      ],
+      "uat": [],
+      "context": [
+        "Record ignored witness-position tests as a separate test-harness limitation.",
+        "Confirm the historical fix remains one-line in behavioral scope."
+      ]
+    },
+    "remaining_assumptions": [
+      "The qualified method path is the intended canonical public identifier.",
+      "The parent revision is the correct pre-fix baseline."
+    ]
+  },
+  "domain": {
+    "pack_id": "ckb",
+    "pack_version": "0.1.0",
+    "schema_ref": "../../../schemas/ckb-extension.schema.json",
+    "extension_data": {
+      "network": "CKB local contract test framework",
+      "failure_surfaces": ["contract_validation"],
+      "artifacts": {
+        "binary_ref": "repository://Alive24/CKBoost@9665745d/contracts/contracts/ckboost-protocol-type",
+        "witness_ref": {
+          "ref": "protected://ckboost/commit-44b1c88/protocol-update-recipe-witness",
+          "redacted": true
+        },
+        "test_ref": "repository://Alive24/CKBoost@9665745d/contracts/tests/src/transaction_context_integration_tests.rs"
+      },
+      "contract_context": {
+        "contract_name": "ckboost-protocol-type",
+        "script_kind": "type",
+        "method_path_observed": "CKBoostProtocol.update_protocol",
+        "method_path_expected": "CKBoostProtocol.update_protocol",
+        "validation_framework": "ckb_deterministic::TransactionValidationRules",
+        "error_class": "WrongMethodPath",
+        "business_rule": "protocol cell and tipping proposal immutability",
+        "test_refs": [
+          "contracts/tests/src/protocol_type_tests.rs",
+          "contracts/tests/src/transaction_context_integration_tests.rs"
+        ]
+      },
+      "transaction_context": {
+        "recipe_method_path": "CKBoostProtocol.update_protocol",
+        "witness_position": 0,
+        "cell_groups": ["protocol"]
+      }
+    }
+  }
+}

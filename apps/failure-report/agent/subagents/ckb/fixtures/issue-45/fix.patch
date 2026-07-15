@@ -1,0 +1,320 @@
+From 086d144e4bccb10aeedb4c3719a9f9ecca4dc221 Mon Sep 17 00:00:00 2001
+From: Alive24 <xct24@live.com>
+Date: Thu, 5 Mar 2026 11:54:37 +0000
+Subject: [PATCH] refactor: consolidate transaction fee handling into a single
+ function
+
+---
+ dapp/lib/ckb/transaction-wrapper.ts         | 69 +++++++++++++++++----
+ dapp/lib/services/achievement-service.ts    |  4 --
+ dapp/lib/services/campaign-admin-service.ts |  6 --
+ dapp/lib/services/funding-service.ts        |  4 --
+ dapp/lib/services/protocol-service.ts       |  2 -
+ dapp/lib/services/tipping-service.ts        |  6 --
+ dapp/lib/services/user-service.ts           | 62 ------------------
+ packages/ssri-ckboost/src/protocol/index.ts |  8 ++-
+ 8 files changed, 63 insertions(+), 98 deletions(-)
+
+diff --git a/dapp/lib/ckb/transaction-wrapper.ts b/dapp/lib/ckb/transaction-wrapper.ts
+index c502316..8ed4c86 100644
+--- a/dapp/lib/ckb/transaction-wrapper.ts
++++ b/dapp/lib/ckb/transaction-wrapper.ts
+@@ -28,6 +28,48 @@ function parseRequiredFee(errorMessage: string): bigint | null {
+   return null;
+ }
+ 
++function isChangeCellCapacityError(errorMessage: string): boolean {
++  return errorMessage.includes("for the change cell");
++}
++
++function pickFeeSinkOutputIndex(tx: ccc.Transaction): number | null {
++  const typedOutputIndex = tx.outputs.findIndex((output) => !!output.type);
++  if (typedOutputIndex >= 0) {
++    return typedOutputIndex;
++  }
++  if (tx.outputs.length > 0) {
++    return 0;
++  }
++  return null;
++}
++
++async function completeTransactionForSend(
++  signer: ccc.Signer,
++  tx: ccc.Transaction,
++  feeRate?: number
++): Promise<void> {
++  await tx.completeInputsByCapacity(signer);
++  try {
++    await tx.completeFeeBy(signer, feeRate);
++  } catch (error) {
++    const errorMessage =
++      error instanceof Error ? error.message : String(error);
++    if (!isChangeCellCapacityError(errorMessage)) {
++      throw error;
++    }
++
++    const outputIndex = pickFeeSinkOutputIndex(tx);
++    if (outputIndex === null) {
++      throw error;
++    }
++
++    log.warn(
++      `Change cell cannot be created with current capacity, redirecting change to output ${outputIndex}`
++    );
++    await tx.completeFeeChangeToOutput(signer, outputIndex, feeRate);
++  }
++}
++
+ /**
+  * Get fee rate from the node via CCC client; optionally boost to satisfy a parsed required fee.
+  * Returns shannons per kiloweight (KW) as number.
+@@ -108,8 +150,7 @@ export async function sendTransactionWithFeeRetry(
+         }
+       }
+ 
+-      await tx.completeInputsByCapacity(signer);
+-      await tx.completeFeeBy(signer);
++      await completeTransactionForSend(signer, tx);
+ 
+       log.info(`Transaction send attempt ${attempts}/${maxAttempts}`);
+ 
+@@ -149,25 +190,29 @@ export async function sendTransactionWithFeeRetry(
+         const senderLockScript = senderAddress.script;
+ 
+         // Filter out change outputs (lock-only, back to sender)
+-        tx.outputs = tx.outputs.filter((output, index) => {
+-          // Keep all outputs except potential change outputs
+-          // Change outputs typically go back to the sender and have no type script
++        const nextOutputs: ccc.CellOutput[] = [];
++        const nextOutputsData: ccc.Hex[] = [];
++        for (let i = 0; i < tx.outputs.length; i++) {
++          const output = tx.outputs[i];
+           const isChange =
+             !output.type &&
+             output.lock.codeHash === senderLockScript.codeHash &&
+             output.lock.hashType === senderLockScript.hashType &&
+-            ccc.hexFrom(output.lock.args) ===
+-              ccc.hexFrom(senderLockScript.args);
++            ccc.hexFrom(output.lock.args) === ccc.hexFrom(senderLockScript.args);
+ 
+           if (isChange) {
+-            log.info(`Removing change output at index ${index}`);
++            log.info(`Removing change output at index ${i}`);
++            continue;
+           }
+-          return !isChange;
+-        });
++
++          nextOutputs.push(output);
++          nextOutputsData.push(ccc.hexFrom(tx.outputsData[i] ?? "0x"));
++        }
++        tx.outputs = nextOutputs;
++        tx.outputsData = nextOutputsData;
+ 
+         // Ensure inputs satisfy capacity at new fee stage, then recalc fees
+-        await tx.completeInputsByCapacity(signer);
+-        await tx.completeFeeBy(signer, feeRate);
++        await completeTransactionForSend(signer, tx, feeRate);
+ 
+         log.info(
+           "Transaction rebuilt with new fee. Requesting signature again..."
+diff --git a/dapp/lib/services/achievement-service.ts b/dapp/lib/services/achievement-service.ts
+index e0ccef9..c9efdec 100644
+--- a/dapp/lib/services/achievement-service.ts
++++ b/dapp/lib/services/achievement-service.ts
+@@ -442,8 +442,6 @@ export class AchievementService {
+     );
+ 
+     const tx = response.res;
+-    await tx.completeInputsByCapacity(signer);
+-    await tx.completeFeeBy(signer);
+     const achievementCellIndex = tx.outputs.findIndex(
+       (output) => output.type?.codeHash === this.achievementTypeCodeHash
+     );
+@@ -565,8 +563,6 @@ export class AchievementService {
+       outPoint: protocolLockCodeOutPoint,
+       depType: "code",
+     });
+-    await tx.completeInputsByCapacity(signer);
+-    await tx.completeFeeBy(signer);
+     const txHash = await sendTransactionWithFeeRetry(signer, tx);
+     return txHash;
+   }
+diff --git a/dapp/lib/services/campaign-admin-service.ts b/dapp/lib/services/campaign-admin-service.ts
+index e1c82b8..e73216e 100644
+--- a/dapp/lib/services/campaign-admin-service.ts
++++ b/dapp/lib/services/campaign-admin-service.ts
+@@ -373,10 +373,6 @@ export class CampaignAdminService {
+         log.info("CKB funding added to transaction");
+       }
+ 
+-      // Complete fees and send transaction
+-      await updateTx.completeInputsByCapacity(this.signer);
+-      await updateTx.completeFeeBy(this.signer);
+-
+       // Log the transaction bytes before sending
+       const txBytes = updateTx.toBytes();
+       const txHex = ccc.hexFrom(txBytes);
+@@ -839,8 +835,6 @@ export class CampaignAdminService {
+       userTypeIds
+     );
+ 
+-    await tx.completeInputsByCapacity(this.signer);
+-    await tx.completeFeeBy(this.signer);
+     const txHash = await sendTransactionWithFeeRetry(this.signer, tx);
+ 
+     log.info("Quest completions approved with Points minting:", {
+diff --git a/dapp/lib/services/funding-service.ts b/dapp/lib/services/funding-service.ts
+index 6bd02e7..635a2cd 100644
+--- a/dapp/lib/services/funding-service.ts
++++ b/dapp/lib/services/funding-service.ts
+@@ -474,10 +474,6 @@ export class FundingService {
+         tx = await udt.completeBy(tx, this.signer);
+       }
+ 
+-      // Complete the transaction with CKB capacity
+-      await tx.completeInputsByCapacity(this.signer);
+-      await tx.completeFeeBy(this.signer);
+-
+       // Log final transaction
+       log.log("Final standalone funding transaction:", {
+         inputs: tx.inputs.length,
+diff --git a/dapp/lib/services/protocol-service.ts b/dapp/lib/services/protocol-service.ts
+index 994b5c8..2cfb719 100644
+--- a/dapp/lib/services/protocol-service.ts
++++ b/dapp/lib/services/protocol-service.ts
+@@ -138,8 +138,6 @@ export class ProtocolService {
+     }
+ 
+     // Complete fees and send transaction with automatic retry
+-    await tx.completeInputsByCapacity(this.signer);
+-    await tx.completeFeeBy(this.signer);
+     const txHash = await sendTransactionWithFeeRetry(this.signer, tx);
+ 
+     log.info("Protocol updated, tx:", txHash);
+diff --git a/dapp/lib/services/tipping-service.ts b/dapp/lib/services/tipping-service.ts
+index e631751..2a7d830 100644
+--- a/dapp/lib/services/tipping-service.ts
++++ b/dapp/lib/services/tipping-service.ts
+@@ -218,9 +218,6 @@ export class TippingService {
+     });
+     await tx.addOutput(output, "0x");
+ 
+-    await tx.completeInputsByCapacity(signer);
+-    await tx.completeFeeBy(signer);
+-
+     const txHash = await sendTransactionWithFeeRetry(signer, tx);
+     return txHash;
+   }
+@@ -266,9 +263,6 @@ export class TippingService {
+       await udtInstance.completeBy(tx, signer);
+     }
+ 
+-    await tx.completeInputsByCapacity(signer);
+-    await tx.completeFeeBy(signer);
+-
+     const txHash = await sendTransactionWithFeeRetry(signer, tx);
+     return txHash;
+   }
+diff --git a/dapp/lib/services/user-service.ts b/dapp/lib/services/user-service.ts
+index add013c..d773841 100644
+--- a/dapp/lib/services/user-service.ts
++++ b/dapp/lib/services/user-service.ts
+@@ -741,38 +741,6 @@ export class UserService {
+ 
+     log.log("Transaction before complete fees", updateTx);
+ 
+-    // Complete fees and send transaction (following campaign-service pattern)
+-    await updateTx.completeInputsByCapacity(this.signer);
+-    try {
+-      const sender = await this.signer.getRecommendedAddressObj();
+-      const senderHash = sender.script.hash();
+-      const payload = {
+-        outputs: updateTx.outputs.map((o, i) => ({
+-          index: i,
+-          capacity: o.capacity?.toString?.() ?? String(o.capacity),
+-          hasType: !!o.type,
+-          lockHash: o.lock.hash(),
+-          isChangeCandidate: !o.type && o.lock.hash() === senderHash,
+-        })),
+-      };
+-      log.log(`after-complete-inputs ${JSON.stringify(payload)}`);
+-    } catch {}
+-    await updateTx.completeFeeBy(this.signer);
+-    try {
+-      const sender = await this.signer.getRecommendedAddressObj();
+-      const senderHash = sender.script.hash();
+-      const payload = {
+-        outputs: updateTx.outputs.map((o, i) => ({
+-          index: i,
+-          capacity: o.capacity?.toString?.() ?? String(o.capacity),
+-          hasType: !!o.type,
+-          lockHash: o.lock.hash(),
+-          isChangeCandidate: !o.type && o.lock.hash() === senderHash,
+-        })),
+-      };
+-      log.log(`after-complete-fee ${JSON.stringify(payload)}`);
+-    } catch {}
+-
+     log.log("Updating user cell with submission", {
+       userTypeId: userTypeId.slice(0, 10) + "...",
+       totalSubmissions: updatedSubmissions.length,
+@@ -982,36 +950,6 @@ export class UserService {
+     // Complete fees and send transaction
+ 
+     log.log("createTx before complete fees", createTx);
+-    await createTx.completeInputsByCapacity(this.signer);
+-    try {
+-      const sender = await this.signer.getRecommendedAddressObj();
+-      const senderHash = sender.script.hash();
+-      const payload = {
+-        outputs: createTx.outputs.map((o, i) => ({
+-          index: i,
+-          capacity: o.capacity?.toString?.() ?? String(o.capacity),
+-          hasType: !!o.type,
+-          lockHash: o.lock.hash(),
+-          isChangeCandidate: !o.type && o.lock.hash() === senderHash,
+-        })),
+-      };
+-      log.log(`after-complete-inputs ${JSON.stringify(payload)}`);
+-    } catch {}
+-    await createTx.completeFeeBy(this.signer);
+-    try {
+-      const sender = await this.signer.getRecommendedAddressObj();
+-      const senderHash = sender.script.hash();
+-      const payload = {
+-        outputs: createTx.outputs.map((o, i) => ({
+-          index: i,
+-          capacity: o.capacity?.toString?.() ?? String(o.capacity),
+-          hasType: !!o.type,
+-          lockHash: o.lock.hash(),
+-          isChangeCandidate: !o.type && o.lock.hash() === senderHash,
+-        })),
+-      };
+-      log.log(`after-complete-fee ${JSON.stringify(payload)}`);
+-    } catch {}
+ 
+     log.log("Creating user cell with submission", {
+       userTypeHash: this.userTypeCodeHash.slice(0, 10) + "...",
+diff --git a/packages/ssri-ckboost/src/protocol/index.ts b/packages/ssri-ckboost/src/protocol/index.ts
+index e472bde..8b4cd7a 100644
+--- a/packages/ssri-ckboost/src/protocol/index.ts
++++ b/packages/ssri-ckboost/src/protocol/index.ts
+@@ -94,8 +94,12 @@ export class Protocol extends ssri.Trait {
+     let resTx;
+ 
+     const txReq = ccc.Transaction.from(tx ?? {});
+-    // Ensure at least one input for the transaction
+-    if (txReq.inputs.length === 0 && !this.script.args) {
++    // Ensure at least one input for protocol creation transactions.
++    const argsBytes = ccc.bytesFrom(this.script.args);
++    const isNewProtocol =
++      argsBytes.length === 0 ||
++      (argsBytes.length === 32 && argsBytes.every((byte) => byte === 0));
++    if (txReq.inputs.length === 0 && isNewProtocol) {
+       await txReq.completeInputsAtLeastOne(signer);
+       await txReq.completeInputsByCapacity(signer);
+     }
+-- 
+2.49.0
+

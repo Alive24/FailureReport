@@ -1,0 +1,2 @@
+# Preserve the upstream patch fixture byte-for-byte, including its original whitespace.
+apps/failure-report/agent/subagents/ckb/fixtures/issue-45/fix.patch whitespace=-trailing-space,-blank-at-eof

@@ -1,0 +1,38 @@
+{
+  "author": {
+    "id": "MDQ6VXNlcjIwODI3MjEx",
+    "is_bot": false,
+    "login": "Alive24",
+    "name": ""
+  },
+  "body": "Get extra cells for working around at the moment.",
+  "comments": [
+    {
+      "id": "IC_kwDOPHXsH87uuJlB",
+      "author": { "login": "Alive24" },
+      "authorAssociation": "OWNER",
+      "body": "Should have been fixed in https://github.com/Alive24/CKBoost/commit/086d144e4bccb10aeedb4c3719a9f9ecca4dc221",
+      "createdAt": "2026-03-05T13:30:38Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Alive24/CKBoost/issues/45#issuecomment-4005075265",
+      "viewerDidAuthor": true
+    }
+  ],
+  "createdAt": "2026-03-05T10:16:16Z",
+  "labels": [
+    {
+      "id": "LA_kwDOPHXsH88AAAACEiQmBw",
+      "name": "bug",
+      "description": "Something isn't working",
+      "color": "d73a4a"
+    }
+  ],
+  "number": 45,
+  "state": "CLOSED",
+  "title": "Change cell and fee cell complications when there's only one available Cell for complete.",
+  "updatedAt": "2026-03-05T13:30:41Z",
+  "url": "https://github.com/Alive24/CKBoost/issues/45"
+}
