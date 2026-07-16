@@ -1,54 +1,82 @@
 # Provider Boundary
 
-> **Status: implemented MVP architecture.** Root and CKB use independently
-> configurable factories; the only deliberate version boundary is the pinned
-> community Codex App-server provider's LanguageModelV3 surface.
+> **Status: implemented MVP architecture.** Eve Root, the mounted CKB extension,
+> and the consumer-owned Codex worker have deliberately separate responsibilities.
 
 ## Decision
 
-FailureReport keeps Eve as the Root Supervisor and keeps CKB as an internal
-declared subagent. The two tiers use different model-provider roles:
+FailureReport keeps Eve as the public Root Supervisor. CKB is a reusable Eve
+extension, while the application owns the generic Codex App-server worker that
+executes a Root-prepared coding task.
 
 ```text
 MCP / Temporal / Codex plugin
+            |
+     outer ecosystem wrapper
+            |
+  Eve default HTTP Channel
             |
        Eve Root Supervisor
             |
    tool-capable Root provider
             |
-       declared CKB subagent
+  mounted CKB Eve extension
+            |
+ consumer-owned Codex worker
             |
    Codex App-server provider
             |
  persistent Codex thread + isolated worktree
 ```
 
-Only Root is public. Neither CKB nor a provider id becomes an MCP or Temporal
-API.
+Only Root is public, through the default Eve Channel at
+`eve/agent/channels/eve.ts`. Neither an extension namespace, a domain id, a
+worker name, nor a provider id becomes an MCP or Temporal API.
 
 ## Root Provider
 
 Root needs AI SDK custom-tool support. It must be able to call Issue workpad,
-approval, routing, and declared-subagent tools, so its provider cannot ignore
-the tools Eve supplies.
+approval, routing, and declared-subagent tools, so its provider cannot ignore the
+tools Eve supplies.
 
-FailureReport's MVP is intentionally local-first. Eve's
-`experimental_chatgpt()` helper reads the local `codex login` credentials and
-acts as the default, tool-capable AI SDK model for the product runtime; it is not
-just a development or test convenience. The `experimental_` name is an upstream
-API label, not a signal that FailureReport should avoid it in normal local use.
-A Root provider factory keeps a remote deployment switchable later, for example
-to a hosted OpenAI, Anthropic, or Gateway-backed model.
+FailureReport's MVP is intentionally local-first. Eve's experimental_chatgpt()
+helper reads the local codex login credentials and acts as the default,
+tool-capable AI SDK model for the product runtime; it is not just a development
+or test convenience. A Root provider factory keeps a remote deployment
+switchable later, for example to a hosted OpenAI, Anthropic, or Gateway-backed
+model.
 
-Do not use the Codex App-server provider as Root's model by default. The
-provider is valuable for coding work, but it does not support AI SDK custom tool
-schemas. Using it at Root would disable the mechanisms that make Root a
-supervisor.
+Do not use the Codex App-server provider as Root's model by default. The provider
+is valuable for coding work, but it does not support AI SDK custom tool schemas.
+Using it at Root would disable the mechanisms that make Root a supervisor.
 
-## CKB App-server Provider
+## CKB Extension
 
-CKB remains a declared Eve subagent with its own instructions, skills, config,
-fixtures, and restricted tool surface. Its coding execution uses the
+packages/ckb-domain-pack/extension/ owns CKB-specific instructions, the
+ckb-debugging skill, diagnostic helpers, and tools. The application mounts the
+package at agent/extensions/ckb.ts, so Eve composes its capabilities under the
+ckb__ namespace:
+
+```text
+ckb__prepare_execution
+ckb__recommend_log
+ckb__ckb-debugging
+```
+
+The extension's approval-gated ckb__prepare_execution tool accepts CKB request
+data, invokes the consumer-injected execution preparer, and appends CKB guidance
+to the returned delegation message. The mount supplies application policy — the
+backend id and worktree root — without moving CKB instructions into the app.
+
+This boundary follows Eve's extension rules: an extension may contribute tools,
+connections, skills, instructions, hooks, and shared lib code, but cannot declare
+agent.ts, a sandbox, schedules, limits, or nested extensions. It also does not
+compose an extension-local declared subagent. Those concerns stay with the
+consuming application.
+
+## Codex App-server Worker
+
+agent/subagents/codex/ is the application-owned worker. Its dynamic model is the
 Codex App-server AI SDK provider configured with:
 
 ```text
@@ -59,22 +87,26 @@ sandboxMode: workspace-write
 ```
 
 The worker uses Codex-native shell and Git capabilities and any explicitly
-configured MCP servers. CKB debugger scripts are reached through that worktree.
-The CKB `load_skill` framework tool is explicitly disabled; do not expect
-Eve-authored `tools/` to be available to an App-server-backed child.
+configured MCP servers. Domain guidance is carried in the Root-prepared
+delegation message. The worker's load_skill framework tool is explicitly
+disabled; do not expect Eve-authored tools to be available to an
+App-server-backed worker.
 
 The App-server provider's persistent session exposes a Codex thread id. The
-system must retain that id so a later FailureReport resume can continue the
-same coding conversation rather than recreate it from scratch.
+system retains that id so a later FailureReport resume can continue the same
+coding conversation rather than recreate it from scratch.
 
 ## Execution and Worktree Ownership
 
-Deterministic Root-owned execution infrastructure, not a model, owns worktree
-allocation and safety. It is domain-agnostic; a selected domain pack only binds
-its backend and execution instructions:
+Deterministic application-owned execution infrastructure, not a model, owns
+worktree allocation and safety. A mounted extension identifies the domain and
+supplies the instruction layer; the application host owns the worktree manager,
+Issue workpad gateway, and provider policy:
 
-- Root's approval-gated `prepare_execution` selects a configured domain pack and
-  allocates or validates an isolated worktree for a report and coding child.
+- Root publishes the current report, then invokes the extension's approval-gated
+  preparation tool such as ckb__prepare_execution.
+- The application host allocates or validates the isolated worktree and persists
+  execution state before the extension returns a delegation message.
 - Keep the canonical checkout outside the worker's writable scope.
 - The MVP uses one deterministic mutable CKB worktree per report. A future
   concurrent execution feature must add explicit leases or separate worktrees.
@@ -86,11 +118,11 @@ debugger execution, code edits, tests, and the evidence-backed conclusion.
 ## Durable State and Resume
 
 GitHub Issue state remains the collaboration source of truth. The Issue body is
-human-readable and one `failure-report-workpad` comment is the structured
+human-readable and one failure-report-workpad comment is the structured
 snapshot.
 
-The report has an optional typed `execution_state` rather than extending
-the GitHub-specific `shared_context` object:
+The report has an optional typed execution_state rather than extending the
+GitHub-specific shared_context object:
 
 ```ts
 type ExecutionState = {
@@ -108,43 +140,45 @@ type ExecutionState = {
 };
 ```
 
-Before resuming a child, generic execution infrastructure reloads the workpad
+Before resuming the worker, generic execution infrastructure reloads the workpad
 and validates the worktree, repository origin, branch, base revision, and Git
-state. The selected domain model factory then resumes its provider session. A
-missing or unsafe worktree requires an explicit new execution or `needs_input`;
+state. The generic Codex model factory then resumes its provider session. A
+missing or unsafe worktree requires an explicit new execution or needs_input;
 never silently fall back to the canonical checkout.
 
 ## Implementation Constraints
 
-- Keep `RootRequest` and `RootResult` stable for MCP, Temporal, and Codex plugin
-  callers.
-- Keep adapters dependent only on `protocol` and `runtime-port`.
-- Root owns Issue-write approval. The CKB model cannot write GitHub; a
+- Keep RootRequest and RootResult stable at every outer boundary. An MCP or
+  Temporal host may use `eve/client` to call the default Eve Channel, but must
+  never import `eve/agent`, a domain extension, or a provider implementation.
+- Root owns Issue-write approval. The Codex worker cannot write GitHub; a
   deterministic host journal persists its provider session metadata only inside
   a Root-approved execution.
-- CKB stays internal and is selected only by Root.
+- Domain extensions stay internal and are selected only by Root.
 - Wrap the community Codex App-server provider behind a local factory and pin its
   version. It is an integration dependency, not a new public contract.
-- Tests cover protocol validation, MCP Root composition, worktree allocation and
+- Tests cover protocol validation, extension compilation, worktree allocation and
   rejection paths, and Codex thread start/resume without a live model call.
 
 ## Verification
 
 Use the CKBoost #54 fixture for a read-only end-to-end check:
 
-1. Root publishes and approves a CKB-appropriate report through generic
-   `prepare_execution` with the internal `ckb` domain id.
-2. The child receives its allocated worktree and creates a Codex App-server
-   thread.
-3. The provider journal writes its thread id and final worktree HEAD to the
-   workpad without allowing the CKB model to mutate GitHub.
-4. A second call resumes the stored thread and worktree without creating a
+1. Root publishes and approves a CKB-appropriate report through
+   ckb__prepare_execution.
+2. The extension returns a CKB-guided delegation after the consumer host has
+   prepared the allocated worktree.
+3. The codex worker receives that exact delegation and creates a Codex
+   App-server thread.
+4. The provider journal writes its thread id and final worktree HEAD to the
+   workpad without allowing the worker to mutate GitHub.
+5. A second call resumes the stored thread and worktree without creating a
    duplicate workpad comment.
 
-Use #45 as the sparse-evidence case: the child should preserve uncertainty and
+Use #45 as the sparse-evidence case: the worker should preserve uncertainty and
 avoid inventing a diagnosis.
 
 ## References
 
-- [Eve subagents](https://vercel.com/kb/guide/how-to-use-eve-subagents)
+- [Eve extensions](https://eve.dev/docs/extensions)
 - [Codex CLI App Server provider](https://ai-sdk.dev/providers/community-providers/codex-app-server)

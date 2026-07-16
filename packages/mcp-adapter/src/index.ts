@@ -5,9 +5,22 @@ import {
   rootRequestSchema,
   rootResultSchema,
   type RootRequest,
+  type RootInvoker,
   type RootResult,
 } from "@failure-report/protocol";
-import type { RootInvoker } from "@failure-report/runtime-port";
+
+export {
+  buildRootInvocationMessage,
+  createMcpRootInvoker,
+  EveChannelRootInvoker,
+  EveChannelRootTransport,
+  InMemoryRootSessionStore,
+  rootSessionKey,
+  type EveChannelRootTransportOptions,
+  type EveChannelRootTurn,
+  type McpRootCompositionOptions,
+  type RootSessionStore,
+} from "./eve-channel-root-invoker.js";
 
 /**
  * MCP adapter for the public Root contract.

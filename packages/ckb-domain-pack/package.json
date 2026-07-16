@@ -1,0 +1,46 @@
+{
+  "name": "@failure-report/ckb-domain-pack",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reusable Eve extension for CKB failure investigation.",
+  "license": "MIT",
+  "type": "module",
+  "eve": {
+    "extension": "./extension"
+  },
+  "files": [
+    "extension",
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.mjs"
+    },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "default": "./dist/tools/index.mjs"
+    }
+  },
+  "scripts": {
+    "build": "eve extension build",
+    "prepare": "eve extension build",
+    "typecheck": "tsc",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.x",
+    "eve": "^0.24.4",
+    "typescript": "7.0.2"
+  },
+  "peerDependencies": {
+    "eve": "^0.24.4"
+  },
+  "engines": {
+    "node": "24.x"
+  }
+}

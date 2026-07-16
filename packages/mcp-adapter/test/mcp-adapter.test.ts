@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { RootInvoker } from "@failure-report/runtime-port";
+import type { RootInvoker } from "@failure-report/protocol";
 
 import { createRootRequestHandler } from "../src/index.js";
 

@@ -1,0 +1,25 @@
+{
+  "name": "@Alive24/FailureReport",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Eve Root, mounted domain extensions, and a consumer-owned execution worker for FailureReport.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "dev": "eve dev --no-ui",
+    "eve:info": "eve info",
+    "eval": "eve eval"
+  },
+  "dependencies": {
+    "@failure-report/ckb-domain-pack": "workspace:*",
+    "@failure-report/protocol": "workspace:*",
+    "ai": "^7.0.26",
+    "ai-sdk-provider-codex-app-server": "1.1.7",
+    "eve": "^0.24.4",
+    "octokit": "^5.0.5",
+    "zod": "^4.4.3"
+  }
+}

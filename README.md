@@ -6,30 +6,36 @@ context lives in one GitHub Issue from intake through Todo promotion.
 
 > **Provider boundary:** FailureReport is local-first by default: Root runs Eve
 > with `experimental_chatgpt()` from the local Codex/ChatGPT session, while the
-> internal CKB subagent runs Codex App-server in a durable isolated worktree. See
-> [provider boundary](docs/architecture/provider-boundary.md) for the contract.
+> mounted CKB extension prepares a consumer-owned Codex worker in a durable
+> isolated worktree. See [provider boundary](docs/architecture/provider-boundary.md)
+> for the contract.
 
 ## Core Model
 
 ```mermaid
 flowchart TD
-  M["Codex MCP / Temporal / other host"] --> P["RootInvoker"]
-  P --> E["Eve Root Supervisor"]
+  M["MCP / Temporal / other external wrapper"] --> C["Eve Channel client"]
+  C --> H["Eve default HTTP Channel"]
+  H --> E["Eve Root Supervisor"]
   E --> R["Tool-capable Root model provider"]
-  E --> C["CKB declared internal subagent"]
+  E --> X["CKB mounted Eve extension"]
   E --> I["GitHub Issue narrative + workpad"]
+  X --> C["Consumer-owned Codex worker"]
   C --> A["Codex App-server provider"]
   A --> W["Isolated worktree + persistent Codex thread"]
 ```
 
-- Eve Root is the only public supervisor and public agent entry.
+- Eve Root is the only public supervisor. Its primary public entry is Eve's
+  built-in HTTP channel, declared at `eve/agent/channels/eve.ts` and exposed as
+  `/eve/v1/session*`.
 - Root uses a **tool-capable** AI SDK model so Eve can retain Issue, approval,
   routing, and declared-subagent tools. The MVP runs locally by default, using
   Eve's `experimental_chatgpt()` helper with the signed-in Codex/ChatGPT session;
   this is the product default, not a test-only convenience. A remote host may opt
   into another tool-capable provider later.
-- CKB is the first declared Eve subagent, never a public API target. Its execution
-  provider is Codex App-server, so coding work happens in a persistent
+- CKB is the first mounted Eve extension, never a public API target. Its
+  `ckb__prepare_execution` tool owns CKB-specific approval, instructions, and
+  delegation guidance; the consumer-owned Codex worker supplies the persistent
   Codex thread inside an isolated worktree.
 - A target-repository GitHub Issue is the shared context: existing human body is
   preserved, FailureReport adds a stable narrative block, and exactly one marked
@@ -42,19 +48,29 @@ flowchart TD
   or Project V2 without changing the protocol.
 - Codex App-server's `threadId`, assigned worktree identity, branch, and Git
   revision are durable execution state, distinct from GitHub shared context.
-- MCP, Temporal, and Codex integrations call Root through the typed runtime port.
+- MCP and Temporal are outer packages that wrap the default Eve Channel for
+  their own ecosystems; they do not create a second agent entry inside `eve/`.
 
 ## Workspace
 
 ```text
-apps/failure-report       Eve Root, domain packs, and Root-owned integrations
-packages/protocol         Zod schemas and workpad serialization
-packages/runtime-port     Thin RootInvoker contract
-packages/mcp-adapter      Root-only MCP translation
+eve/agent                 Eve-discovered Root, Channel, tools, workers, and import-only authored helpers
+eve/config                Application-owned Root and worker configuration
+eve/evals                 Eve evaluations and immutable evaluation fixtures
+packages/ckb-domain-pack  Reusable CKB Eve extension
+packages/protocol         Zod schemas, Root invocation type, and workpad serialization
+packages/mcp-adapter      MCP stdio wrapper that calls the default Eve Channel
 packages/temporal-adapter Deterministic Temporal workflow and activities
 packages/codex-plugin     Codex skill bundle
 examples/                 Extension and host examples
 ```
+
+`eve/agent/` is intentionally limited to Eve's filesystem
+slots: `agent.ts`, `instructions.md`, `tools/`, `skills/`, `extensions/`, `lib/`
+when shared authored code is needed, and declared `subagents/`. The Root runtime,
+generic execution helpers, and GitHub integration now live under `agent/lib/`:
+they are import-only authored code and are never mounted into a worker workspace.
+Product configuration and evaluation material remain alongside `agent/`.
 
 ## Development
 
@@ -69,16 +85,16 @@ pnpm test
 
 FailureReport's MVP is a local product runtime. It uses the same `codex login`
 credentials in two distinct roles: a tool-capable Eve Root model via
-`experimental_chatgpt()`, and a Codex App-server provider for coding subagents.
+`experimental_chatgpt()`, and a Codex App-server provider for the coding worker.
 The latter must be given an isolated worktree and must not be used as the Root
 model, because it does not support AI SDK custom tool schemas.
 
-To run the public Root MCP surface locally, start Eve Root in one terminal and
-the MCP host in another:
+To run the public Root MCP surface locally, start Eve (and therefore its default
+Channel) in one terminal, then start the external MCP wrapper in another:
 
 ```bash
-pnpm --filter @failure-report/agent dev
-pnpm --filter @failure-report/agent mcp
+pnpm --filter @Alive24/FailureReport dev
+pnpm --filter @failure-report/mcp-adapter mcp
 ```
 
 `FAILURE_REPORT_EVE_HOST` can point the MCP process at a deployed Root; set
@@ -118,19 +134,23 @@ workpad, prompts, logs, or fixtures.
 
 ## Extend
 
-Add a domain pack under `apps/failure-report/src/domain-packs/<domain>/`, then
-register it in the Root's domain-pack registry and declare its Eve subagent at
-`apps/failure-report/agent/subagents/<domain>/`. The pack owns the domain's
-backend binding and execution instructions; `src/execution/` remains generic
-Root-owned worktree, workpad, and resume infrastructure. Do not expose the
-domain id through MCP or Temporal. A Codex App-server-backed child must not rely
-on Eve-authored tools being callable by its model; give it the required shell,
-MCP, and worktree-scoped capabilities directly.
+Add a domain as an Eve extension, starting with
+`npx eve@latest extension init <domain>`. Keep its reusable capabilities in
+`packages/<domain>-domain-pack/extension/`: `extension.ts`, tools, skills,
+instructions, hooks, connections, and `lib/`. Mount it from
+`eve/agent/extensions/<domain>.ts`; its contributions compose
+under `<domain>__` names. Extensions cannot own an agent config, sandbox,
+schedules, or nested extensions, so the application retains provider/worktree
+policy and a generic Codex worker under `agent/subagents/`. Do not expose a
+domain id through MCP or Temporal. A Codex App-server worker must not rely on
+Eve-authored tools being callable by its model; provide domain guidance in the
+prepared delegation and use its shell, MCP, and worktree-scoped capabilities.
 
-Add a transport at `packages/<name>-adapter/`. It may depend on `protocol` and
-`runtime-port` only, converts external events into `RootRequest`, and returns a
-`RootResult`. It must not implement FailureReport business logic or call a domain
-subagent directly.
+Add an external wrapper at `packages/<name>-adapter/`. It converts platform
+events into `RootRequest`, calls the default Eve Channel, and returns a
+`RootResult`. It must not import `eve/agent`, implement FailureReport business
+logic, or call a domain subagent directly. Temporal Workflow code remains
+deterministic; its Activity is the outer boundary that invokes the Channel.
 
 See [architecture overview](docs/architecture/overview.md),
 [provider boundary](docs/architecture/provider-boundary.md),

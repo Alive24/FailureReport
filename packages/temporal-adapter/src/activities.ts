@@ -2,9 +2,9 @@ import {
   rootRequestSchema,
   rootResultSchema,
   type RootRequest,
+  type RootInvoker,
   type RootResult,
 } from "@failure-report/protocol";
-import type { RootInvoker } from "@failure-report/runtime-port";
 
 /**
  * Nondeterministic boundary invoked by the deterministic Temporal workflow.

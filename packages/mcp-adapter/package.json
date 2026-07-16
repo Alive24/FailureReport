@@ -1,7 +1,7 @@
 {
   "name": "@failure-report/mcp-adapter",
   "version": "0.1.0",
-  "description": "Root-only MCP adapter for FailureReport.",
+  "description": "MCP stdio wrapper for FailureReport through its default Eve Channel.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -16,12 +16,13 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
+    "mcp": "node dist/stdio.js",
     "test": "vitest run"
   },
   "dependencies": {
     "@failure-report/protocol": "workspace:*",
-    "@failure-report/runtime-port": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "eve": "^0.24.4",
     "zod": "^4.4.3"
   }
 }

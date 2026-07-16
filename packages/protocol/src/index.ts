@@ -415,6 +415,16 @@ export type RootRequest = z.infer<typeof rootRequestSchema>;
 /** Typed public Root result inferred from the transport schema. */
 export type RootResult = z.infer<typeof rootResultSchema>;
 
+/**
+ * Type-only invocation contract shared by outer ecosystem wrappers.
+ *
+ * It belongs beside `RootRequest` and `RootResult`: implementations call the
+ * default Eve Channel, while MCP and Temporal stay independent of one another.
+ */
+export interface RootInvoker {
+  invoke(request: RootRequest): Promise<RootResult>;
+}
+
 /** Decoded contents of the single structured workpad comment. */
 export type FailureReportWorkpad = {
   report: FailureReport;
