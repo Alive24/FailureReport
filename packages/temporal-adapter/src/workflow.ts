@@ -13,8 +13,11 @@ const activities = proxyActivities<FailureReportActivities>({
 });
 
 /**
- * Deterministic orchestration only. Eve, GitHub, MCP, filesystem, and Codex
- * App-server I/O run inside invokeRoot Activity implementations.
+ * Runs one deterministic FailureReport workflow turn.
+ *
+ * Eve, GitHub, MCP, filesystem, and Codex App-server I/O run inside the
+ * `invokeRoot` Activity implementation so Temporal replay never repeats external
+ * side effects.
  */
 export async function failureReportWorkflow(
   request: RootRequest,

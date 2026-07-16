@@ -4,6 +4,11 @@ import { z } from "zod";
 import { GithubCliIssueGateway } from "../../integrations/github/github-cli.js";
 import { findExistingWorkpad } from "../../integrations/github/issue-workpad.js";
 
+/**
+ * Read-only Root tool that rehydrates an Issue and its optional structured workpad.
+ * A missing workpad is represented as `null`, allowing Root to decide whether to
+ * create one rather than treating a new Issue as a transport failure.
+ */
 export default defineTool({
   description:
     "Rehydrate the public FailureReport shared context from its target GitHub Issue and unique workpad comment.",

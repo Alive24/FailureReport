@@ -8,11 +8,13 @@ import {
   workpadMarker,
 } from "../src/index.js";
 
+/** Loads a raw fixture as unknown so each test exercises the production schema. */
 async function loadFixture(name: string): Promise<unknown> {
   const file = new URL("./fixtures/" + name, import.meta.url);
   return JSON.parse(await readFile(file, "utf8"));
 }
 
+/** Covers durable-report parsing and workpad serialization invariants. */
 describe("FailureReport protocol", () => {
   it.each(["issue-54.json", "contract-recipe-identifier.json"])(
     "accepts the historical CKBoost fixture %s",
@@ -80,6 +82,7 @@ describe("FailureReport protocol", () => {
     const withExecution = failureReportSchema.parse({
       ...report,
       execution_state: {
+        domain_id: "ckb",
         backend_id: "codex_app_server",
         codex_thread_id: "thr_ckb_54",
         worktree: {

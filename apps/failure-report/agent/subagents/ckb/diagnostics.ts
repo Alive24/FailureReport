@@ -1,3 +1,4 @@
+/** CKB-specific failure boundaries used to select a narrow diagnostic log shape. */
 export type CkbFailureLayer =
   | "transaction_assembly"
   | "contract_validation"
@@ -6,6 +7,7 @@ export type CkbFailureLayer =
   | "deployment"
   | "unknown";
 
+/** Structured logging recommendation with privacy and volume guardrails. */
 export type CkbLogRecommendation = {
   event: string;
   level: "debug" | "info" | "warn";
@@ -15,6 +17,7 @@ export type CkbLogRecommendation = {
   guardrails: string[];
 };
 
+/** Per-layer defaults that keep recommendations consistent across investigations. */
 const defaults: Record<
   CkbFailureLayer,
   Omit<CkbLogRecommendation, "fields">
@@ -89,6 +92,11 @@ const defaults: Record<
   },
 };
 
+/**
+ * Produces one deduplicated, bounded structured-log recommendation for a CKB layer.
+ * Candidate fields are appended only after the standard correlation fields so every
+ * call retains enough context to compare failures without capturing sensitive data.
+ */
 export function recommendCkbLog(
   layer: CkbFailureLayer,
   location: string,
@@ -108,6 +116,7 @@ export function recommendCkbLog(
   };
 }
 
+/** Removes empty and repeated fields while preserving their first-seen order. */
 function unique(values: string[]): string[] {
   return [...new Set(values.filter((value) => value.length > 0))];
 }

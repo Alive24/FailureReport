@@ -5,6 +5,10 @@ import { failureReportSchema } from "@failure-report/protocol";
 
 import { prepareIssueWorkpadMutation } from "../../integrations/github/issue-workpad.js";
 
+/**
+ * Snapshot shape accepted by the side-effect-free workpad preparation tool.
+ * It mirrors the gateway's read model rather than accepting arbitrary Issue JSON.
+ */
 const issueSnapshotSchema = z
   .object({
     repository: z.string().min(1),
@@ -24,6 +28,11 @@ const issueSnapshotSchema = z
   })
   .strict();
 
+/**
+ * Prepares an optimistic-concurrency-checked Issue workpad mutation without I/O.
+ * Root can inspect the resulting revision/body before calling the approval-gated
+ * publishing tool.
+ */
 export default defineTool({
   description:
     "Prepare a revision-checked GitHub Issue workpad update without publishing it.",

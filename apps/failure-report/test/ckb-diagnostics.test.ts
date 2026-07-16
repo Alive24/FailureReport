@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { recommendCkbLog } from "../agent/subagents/ckb/diagnostics.js";
 
+/** Verifies CKB log guidance stays useful without widening the sensitive payload. */
 describe("CKB diagnostic recommendations", () => {
   it("keeps transaction-assembly logs structured and bounded", () => {
     const recommendation = recommendCkbLog(

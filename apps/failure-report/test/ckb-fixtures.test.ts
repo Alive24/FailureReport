@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
+/** Immutable fixture URLs used by CKB sparse-evidence regression tests. */
 const issue45 = new URL(
   "../agent/subagents/ckb/fixtures/issue-45/issue.json",
   import.meta.url,
@@ -10,6 +11,7 @@ const issue45Patch = new URL(
   import.meta.url,
 );
 
+/** Ensures the intentionally incomplete #45 evidence stays incomplete in fixtures. */
 describe("CKB fixtures", () => {
   it("preserves Issue #45 as evidence-sparse instead of inventing a diagnosis", async () => {
     const issue = JSON.parse(await readFile(issue45, "utf8")) as {

@@ -1,7 +1,16 @@
 import { z } from "zod";
 
+/**
+ * Canonical runtime and persistence contract for FailureReport.
+ *
+ * Every transport parses untrusted input through these schemas before it reaches
+ * Root, and the GitHub workpad uses the same schemas when it is rehydrated.
+ */
+
+/** Marker used to locate the one structured FailureReport workpad comment. */
 export const workpadMarker = "<!-- failure-report-workpad -->";
 
+/** Shared primitive for IDs that may safely appear in report and transport keys. */
 const identifierSchema = z
   .string()
   .min(1)
@@ -80,6 +89,12 @@ const verificationSchema = z
   })
   .strict();
 
+/**
+ * Validates the GitHub Issue binding stored alongside a report.
+ *
+ * This deliberately carries only collaboration metadata; execution state lives
+ * separately so a backend-specific resume token cannot become shared context.
+ */
 export const githubIssueContextSchema = z
   .object({
     provider: z.literal("github_issue"),
@@ -93,6 +108,7 @@ export const githubIssueContextSchema = z
   })
   .strict();
 
+/** Validates the immutable identity and current revision of an isolated worktree. */
 export const executionWorktreeSchema = z
   .object({
     path: z.string().min(1),
@@ -103,8 +119,13 @@ export const executionWorktreeSchema = z
   })
   .strict();
 
+/**
+ * Validates durable backend state required to resume an isolated coding execution.
+ * The state belongs to the report but is intentionally outside `shared_context`.
+ */
 export const executionStateSchema = z
   .object({
+    domain_id: identifierSchema,
     backend_id: identifierSchema,
     codex_thread_id: z.string().min(1).optional(),
     worktree: executionWorktreeSchema,
@@ -112,6 +133,13 @@ export const executionStateSchema = z
   })
   .strict();
 
+/**
+ * Validates the complete evidence-backed failure report persisted in a workpad.
+ *
+ * `.strict()` is intentional throughout this contract: silently accepting an
+ * unknown field would make a corrupted or future-incompatible workpad appear
+ * trustworthy to a currently running Root.
+ */
 export const failureReportSchema = z
   .object({
     $schema: z.string().optional(),
@@ -335,6 +363,7 @@ export const failureReportSchema = z
   })
   .strict();
 
+/** Operations exposed by the single public Root entry point. */
 export const rootOperationSchema = z.enum([
   "start",
   "resume",
@@ -343,6 +372,7 @@ export const rootOperationSchema = z.enum([
   "render_handoff",
 ]);
 
+/** Validates an adapter request before it is handed to Root. */
 export const rootRequestSchema = z
   .object({
     request_id: identifierSchema,
@@ -354,6 +384,7 @@ export const rootRequestSchema = z
   })
   .strict();
 
+/** Validates the only result shape adapters are allowed to return to callers. */
 export const rootResultSchema = z
   .object({
     request_id: identifierSchema,
@@ -371,18 +402,31 @@ export const rootResultSchema = z
   })
   .strict();
 
+/** Typed FailureReport value inferred from the durable schema. */
 export type FailureReport = z.infer<typeof failureReportSchema>;
+/** Typed GitHub Issue context inferred from the durable schema. */
 export type GithubIssueContext = z.infer<typeof githubIssueContextSchema>;
+/** Typed durable execution state inferred from the durable schema. */
 export type ExecutionState = z.infer<typeof executionStateSchema>;
+/** Typed isolated-worktree identity inferred from the durable schema. */
 export type ExecutionWorktree = z.infer<typeof executionWorktreeSchema>;
+/** Typed public Root request inferred from the transport schema. */
 export type RootRequest = z.infer<typeof rootRequestSchema>;
+/** Typed public Root result inferred from the transport schema. */
 export type RootResult = z.infer<typeof rootResultSchema>;
 
+/** Decoded contents of the single structured workpad comment. */
 export type FailureReportWorkpad = {
   report: FailureReport;
   revision: number;
 };
 
+/**
+ * Serializes a report as the canonical, machine-readable Issue workpad payload.
+ *
+ * The header redundantly carries report ID and revision so parsing can reject a
+ * copied JSON block that was attached to the wrong Issue comment.
+ */
 export function renderFailureReportWorkpad(
   report: FailureReport,
   revision: number,
@@ -401,6 +445,12 @@ export function renderFailureReportWorkpad(
   ].join("\n");
 }
 
+/**
+ * Parses and validates a persisted workpad comment before it becomes runtime state.
+ *
+ * Parsing the marker, header, JSON fence, and schema separately makes corruption
+ * failures explicit instead of leaking a partially trusted object downstream.
+ */
 export function parseFailureReportWorkpad(
   markdown: string,
 ): FailureReportWorkpad {

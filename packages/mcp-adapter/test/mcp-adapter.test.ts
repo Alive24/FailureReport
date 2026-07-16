@@ -4,6 +4,7 @@ import type { RootInvoker } from "@failure-report/runtime-port";
 
 import { createRootRequestHandler } from "../src/index.js";
 
+/** Verifies the adapter validates the public contract before it invokes Root. */
 describe("MCP Root adapter", () => {
   it("validates then forwards only a Root request", async () => {
     const invoke = vi.fn().mockResolvedValue({

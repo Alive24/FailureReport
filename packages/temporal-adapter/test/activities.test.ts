@@ -4,6 +4,7 @@ import type { RootInvoker } from "@failure-report/runtime-port";
 
 import { createFailureReportActivities } from "../src/activities.js";
 
+/** Ensures Temporal activities delegate external work only through the Root port. */
 describe("Temporal Root Activity", () => {
   it("delegates external work to RootInvoker", async () => {
     const invoke = vi.fn().mockResolvedValue({

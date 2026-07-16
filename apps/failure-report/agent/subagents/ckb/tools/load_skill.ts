@@ -1,4 +1,8 @@
 import { disableTool } from "eve/tools";
 
-// The Codex App-server provider cannot execute Eve custom-tool schemas.
+/**
+ * Explicitly disables Eve's default skill-loading tool for the App-server-backed
+ * CKB child. Codex receives its domain instructions through the prepared prompt
+ * and native shell/MCP capabilities, not AI SDK custom tool schemas.
+ */
 export default disableTool();

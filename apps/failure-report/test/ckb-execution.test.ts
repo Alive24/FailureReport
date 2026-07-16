@@ -11,21 +11,33 @@ import {
   prepareIssueWorkpadMutation,
   type GithubIssueSnapshot,
 } from "../integrations/github/issue-workpad.js";
-import { createCkbCodexModelResolver } from "../src/backends/ckb-codex-model.js";
-import type { CkbBackendConfig } from "../src/backend-config.js";
+import { createCkbCodexModelResolver } from "../src/domain-packs/ckb/codex-model.js";
+import type { CkbCodexBackendConfig } from "../src/domain-packs/ckb/config.js";
+import { createCkbExecutionEnvelope } from "../src/domain-packs/ckb/execution.js";
 import {
-  CkbExecutionWorkpad,
-  type CkbIssueGateway,
-} from "../src/execution/ckb-workpad.js";
+  ExecutionWorkpad,
+  type ExecutionIssueGateway,
+} from "../src/execution/workpad.js";
 import {
-  CkbWorktreeManager,
+  ExecutionWorktreeManager,
   type GitCommandRunner,
   type WorktreePathOperations,
-} from "../src/execution/ckb-worktree.js";
+} from "../src/execution/worktree.js";
 
+/**
+ * End-to-end-in-memory coverage for the CKB execution boundary.
+ *
+ * The harness replaces GitHub, Git, filesystem, and Codex App-server with
+ * deterministic fakes so it verifies durable thread/worktree behavior without a
+ * checkout, credentials, or live model call.
+ */
+
+/** Canonical checkout represented by the fake Git/filesystem environment. */
 const canonicalPath = "/canonical/CKBoost";
+/** Root-owned parent directory for the fake isolated execution worktree. */
 const worktreeRoot = "/isolated/failure-report";
-const backend: CkbBackendConfig = {
+/** Valid CKB provider configuration used only to construct the local test adapter. */
+const backend: CkbCodexBackendConfig = {
   schema_version: "failure-report/ckb-backend/v1",
   kind: "codex_app_server",
   codex_path: "codex",
@@ -37,15 +49,17 @@ const backend: CkbBackendConfig = {
   worktree_root: worktreeRoot,
 };
 
+/** Mutable handles exposed by the test harness to simulate external state changes. */
 type Harness = {
   report: FailureReport;
-  manager: CkbWorktreeManager;
-  workpad: CkbExecutionWorkpad;
+  manager: ExecutionWorktreeManager;
+  workpad: ExecutionWorkpad;
   currentReport(): FailureReport;
   setHead(value: string): void;
   calls: Array<{ cwd: string; args: string[] }>;
 };
 
+/** Covers allocation, safety rejection, and persistent-thread resume semantics. */
 describe("CKB Codex execution", () => {
   it("allocates an isolated worktree and rejects resume after an unrecorded HEAD change", async () => {
     const harness = await createHarness();
@@ -54,7 +68,10 @@ describe("CKB Codex execution", () => {
     await expect(
       harness.manager.restore(harness.report, allocated.state),
     ).resolves.toMatchObject({
-      state: { worktree: { branch: allocated.state.worktree.branch } },
+      state: {
+        domain_id: "ckb",
+        worktree: { branch: allocated.state.worktree.branch },
+      },
     });
     expect(harness.calls).toContainEqual(
       expect.objectContaining({
@@ -84,7 +101,9 @@ describe("CKB Codex execution", () => {
     const harness = await createHarness();
     const allocated = await harness.manager.allocate(harness.report);
     const unsafePath = "/" + allocated.state.worktree.identity;
-    const canonicalManager = new CkbWorktreeManager({
+    const canonicalManager = new ExecutionWorktreeManager({
+      domainId: "ckb",
+      backendId: "codex_app_server",
       root: "/",
       git: createGitRunner(harness),
       paths: {
@@ -119,7 +138,9 @@ describe("CKB Codex execution", () => {
     const harness = await createHarness();
     const allocated = await harness.manager.allocate(harness.report);
     const linkedPath = allocated.state.worktree.path;
-    const escapedManager = new CkbWorktreeManager({
+    const escapedManager = new ExecutionWorktreeManager({
+      domainId: "ckb",
+      backendId: "codex_app_server",
       root: worktreeRoot,
       git: createGitRunner(harness),
       paths: {
@@ -155,14 +176,17 @@ describe("CKB Codex execution", () => {
 
   it("persists the provider thread id and uses it to resume the next CKB model", async () => {
     const harness = await createHarness();
-    const prepared = await harness.workpad.prepare({
-      schema_version: "failure-report/ckb-execution/v1",
-      report_id: harness.report.id,
-      repository: "Alive24/CKBoost",
-      issue_number: 54,
-      request: "Inspect the first failing CKB boundary.",
-    });
+    const prepared = await harness.workpad.prepare(
+      createCkbExecutionEnvelope({
+        report_id: harness.report.id,
+        repository: "Alive24/CKBoost",
+        issue_number: 54,
+        request: "Inspect the first failing CKB boundary.",
+      }),
+    );
     const providerSettings: Array<Record<string, unknown>> = [];
+    // Mimic the provider's observable lifecycle: session creation yields a thread
+    // id, and the stream's finish part exposes the same id as provider metadata.
     const createProvider = ((options: {
       defaultSettings: Record<string, unknown>;
     }) => {
@@ -231,6 +255,10 @@ describe("CKB Codex execution", () => {
   });
 });
 
+/**
+ * Builds a fully deterministic fake repository, Issue workpad, and provider host.
+ * The returned `setHead` simulates an out-of-band branch mutation between turns.
+ */
 async function createHarness(): Promise<Harness> {
   const fixture = new URL(
     "../../../packages/protocol/test/fixtures/issue-54.json",
@@ -273,6 +301,7 @@ async function createHarness(): Promise<Harness> {
       return report.target.revision;
     }
     if (input.args[0] === "worktree" && input.args[1] === "add") {
+      // The manager chooses the branch/path; the fake only records the Git effect.
       branch = input.args[3] ?? "";
       worktreePath = input.args[4];
       return "";
@@ -291,14 +320,16 @@ async function createHarness(): Promise<Harness> {
     }
     throw new Error("Unexpected git command: " + input.cwd + " git " + command);
   };
-  const manager = new CkbWorktreeManager({
+  const manager = new ExecutionWorktreeManager({
+    domainId: "ckb",
+    backendId: "codex_app_server",
     root: worktreeRoot,
     git,
     paths,
   });
   const gateway = createIssueGateway(report);
   let second = 2;
-  const workpad = new CkbExecutionWorkpad({
+  const workpad = new ExecutionWorkpad({
     gateway,
     worktrees: manager,
     now: () => "2026-07-15T10:00:" + String(second++).padStart(2, "0") + "Z",
@@ -316,7 +347,12 @@ async function createHarness(): Promise<Harness> {
   };
 }
 
-function createIssueGateway(report: FailureReport): CkbIssueGateway & {
+/**
+ * Creates an in-memory Issue gateway that always represents exactly one workpad.
+ * It intentionally reuses production mutation helpers so the fake preserves the
+ * same revision and serialization rules as GitHub-backed execution.
+ */
+function createIssueGateway(report: FailureReport): ExecutionIssueGateway & {
   currentReport(): FailureReport;
 } {
   const initialIssue: GithubIssueSnapshot = {
@@ -386,6 +422,7 @@ function createIssueGateway(report: FailureReport): CkbIssueGateway & {
   };
 }
 
+/** Filesystem fake that resolves only the canonical checkout, root, and allocated path. */
 function createPaths(source: {
   readonly worktreePath?: string;
 }): WorktreePathOperations {
@@ -408,6 +445,11 @@ function createPaths(source: {
   };
 }
 
+/**
+ * Replays previously observed Git results for canonical-fallback rejection tests.
+ * Any command beyond the expected safety path fails the test rather than masking a
+ * new fallback behavior.
+ */
 function createGitRunner(harness: Harness): GitCommandRunner {
   return async (input) => {
     const matching = harness.calls

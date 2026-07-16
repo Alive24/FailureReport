@@ -9,8 +9,21 @@ import {
 } from "@failure-report/protocol";
 import type { RootInvoker } from "@failure-report/runtime-port";
 
+/**
+ * MCP adapter for the public Root contract.
+ *
+ * This package deliberately exposes one tool only. Domain packs remain an
+ * implementation detail selected by Root and never become an MCP API surface.
+ */
+
+/** Validated function shape used by the MCP tool handler and unit tests. */
 export type RootRequestHandler = (request: RootRequest) => Promise<RootResult>;
 
+/**
+ * Wraps a Root invoker with inbound and outbound protocol validation.
+ * Validation at both edges prevents a transport implementation from widening the
+ * public contract accidentally.
+ */
 export function createRootRequestHandler(
   invoker: RootInvoker,
 ): RootRequestHandler {
@@ -20,6 +33,7 @@ export function createRootRequestHandler(
   };
 }
 
+/** Creates the in-process MCP server exposing the single `failure_report` tool. */
 export function createFailureReportMcpServer(invoker: RootInvoker): McpServer {
   const handle = createRootRequestHandler(invoker);
   const server = new McpServer({
@@ -49,6 +63,8 @@ export function createFailureReportMcpServer(invoker: RootInvoker): McpServer {
           ],
         };
       } catch (error) {
+        // MCP tool errors are returned as tool content so the caller receives a
+        // structured protocol response rather than a dropped stdio connection.
         const message = error instanceof Error ? error.message : String(error);
         return {
           isError: true,
@@ -66,6 +82,7 @@ export function createFailureReportMcpServer(invoker: RootInvoker): McpServer {
   return server;
 }
 
+/** Connects the public MCP server to the process's standard input/output stream. */
 export async function runFailureReportMcpServer(
   invoker: RootInvoker,
 ): Promise<void> {

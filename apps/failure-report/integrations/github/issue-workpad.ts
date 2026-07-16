@@ -8,12 +8,21 @@ import {
   type GithubIssueContext,
 } from "@failure-report/protocol";
 
+/**
+ * Pure GitHub Issue narrative/workpad transformations.
+ *
+ * Keeping these operations side-effect free lets the CLI gateway perform optimistic
+ * concurrency checks immediately before it writes an Issue or comment.
+ */
+
+/** Minimal comment data needed to identify and parse a workpad. */
 export type GithubIssueComment = {
   id: string;
   body: string;
   updated_at: string;
 };
 
+/** Immutable snapshot of the Issue state used to prepare a guarded mutation. */
 export type GithubIssueSnapshot = {
   repository: string;
   issue_number: number;
@@ -23,6 +32,10 @@ export type GithubIssueSnapshot = {
   comments: GithubIssueComment[];
 };
 
+/**
+ * A revision-checked Issue/body/comment update prepared without any GitHub write.
+ * `expected_*` values are compared again by the gateway to prevent stale writers.
+ */
 export type IssueWorkpadMutation = {
   mode: "create" | "update";
   expected_issue_updated_at: string;
@@ -32,15 +45,18 @@ export type IssueWorkpadMutation = {
   report: FailureReport;
 };
 
+/** Delimiters for the small human-readable narrative inserted into the Issue body. */
 export const issueNarrativeStartMarker = "<!-- failure-report-issue:start -->";
 export const issueNarrativeEndMarker = "<!-- failure-report-issue:end -->";
 
+/** Parsed workpad comment paired with the durable report snapshot it carries. */
 export type ExistingWorkpad = {
   comment: GithubIssueComment;
   report: FailureReport;
   revision: number;
 };
 
+/** Renders the concise human-facing Issue narrative for a structured report. */
 export function renderIssueBody(report: FailureReport): string {
   return [
     issueNarrativeStartMarker,
@@ -69,6 +85,10 @@ export function renderIssueBody(report: FailureReport): string {
   ].join("\n");
 }
 
+/**
+ * Inserts or replaces only FailureReport's marked narrative block.
+ * Human-authored Issue content outside the markers is deliberately preserved.
+ */
 export function upsertIssueNarrative(
   existingBody: string,
   report: FailureReport,
@@ -89,6 +109,11 @@ export function upsertIssueNarrative(
   return existingBody.slice(0, start) + narrative + existingBody.slice(after);
 }
 
+/**
+ * Finds the one valid workpad comment on an Issue.
+ * Multiple matching comments are rejected rather than guessing which history is
+ * authoritative.
+ */
 export function findExistingWorkpad(
   issue: GithubIssueSnapshot,
 ): ExistingWorkpad | undefined {
@@ -117,6 +142,10 @@ export function findExistingWorkpad(
   };
 }
 
+/**
+ * Prepares a new report revision and the matching Issue/workpad mutation.
+ * This function performs no I/O so callers can retry safely after a freshness check.
+ */
 export function prepareIssueWorkpadMutation(
   issue: GithubIssueSnapshot,
   report: FailureReport,
@@ -146,6 +175,8 @@ export function prepareIssueWorkpadMutation(
   }
 
   const nextRevision = current ? current.revision + 1 : 0;
+  // The workpad revision is written into both context and payload so a resume can
+  // detect a stale report before it overwrites newer shared evidence.
   const sharedContext: GithubIssueContext = githubIssueContextSchema.parse({
     provider: "github_issue",
     repository: issue.repository,

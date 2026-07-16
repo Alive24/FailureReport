@@ -6,10 +6,19 @@ import {
 } from "@failure-report/protocol";
 import type { RootInvoker } from "@failure-report/runtime-port";
 
+/**
+ * Nondeterministic boundary invoked by the deterministic Temporal workflow.
+ * Root, Eve, GitHub, filesystem, and Codex calls must stay behind this boundary.
+ */
 export type FailureReportActivities = {
   invokeRoot(request: RootRequest): Promise<RootResult>;
 };
 
+/**
+ * Creates Temporal activity implementations around a host-provided Root invoker.
+ * The schemas are rechecked here because activity inputs may be replayed or come
+ * from a worker that is not the original adapter process.
+ */
 export function createFailureReportActivities(
   invoker: RootInvoker,
 ): FailureReportActivities {

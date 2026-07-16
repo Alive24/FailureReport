@@ -1,7 +1,14 @@
 import { z } from "zod";
 
+/** Root-provider configuration parsing, kept separate from domain-pack backends. */
+
 const modelContextWindowTokens = z.number().int().positive();
 
+/**
+ * Validates the Root model selection.
+ * `experimental_chatgpt` is the intentional local-first product default; a
+ * gateway model remains an explicit deployment-time alternative.
+ */
 export const rootBackendConfigSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -21,31 +28,10 @@ export const rootBackendConfigSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
-export const ckbBackendConfigSchema = z
-  .object({
-    schema_version: z.literal("failure-report/ckb-backend/v1"),
-    kind: z.literal("codex_app_server"),
-    codex_path: z.string().min(1),
-    model: z.string().min(1),
-    approval_mode: z.enum(["untrusted", "on-request", "never"]),
-    sandbox_mode: z.enum([
-      "read-only",
-      "workspace-write",
-      "danger-full-access",
-    ]),
-    reasoning_effort: z.enum(["low", "medium", "high"]),
-    model_context_window_tokens: modelContextWindowTokens,
-    worktree_root: z.string().min(1).optional(),
-  })
-  .strict();
-
+/** Typed Root provider configuration inferred from the validated schema. */
 export type RootBackendConfig = z.infer<typeof rootBackendConfigSchema>;
-export type CkbBackendConfig = z.infer<typeof ckbBackendConfigSchema>;
 
+/** Parses untrusted JSON before Root constructs a tool-capable model. */
 export function parseRootBackendConfig(value: unknown): RootBackendConfig {
   return rootBackendConfigSchema.parse(value);
-}
-
-export function parseCkbBackendConfig(value: unknown): CkbBackendConfig {
-  return ckbBackendConfigSchema.parse(value);
 }

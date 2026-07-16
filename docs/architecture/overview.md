@@ -31,11 +31,13 @@ approval, result aggregation, and internal subagent delegation. Root must use a
 tool-capable AI SDK language model because Eve's Issue, approval, and declared
 subagent mechanisms are tools from the model's point of view.
 
-For local Codex-login development, Root should use Eve's
-`experimental_chatgpt()` model helper. It uses local `codex login` credentials
-while retaining Eve's normal tool-calling loop. Root model selection belongs in
-a small provider factory so a later deployment can select another tool-capable
-provider without changing the Root protocol or adapters.
+FailureReport is local-first in the MVP: Root uses Eve's
+`experimental_chatgpt()` model helper as its default product runtime. It uses
+the local `codex login` credentials while retaining Eve's normal tool-calling
+loop. The upstream helper remains named `experimental_chatgpt()`, but it is not
+a test-only path here. Root model selection belongs in a small provider factory
+so a remote deployment can select another tool-capable provider without changing
+the Root protocol or adapters.
 
 MCP, Temporal, and Codex plugin integrations continue to call Root through
 `RootInvoker`. The MCP package remains transport-neutral and does not import
@@ -54,19 +56,21 @@ not support AI SDK custom tool schemas, so using it for Root would prevent the
 normal Eve tool and declared-subagent graph from working. The CKB child instead
 uses Codex-native shell/MCP capabilities plus its scoped instructions and skills.
 
-Each coding child receives an isolated worktree allocated by deterministic host
-code after Root approval and workpad publication. The CKB dynamic model factory
-rehydrates and validates that workpad state before it starts or resumes Codex.
+Each coding child receives an isolated worktree allocated by generic,
+Root-owned execution infrastructure after Root approval and workpad publication.
+The CKB dynamic model factory rehydrates and validates that execution state
+before it starts or resumes Codex.
 The worker may inspect, modify, and test only inside that worktree. The canonical
 checkout is never an implicit fallback.
 
 ## Durable Execution State
 
-GitHub Issue body and workpad remain the shared collaboration truth. Codex
+GitHub Issue body and workpad remain the shared collaboration truth. Generic
 execution state is separate but is serialized inside the structured
 `FailureReport`, not hidden in an Eve session:
 
 ```text
+domain id
 backend id
 Codex thread id
 worktree identity and path
@@ -74,11 +78,11 @@ branch, base revision, and current HEAD
 last execution time
 ```
 
-On resume, the CKB backend reloads the workpad, validates the assigned worktree,
-branch, origin, base revision, and recorded Git HEAD, then resumes the matching
-Codex thread. A missing or unsafe worktree becomes an explicit failure requiring
-operator input; it must never silently redirect the worker to the canonical
-checkout.
+On resume, generic execution infrastructure reloads the workpad and validates
+the assigned worktree, branch, origin, base revision, and recorded Git HEAD.
+The selected domain backend then resumes its matching provider session. A missing
+or unsafe worktree becomes an explicit failure requiring operator input; it must
+never silently redirect the worker to the canonical checkout.
 
 ## Eve Discovery Notes
 

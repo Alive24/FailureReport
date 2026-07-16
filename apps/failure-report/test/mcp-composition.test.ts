@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { createMcpRootInvoker, type EveRootTransport } from "../src/index.js";
 
+/** Ensures public MCP composition remains Root-only even as internal packs grow. */
 describe("MCP Root composition", () => {
   it("composes the public MCP path through Eve Root rather than a domain backend", async () => {
     const seen: string[] = [];

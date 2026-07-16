@@ -4,13 +4,20 @@ import {
   type CodexAppServerLanguageModel,
 } from "ai-sdk-provider-codex-app-server";
 
-import type { CkbBackendConfig } from "../backend-config.js";
+import type { ExecutionWorkpad } from "../../execution/workpad.js";
+import type { CkbCodexBackendConfig } from "./config.js";
 import {
+  createCkbExecutionWorkpad,
   parseCkbExecutionEnvelope,
   type CkbExecutionEnvelope,
-} from "../execution/ckb-envelope.js";
-import { CkbExecutionWorkpad } from "../execution/ckb-workpad.js";
-import { CkbWorktreeManager } from "../execution/ckb-worktree.js";
+} from "./execution.js";
+
+/**
+ * CKB-specific adapter from Eve's dynamic model hook to Codex App-server.
+ *
+ * The adapter owns provider/session persistence for this domain only; generic
+ * worktree safety and durable Issue workpad behavior stay in `src/execution`.
+ */
 
 type CkbProviderFactory = typeof createCodexAppServer;
 type CodexStreamOptions = Parameters<
@@ -20,21 +27,18 @@ type CodexGenerateOptions = Parameters<
   CodexAppServerLanguageModel["doGenerate"]
 >[0];
 
+/** Test seams for the CKB model factory; production uses the real provider/workpad. */
 export type CkbCodexModelFactoryDependencies = {
-  execution_workpad?: CkbExecutionWorkpad;
+  execution_workpad?: ExecutionWorkpad;
   create_provider?: CkbProviderFactory;
 };
 
-export function createCkbExecutionWorkpad(
-  config: CkbBackendConfig,
-): CkbExecutionWorkpad {
-  return new CkbExecutionWorkpad({
-    worktrees: new CkbWorktreeManager({ root: config.worktree_root }),
-  });
-}
-
+/**
+ * Builds Eve's dynamic model resolver for the CKB subagent.
+ * The resolver derives the provider only from a validated Root delegation message.
+ */
 export function createCkbCodexModelResolver(
-  config: CkbBackendConfig,
+  config: CkbCodexBackendConfig,
   dependencies: CkbCodexModelFactoryDependencies = {},
 ): (messages: readonly ModelMessage[]) => Promise<{
   model: LanguageModel;
@@ -58,6 +62,10 @@ export function createCkbCodexModelResolver(
   };
 }
 
+/**
+ * Creates a fail-closed fallback required by Eve's dynamic-model API.
+ * It cannot select a worktree or launch Codex, so a malformed message stays safe.
+ */
 export function createBlockedCkbModel(): LanguageModel {
   const blocked = async (): Promise<never> => {
     throw new Error(
@@ -65,8 +73,6 @@ export function createBlockedCkbModel(): LanguageModel {
     );
   };
 
-  // Eve requires a static dynamic-model fallback. This guard can never select a
-  // workspace, so a malformed or missing envelope cannot reach a canonical checkout.
   return {
     specificationVersion: "v3",
     provider: "failure-report-guard",
@@ -80,10 +86,15 @@ export function createBlockedCkbModel(): LanguageModel {
   } as unknown as LanguageModel;
 }
 
+/**
+ * Creates one persistent Codex provider bound to the workpad-validated worktree.
+ * Thread creation and completion are journaled so a later Root invocation can
+ * resume the same Codex conversation instead of creating an untracked one.
+ */
 async function createCkbCodexModel(
   envelope: CkbExecutionEnvelope,
-  config: CkbBackendConfig,
-  workpad: CkbExecutionWorkpad,
+  config: CkbCodexBackendConfig,
+  workpad: ExecutionWorkpad,
   createProvider: CkbProviderFactory,
 ): Promise<LanguageModel> {
   const loaded = await workpad.loadForExecution(envelope);
@@ -102,6 +113,8 @@ async function createCkbCodexModel(
       ...(threadId ? { resume: threadId } : {}),
       onSessionCreated(session) {
         threadId = session.threadId;
+        // Persist immediately rather than waiting for a streamed answer: a process
+        // interruption after session creation must still leave a resumable thread.
         pendingThreadPersistence = workpad
           .recordThread(envelope, session.threadId)
           .then(() => undefined)
@@ -135,6 +148,10 @@ async function createCkbCodexModel(
   return trackCodexModel(rawModel, journal);
 }
 
+/**
+ * Wraps Codex's model so durable thread and worktree state is saved at lifecycle
+ * boundaries without exposing GitHub-writing tools to the model itself.
+ */
 function trackCodexModel(
   rawModel: CodexAppServerLanguageModel,
   journal: {
@@ -166,12 +183,16 @@ function trackCodexModel(
     },
   };
 
-  // ai-sdk-provider-codex-app-server is currently LanguageModelV3-based while
-  // Eve resolves AI SDK v7's LanguageModel union. The v3 surface is compatible
-  // at runtime; keep the version boundary contained in this backend factory.
+  // The community provider exposes LanguageModelV3 while Eve currently accepts
+  // AI SDK v7's union. Contain this runtime-compatible boundary in the adapter.
   return model as unknown as LanguageModel;
 }
 
+/**
+ * Mirrors a streaming response and persists completion exactly once.
+ * A provider may emit a finish part before the reader reports `done`, so both
+ * paths share the same idempotent completion guard.
+ */
 function persistAfterFinish<T>(
   stream: ReadableStream<T>,
   journal: {
@@ -212,10 +233,12 @@ function persistAfterFinish<T>(
   });
 }
 
+/** Identifies the provider stream part that carries final completion metadata. */
 function isFinishPart(value: unknown): boolean {
   return isRecord(value) && value.type === "finish";
 }
 
+/** Extracts the optional session id from the Codex provider's finish metadata. */
 function readThreadIdFromProviderMetadata(value: unknown): string | undefined {
   if (!isRecord(value) || !isRecord(value.providerMetadata)) {
     return undefined;
@@ -227,6 +250,7 @@ function readThreadIdFromProviderMetadata(value: unknown): string | undefined {
   return codex.sessionId;
 }
 
+/** Narrows unknown provider metadata before accessing its nested fields. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }

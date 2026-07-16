@@ -6,6 +6,7 @@ import {
   type EveRootTransport,
 } from "../src/eve-root-invoker.js";
 
+/** Exercises session continuity and schema failure behavior at the Eve boundary. */
 describe("Eve Root invoker", () => {
   it("uses the shared Issue as the session key and validates structured output", async () => {
     const seen: Array<{ sessionState?: unknown; message: string }> = [];
@@ -44,6 +45,8 @@ describe("Eve Root invoker", () => {
     };
 
     const result = await invoker.invoke(request);
+    // A distinct request id for the same Issue must still reuse the Issue-scoped
+    // Eve session rather than fragmenting Root's durable conversation.
     await invoker.invoke({ ...request, request_id: "root-issue-54-followup" });
 
     expect(result.status).toBe("completed");

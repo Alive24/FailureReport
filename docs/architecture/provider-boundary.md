@@ -32,14 +32,13 @@ Root needs AI SDK custom-tool support. It must be able to call Issue workpad,
 approval, routing, and declared-subagent tools, so its provider cannot ignore
 the tools Eve supplies.
 
-Local development uses Eve's `experimental_chatgpt()` helper. It reads
-the local `codex login` credentials and acts as a normal, tool-capable AI SDK
-model for Eve. A Root provider factory must make the model switchable later,
-for example to a hosted OpenAI, Anthropic, or Gateway-backed model.
-
-`experimental_chatgpt()` is experimental and depends on a local Codex login, so
-it is a local-development default rather than an assumed production credential
-strategy. A deployed Root must select an explicit tool-capable provider.
+FailureReport's MVP is intentionally local-first. Eve's
+`experimental_chatgpt()` helper reads the local `codex login` credentials and
+acts as the default, tool-capable AI SDK model for the product runtime; it is not
+just a development or test convenience. The `experimental_` name is an upstream
+API label, not a signal that FailureReport should avoid it in normal local use.
+A Root provider factory keeps a remote deployment switchable later, for example
+to a hosted OpenAI, Anthropic, or Gateway-backed model.
 
 Do not use the Codex App-server provider as Root's model by default. The
 provider is valuable for coding work, but it does not support AI SDK custom tool
@@ -68,12 +67,14 @@ The App-server provider's persistent session exposes a Codex thread id. The
 system must retain that id so a later FailureReport resume can continue the
 same coding conversation rather than recreate it from scratch.
 
-## Worktree Ownership
+## Execution and Worktree Ownership
 
-Deterministic host code, not a model, owns worktree allocation and safety:
+Deterministic Root-owned execution infrastructure, not a model, owns worktree
+allocation and safety. It is domain-agnostic; a selected domain pack only binds
+its backend and execution instructions:
 
-- Root's approval-gated `prepare_ckb_execution` allocates or validates an
-  isolated worktree for a report and selected coding child.
+- Root's approval-gated `prepare_execution` selects a configured domain pack and
+  allocates or validates an isolated worktree for a report and coding child.
 - Keep the canonical checkout outside the worker's writable scope.
 - The MVP uses one deterministic mutable CKB worktree per report. A future
   concurrent execution feature must add explicit leases or separate worktrees.
@@ -93,6 +94,7 @@ the GitHub-specific `shared_context` object:
 
 ```ts
 type ExecutionState = {
+  domain_id: string;
   backend_id: "codex_app_server";
   codex_thread_id?: string;
   worktree: {
@@ -106,10 +108,11 @@ type ExecutionState = {
 };
 ```
 
-Before resuming a child, the CKB model factory reloads the workpad and validates
-the worktree, repository origin, branch, base revision, and Git state. A missing
-or unsafe worktree requires an explicit new execution or `needs_input`; never
-silently fall back to the canonical checkout.
+Before resuming a child, generic execution infrastructure reloads the workpad
+and validates the worktree, repository origin, branch, base revision, and Git
+state. The selected domain model factory then resumes its provider session. A
+missing or unsafe worktree requires an explicit new execution or `needs_input`;
+never silently fall back to the canonical checkout.
 
 ## Implementation Constraints
 
@@ -129,8 +132,8 @@ silently fall back to the canonical checkout.
 
 Use the CKBoost #54 fixture for a read-only end-to-end check:
 
-1. Root publishes and approves a CKB-appropriate report through
-   `prepare_ckb_execution`.
+1. Root publishes and approves a CKB-appropriate report through generic
+   `prepare_execution` with the internal `ckb` domain id.
 2. The child receives its allocated worktree and creates a Codex App-server
    thread.
 3. The provider journal writes its thread id and final worktree HEAD to the

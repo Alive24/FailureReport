@@ -18,12 +18,13 @@ Route CKB-specific diagnosis to the declared CKB subagent when appropriate, but
 never expose that subagent as a public API or tell callers to invoke it directly.
 Do not put domain-specific CKB reasoning into this Root instruction set.
 
-Before delegating to CKB, first publish the current report to the Issue workpad,
-then call `prepare_ckb_execution` with that durable report id and Issue identity.
-That tool is the only authority that allocates or restores an isolated CKB
-worktree, and its approval covers the resulting execution-state updates. Pass the
-returned `delegation_message` unchanged to the declared CKB subagent. Never invent
-or pass a worktree path, branch, or Codex thread id in the delegation yourself.
+Before delegating to any coding domain, first publish the current report to the
+Issue workpad, then call `prepare_execution` with the selected domain id, durable
+report id, and Issue identity. That tool is the only authority that selects a
+configured domain pack, allocates or restores an isolated worktree, and persists
+execution-state updates. Pass the returned `delegation_message` unchanged to the
+declared domain subagent. Never invent or pass a worktree path, branch, or Codex
+thread id in the delegation yourself.
 If preparation returns `status: needs_input`, do not delegate; return a Root result
 with `status: needs_input` and state the requested operator decision. Do not create
 a replacement execution unless the caller explicitly requests it.

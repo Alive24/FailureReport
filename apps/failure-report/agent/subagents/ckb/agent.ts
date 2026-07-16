@@ -2,13 +2,18 @@ import { defineAgent, defineDynamic } from "eve";
 
 import backendJson from "./config/backend/codex-app-server.json" with { type: "json" };
 
-import { parseCkbBackendConfig } from "../../../src/backend-config.js";
+import { parseCkbCodexBackendConfig } from "../../../src/domain-packs/ckb/config.js";
 import {
   createBlockedCkbModel,
   createCkbCodexModelResolver,
-} from "../../../src/backends/ckb-codex-model.js";
+} from "../../../src/domain-packs/ckb/codex-model.js";
 
-const backend = parseCkbBackendConfig(backendJson);
+/**
+ * Internal CKB Eve declaration.
+ * Its dynamic model is intentionally resolved from a Root-prepared envelope so
+ * the Codex provider cannot run from an arbitrary message or checkout.
+ */
+const backend = parseCkbCodexBackendConfig(backendJson);
 const resolveModel = createCkbCodexModelResolver(backend);
 
 export default defineAgent({
@@ -17,6 +22,8 @@ export default defineAgent({
   model: defineDynamic({
     fallback: createBlockedCkbModel(),
     events: {
+      // Eve invokes this before a model step; the resolver rehydrates durable
+      // workpad state and either returns a bound Codex model or fails closed.
       "step.started": (_event, context) => resolveModel(context.messages),
     },
   }),

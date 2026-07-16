@@ -13,15 +13,24 @@ import {
   type PublishedSharedContext,
 } from "../../integrations/github/github-cli.js";
 import {
-  renderCkbExecutionEnvelope,
-  type CkbExecutionEnvelope,
-} from "./ckb-envelope.js";
+  renderExecutionEnvelope,
+  type ExecutionEnvelope,
+  type ExecutionPreparationEnvelope,
+} from "./envelope.js";
 import {
-  CkbWorktreeManager,
-  type VerifiedCkbExecution,
-} from "./ckb-worktree.js";
+  ExecutionWorktreeManager,
+  type VerifiedExecution,
+} from "./worktree.js";
 
-export type CkbIssueGateway = {
+/**
+ * Durable execution journal backed by the report's GitHub Issue workpad.
+ *
+ * This module is domain-agnostic: a domain pack supplies a configured worktree
+ * manager, while Root retains the only approved path to publish shared context.
+ */
+
+/** Minimal Issue gateway needed to rehydrate and persist execution state. */
+export type ExecutionIssueGateway = {
   readIssue(
     repository: string,
     issueNumber: number,
@@ -34,45 +43,60 @@ export type CkbIssueGateway = {
   ): Promise<PublishedSharedContext>;
 };
 
-export type CkbExecutionWorkpadOptions = {
-  gateway?: CkbIssueGateway;
-  worktrees?: CkbWorktreeManager;
+/** Dependencies for a generic execution journal. */
+export type ExecutionWorkpadOptions = {
+  worktrees: ExecutionWorktreeManager;
+  gateway?: ExecutionIssueGateway;
   now?: () => string;
 };
 
-export type LoadedCkbExecution = {
+/** A workpad snapshot together with verified execution state. */
+export type LoadedExecution = {
   report: FailureReport;
   workpad_revision: number;
-  execution: VerifiedCkbExecution;
+  execution: VerifiedExecution;
 };
 
-export type PreparedCkbExecution = LoadedCkbExecution & {
+/** A verified execution plus the only delegation message a provider may use. */
+export type PreparedExecution = LoadedExecution & {
   delegation_message: string;
 };
 
-export class CkbExecutionWorkpad {
-  private readonly gateway: CkbIssueGateway;
-  private readonly worktrees: CkbWorktreeManager;
+/**
+ * Coordinates workpad revisions with isolated-worktree lifecycle state.
+ *
+ * Provider session metadata is journaled here after Root has approved setup, but
+ * the provider itself never receives a GitHub write capability.
+ */
+export class ExecutionWorkpad {
+  private readonly gateway: ExecutionIssueGateway;
+  private readonly worktrees: ExecutionWorktreeManager;
   private readonly now: () => string;
 
-  constructor(options: CkbExecutionWorkpadOptions = {}) {
+  constructor(options: ExecutionWorkpadOptions) {
     this.gateway = options.gateway ?? new GithubCliIssueGateway();
-    this.worktrees = options.worktrees ?? new CkbWorktreeManager();
+    this.worktrees = options.worktrees;
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
+  /**
+   * Restores an existing execution or allocates and durably records a new one.
+   * A delegation message is rendered only after the workpad revision is known.
+   */
   async prepare(
-    envelope: Omit<CkbExecutionEnvelope, "workpad_revision">,
-  ): Promise<PreparedCkbExecution> {
+    envelope: ExecutionPreparationEnvelope,
+  ): Promise<PreparedExecution> {
     const current = await this.readWorkpad(envelope);
     let report = current.report;
     let workpadRevision = current.revision;
-    let execution: VerifiedCkbExecution;
+    let execution: VerifiedExecution;
 
     if (report.execution_state) {
       execution = await this.worktrees.restore(report, report.execution_state);
     } else {
       execution = await this.worktrees.allocate(report);
+      // Persist isolation state before exposing a delegation message. A provider
+      // must never start work in a worktree that Root cannot later verify.
       const nextReport = failureReportSchema.parse({
         ...report,
         execution_state: execution.state,
@@ -91,7 +115,7 @@ export class CkbExecutionWorkpad {
       };
     }
 
-    const preparedEnvelope: CkbExecutionEnvelope = {
+    const preparedEnvelope: ExecutionEnvelope = {
       ...envelope,
       workpad_revision: workpadRevision,
     };
@@ -99,23 +123,27 @@ export class CkbExecutionWorkpad {
       report,
       workpad_revision: workpadRevision,
       execution,
-      delegation_message: renderCkbExecutionEnvelope(preparedEnvelope),
+      delegation_message: renderExecutionEnvelope(preparedEnvelope),
     };
   }
 
+  /**
+   * Rehydrates and validates the state a domain provider may use for execution.
+   * Rejects a workpad older than the delegation so a stale Issue cannot resume it.
+   */
   async loadForExecution(
-    envelope: CkbExecutionEnvelope,
-  ): Promise<LoadedCkbExecution> {
+    envelope: ExecutionEnvelope,
+  ): Promise<LoadedExecution> {
     const current = await this.readWorkpad(envelope);
     if (current.revision < envelope.workpad_revision) {
       throw new Error(
-        "CKB execution workpad is older than the Root-prepared delegation envelope.",
+        "Execution workpad is older than the Root-prepared delegation envelope.",
       );
     }
     const state = current.report.execution_state;
     if (!state) {
       throw new Error(
-        "CKB execution is blocked because no isolated worktree was durably prepared.",
+        "Execution is blocked because no isolated worktree was durably prepared.",
       );
     }
     const execution = await this.worktrees.restore(current.report, state);
@@ -126,8 +154,9 @@ export class CkbExecutionWorkpad {
     };
   }
 
+  /** Records a provider-created Codex thread id once it is durably available. */
   async recordThread(
-    envelope: CkbExecutionEnvelope,
+    envelope: ExecutionEnvelope,
     threadId: string,
   ): Promise<FailureReport> {
     const current = await this.loadForExecution(envelope);
@@ -141,15 +170,20 @@ export class CkbExecutionWorkpad {
     });
   }
 
+  /**
+   * Captures the execution's final HEAD and completion time after a provider turn.
+   * The worktree manager permits HEAD movement here because the running execution,
+   * unlike a resume, is expected to modify its assigned branch.
+   */
   async recordCompletion(
-    envelope: CkbExecutionEnvelope,
+    envelope: ExecutionEnvelope,
     threadId?: string,
   ): Promise<FailureReport> {
     const current = await this.readWorkpad(envelope);
     const state = current.report.execution_state;
     if (!state) {
       throw new Error(
-        "Cannot record CKB completion without a prepared execution state.",
+        "Cannot record execution completion without a prepared execution state.",
       );
     }
     const execution = await this.worktrees.captureCurrent(
@@ -171,8 +205,9 @@ export class CkbExecutionWorkpad {
     );
   }
 
+  /** Publishes only validated execution state while retaining the existing report. */
   private async publishExecutionState(
-    current: LoadedCkbExecution,
+    current: LoadedExecution,
     executionState: ExecutionState,
   ): Promise<FailureReport> {
     const nextReport = failureReportSchema.parse({
@@ -182,7 +217,7 @@ export class CkbExecutionWorkpad {
     const issue = current.report.shared_context;
     if (!issue) {
       throw new Error(
-        "Cannot write CKB execution state without a GitHub Issue shared context.",
+        "Cannot write execution state without a GitHub Issue shared context.",
       );
     }
     const published = await this.gateway.publishSharedContext(
@@ -194,9 +229,10 @@ export class CkbExecutionWorkpad {
     return published.report;
   }
 
+  /** Reads and cross-checks the one durable workpad against a delegation identity. */
   private async readWorkpad(
     envelope: Pick<
-      CkbExecutionEnvelope,
+      ExecutionEnvelope,
       "repository" | "issue_number" | "report_id"
     >,
   ): Promise<{ report: FailureReport; revision: number }> {
@@ -207,12 +243,12 @@ export class CkbExecutionWorkpad {
     const workpad = findExistingWorkpad(issue);
     if (!workpad) {
       throw new Error(
-        "CKB execution requires a Root-published FailureReport workpad before allocation.",
+        "Execution requires a Root-published FailureReport workpad before allocation.",
       );
     }
     if (workpad.report.id !== envelope.report_id) {
       throw new Error(
-        "CKB execution envelope report id does not match the durable Issue workpad.",
+        "Execution envelope report id does not match the durable Issue workpad.",
       );
     }
     const sharedContext = workpad.report.shared_context;

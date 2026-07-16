@@ -12,6 +12,7 @@ import {
   parseFailureReportWorkpad,
 } from "@failure-report/protocol";
 
+/** Loads a schema-validated report fixture instead of exposing raw JSON to tests. */
 async function loadReport() {
   const file = new URL(
     "../../../packages/protocol/test/fixtures/issue-54.json",
@@ -20,6 +21,7 @@ async function loadReport() {
   return failureReportSchema.parse(JSON.parse(await readFile(file, "utf8")));
 }
 
+/** Minimal target Issue used to test pure narrative and workpad transformations. */
 const issue = {
   repository: "Alive24/CKBoost",
   issue_number: 54,
@@ -29,6 +31,7 @@ const issue = {
   comments: [],
 };
 
+/** Covers the single-comment, revision-checked workpad protocol. */
 describe("GitHub Issue workpad", () => {
   it("creates the first immutable-context workpad on a target Issue", async () => {
     const report = await loadReport();

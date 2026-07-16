@@ -1,3 +1,4 @@
+/** Public application-level exports for host composition and Root transport tests. */
 export {
   buildRootInvocationMessage,
   EveHttpRootTransport,

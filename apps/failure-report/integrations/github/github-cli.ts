@@ -10,6 +10,13 @@ import {
   upsertIssueNarrative,
 } from "./issue-workpad.js";
 
+/**
+ * GitHub CLI implementation of the durable Issue/workpad gateway.
+ *
+ * The gateway re-reads state around writes so a report cannot silently overwrite
+ * a human edit or another Root process's newer workpad revision.
+ */
+
 type GithubIssueResponse = {
   body: string | null;
   html_url: string;
@@ -23,6 +30,7 @@ type GithubIssueCommentResponse = {
   updated_at: string;
 };
 
+/** Result of a successful narrative/workpad publication. */
 export type PublishedSharedContext = {
   issue: GithubIssueSnapshot;
   report: FailureReport;
@@ -30,9 +38,14 @@ export type PublishedSharedContext = {
   workpad_revision: number;
 };
 
+/**
+ * Reads and publishes FailureReport context using `gh api`.
+ * The executable is injectable so tests and local wrappers can provide a shim.
+ */
 export class GithubCliIssueGateway {
   constructor(private readonly executable = "gh") {}
 
+  /** Reads an Issue and all comments needed to locate its single workpad. */
   async readIssue(
     repository: string,
     issueNumber: number,
@@ -65,6 +78,11 @@ export class GithubCliIssueGateway {
     };
   }
 
+  /**
+   * Publishes the human narrative and structured workpad with optimistic checks.
+   * The narrative write can advance `updated_at`, so the mutation is rebuilt after
+   * it before the comment mutation is asserted fresh and sent.
+   */
   async publishSharedContext(
     repository: string,
     issueNumber: number,
@@ -77,6 +95,8 @@ export class GithubCliIssueGateway {
     const nextBody = upsertIssueNarrative(issue.body, mutation.report);
     if (nextBody !== issue.body) {
       await this.writeIssueBody(repository, issueNumber, nextBody);
+      // Refresh after a body write because GitHub updates `updated_at`, which is
+      // part of the optimistic-concurrency contract for the workpad mutation.
       issue = await this.readIssue(repository, issueNumber);
       mutation = prepareIssueWorkpadMutation(issue, report, syncedAt);
     }
@@ -97,6 +117,7 @@ export class GithubCliIssueGateway {
     };
   }
 
+  /** Updates only the Issue body through GitHub's REST endpoint. */
   private async writeIssueBody(
     repository: string,
     issueNumber: number,
@@ -115,6 +136,7 @@ export class GithubCliIssueGateway {
     );
   }
 
+  /** Creates or replaces the one structured workpad comment. */
   private async writeWorkpad(
     repository: string,
     issueNumber: number,
@@ -157,11 +179,16 @@ export class GithubCliIssueGateway {
     return String(updated.id);
   }
 
+  /** Executes one JSON-returning GitHub CLI request. */
   private async apiJson<T>(args: string[], input?: string): Promise<T> {
     const stdout = await this.run(args, input);
     return JSON.parse(stdout) as T;
   }
 
+  /**
+   * Decodes either a single JSON document or `gh --paginate`'s concatenated pages.
+   * GitHub CLI output differs by endpoint/version, so both encodings are accepted.
+   */
   private async apiJsonPages<T>(args: string[]): Promise<T[]> {
     const stdout = await this.run(args);
     const trimmed = stdout.trim();
@@ -179,6 +206,7 @@ export class GithubCliIssueGateway {
     }
   }
 
+  /** Runs `gh` without a shell and returns stdout only after a successful exit. */
   private run(args: string[], input?: string): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       const child = spawn(this.executable, args, {
@@ -206,6 +234,7 @@ export class GithubCliIssueGateway {
   }
 }
 
+/** Verifies that the Issue and workpad revision still match the prepared mutation. */
 function assertFreshWorkpadMutation(
   issue: GithubIssueSnapshot,
   mutation: IssueWorkpadMutation,
