@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { failureReportSchema } from "@failure-report/protocol";
 
-import { GithubCliIssueGateway } from "../../integrations/github/github-cli.js";
+import { getDefaultGithubIssueGateway } from "../../integrations/github/gateway-factory.js";
 
 /**
  * Root-only GitHub publication tool for the narrative and single durable workpad.
@@ -12,7 +12,7 @@ import { GithubCliIssueGateway } from "../../integrations/github/github-cli.js";
  */
 export default defineTool({
   description:
-    "Publish the Root-owned Issue narrative and single structured workpad comment through gh api.",
+    "Publish the Root-owned Issue narrative and single structured workpad comment through the configured GitHub SDK gateway.",
   inputSchema: z
     .object({
       repository: z.string().regex(/^[^/\s]+\/[^/\s]+$/),
@@ -23,7 +23,7 @@ export default defineTool({
   // Publishing changes a user-owned GitHub Issue and therefore always requires consent.
   approval: always(),
   async execute(input) {
-    const gateway = new GithubCliIssueGateway();
+    const gateway = await getDefaultGithubIssueGateway();
     const published = await gateway.publishSharedContext(
       input.repository,
       input.issue_number,

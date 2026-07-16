@@ -4,14 +4,9 @@ import {
   type FailureReport,
 } from "@failure-report/protocol";
 
-import {
-  type GithubIssueSnapshot,
-  findExistingWorkpad,
-} from "../../integrations/github/issue-workpad.js";
-import {
-  GithubCliIssueGateway,
-  type PublishedSharedContext,
-} from "../../integrations/github/github-cli.js";
+import { findExistingWorkpad } from "../../integrations/github/issue-workpad.js";
+import { getDefaultGithubIssueGateway } from "../../integrations/github/gateway-factory.js";
+import type { GithubIssueGateway } from "../../integrations/github/issue-gateway.js";
 import {
   renderExecutionEnvelope,
   type ExecutionEnvelope,
@@ -29,24 +24,17 @@ import {
  * manager, while Root retains the only approved path to publish shared context.
  */
 
-/** Minimal Issue gateway needed to rehydrate and persist execution state. */
-export type ExecutionIssueGateway = {
-  readIssue(
-    repository: string,
-    issueNumber: number,
-  ): Promise<GithubIssueSnapshot>;
-  publishSharedContext(
-    repository: string,
-    issueNumber: number,
-    report: FailureReport,
-    syncedAt: string,
-  ): Promise<PublishedSharedContext>;
-};
+/**
+ * Root-owned Issue gateway used by execution persistence.
+ * Re-exported under this name to keep execution callers independent of the
+ * concrete Octokit or explicit `gh` fallback transport.
+ */
+export type ExecutionIssueGateway = GithubIssueGateway;
 
 /** Dependencies for a generic execution journal. */
 export type ExecutionWorkpadOptions = {
   worktrees: ExecutionWorktreeManager;
-  gateway?: ExecutionIssueGateway;
+  gateway?: ExecutionIssueGateway | Promise<ExecutionIssueGateway>;
   now?: () => string;
 };
 
@@ -69,12 +57,16 @@ export type PreparedExecution = LoadedExecution & {
  * the provider itself never receives a GitHub write capability.
  */
 export class ExecutionWorkpad {
-  private readonly gateway: ExecutionIssueGateway;
+  private readonly gateway: Promise<ExecutionIssueGateway>;
   private readonly worktrees: ExecutionWorktreeManager;
   private readonly now: () => string;
 
   constructor(options: ExecutionWorkpadOptions) {
-    this.gateway = options.gateway ?? new GithubCliIssueGateway();
+    // Use the Root process's lazy default so this generic layer follows the
+    // configured Octokit gateway without learning its auth or transport details.
+    this.gateway = Promise.resolve(
+      options.gateway ?? getDefaultGithubIssueGateway(),
+    );
     this.worktrees = options.worktrees;
     this.now = options.now ?? (() => new Date().toISOString());
   }
@@ -101,7 +93,8 @@ export class ExecutionWorkpad {
         ...report,
         execution_state: execution.state,
       });
-      const published = await this.gateway.publishSharedContext(
+      const gateway = await this.gateway;
+      const published = await gateway.publishSharedContext(
         envelope.repository,
         envelope.issue_number,
         nextReport,
@@ -220,7 +213,8 @@ export class ExecutionWorkpad {
         "Cannot write execution state without a GitHub Issue shared context.",
       );
     }
-    const published = await this.gateway.publishSharedContext(
+    const gateway = await this.gateway;
+    const published = await gateway.publishSharedContext(
       issue.repository,
       issue.issue_number,
       nextReport,
@@ -236,7 +230,8 @@ export class ExecutionWorkpad {
       "repository" | "issue_number" | "report_id"
     >,
   ): Promise<{ report: FailureReport; revision: number }> {
-    const issue = await this.gateway.readIssue(
+    const gateway = await this.gateway;
+    const issue = await gateway.readIssue(
       envelope.repository,
       envelope.issue_number,
     );

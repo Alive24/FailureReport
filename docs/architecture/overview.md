@@ -24,6 +24,34 @@ before writing. The GitHub API does not offer this adapter a general transaction
 the publisher re-reads immediately before mutation and rejects a changed revision
 or timestamp. Large or sensitive evidence remains an artifact reference.
 
+## GitHub Gateway
+
+GitHub is a Root-owned internal integration, never a public CKB, MCP, or Temporal
+API. Root tools use the narrow `GithubIssueGateway` port. The default factory
+creates an `OctokitIssueGateway`, so Issue metadata/body reads, comment
+pagination, narrative updates, and workpad comment writes all use GitHub's
+official TypeScript SDK.
+
+By default, the factory obtains the active `gh auth login` token once per Root
+process with `gh auth token`, keeps it in memory, and supplies it to Octokit.
+It does not use `gh api` for normal Issue I/O. This keeps existing local GitHub
+CLI login convenient without requiring users to install a GitHub App. A direct
+`GithubCliIssueGateway` remains available only when
+`FAILURE_REPORT_GITHUB_GATEWAY=gh-cli` explicitly selects the legacy local
+fallback or fixture-capture path.
+
+Token and GitHub App installation modes are injected through runtime environment
+configuration. GitHub App credentials are optional, and are the preferred model
+for a centrally operated multi-user/self-hosted deployment where a shared
+machine-local `gh` login is unsuitable. No credential material is protocol data,
+workpad content, prompt context, logs, or fixtures.
+
+Octokit does not create a GitHub-side compare-and-swap primitive. The gateway's
+shared publisher retains FailureReport's application-owned write-before-reload
+flow: it checks the report's workpad revision, reloads before mutation, compares
+the Issue `updated_at` and marked-comment revision again, then rejects stale
+writes before creating or updating the one workpad comment.
+
 ## Root Supervisor
 
 Eve remains the Root Supervisor: it owns public-session lifecycle, routing,

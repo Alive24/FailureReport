@@ -1,4 +1,9 @@
+.turbo
+.eve
+dist
+node_modules
 node_modules/
+.pnpm-store/
 dist/
 .turbo/
 .eve/
