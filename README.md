@@ -61,7 +61,7 @@ packages/ckb-domain-pack  Reusable CKB Eve extension
 packages/protocol         Zod schemas, Root invocation type, and workpad serialization
 packages/mcp-adapter      MCP stdio wrapper that calls the default Eve Channel
 packages/temporal-adapter Deterministic Temporal workflow and activities
-packages/codex-plugin     Codex skill bundle
+packages/codex-plugin/failure-report  Installable Codex plugin and Eve-backed MCP configuration
 examples/                 Extension and host examples
 ```
 
@@ -89,16 +89,18 @@ credentials in two distinct roles: a tool-capable Eve Root model via
 The latter must be given an isolated worktree and must not be used as the Root
 model, because it does not support AI SDK custom tool schemas.
 
-To run the public Root MCP surface locally, start Eve (and therefore its default
-Channel) in one terminal, then start the external MCP wrapper in another:
+To use the public Root MCP surface through Codex, start Eve (and therefore its
+default Channel) in one terminal:
 
 ```bash
 pnpm --filter @Alive24/FailureReport dev
-pnpm --filter @failure-report/mcp-adapter mcp
 ```
 
-`FAILURE_REPORT_EVE_HOST` can point the MCP process at a deployed Root; set
-`FAILURE_REPORT_EVE_BEARER_TOKEN` when that eve channel requires bearer auth.
+Then load the repository-local Codex plugin at `packages/codex-plugin/failure-report`. Its
+`.mcp.json` starts the external `@failure-report/mcp-adapter` wrapper, which
+exposes the single `failure_report` tool and calls the default Eve Channel.
+`FAILURE_REPORT_EVE_HOST` can point that wrapper at a deployed Root; set
+`FAILURE_REPORT_EVE_BEARER_TOKEN` when the Eve Channel requires bearer auth.
 Set `FAILURE_REPORT_WORKTREE_ROOT` to choose where Root-owned isolated domain
 worktrees live; otherwise the local default is `~/.failure-report/worktrees`.
 
