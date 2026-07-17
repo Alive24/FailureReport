@@ -5,9 +5,9 @@ incomplete software failure into a durable, evidence-backed report whose shared
 context lives in one GitHub Issue from intake through Todo promotion.
 
 > **Provider boundary:** FailureReport is local-first by default: Root runs Eve
-> with `experimental_chatgpt()` from the local Codex/ChatGPT session, while the
-> mounted CKB extension prepares a consumer-owned Codex worker in a durable
-> isolated worktree. See [provider boundary](docs/architecture/provider-boundary.md)
+> with `experimental_chatgpt()` from the local Codex/ChatGPT session. The mounted
+> CKB extension supplies domain capability, while Root prepares a durable
+> diagnostic worktree for the one consumer-owned Codex worker. See [provider boundary](docs/architecture/provider-boundary.md)
 > for the contract.
 
 ## Core Model
@@ -20,8 +20,9 @@ flowchart TD
   E --> R["Tool-capable Root model provider"]
   E --> X["CKB mounted Eve extension"]
   E --> I["GitHub Issue narrative + workpad"]
-  X --> C["Consumer-owned Codex worker"]
-  C --> A["Codex App-server provider"]
+  E --> D["Root prepare_diagnostic_session"]
+  D --> C["Consumer-owned Codex worker"]
+  C --> A["Codex App Server provider"]
   A --> W["Isolated worktree + persistent Codex thread"]
 ```
 
@@ -33,10 +34,14 @@ flowchart TD
   Eve's `experimental_chatgpt()` helper with the signed-in Codex/ChatGPT session;
   this is the product default, not a test-only convenience. A remote host may opt
   into another tool-capable provider later.
-- CKB is the first mounted Eve extension, never a public API target. Its
-  `ckb__prepare_execution` tool owns CKB-specific approval, instructions, and
-  delegation guidance; the consumer-owned Codex worker supplies the persistent
-  Codex thread inside an isolated worktree.
+- CKB is the first mounted Eve extension, never a public API target. It provides
+  CKB instructions, the `failure-report-ckb-debugging` native skill, and
+  deterministic `ckb__recommend_log`; it does not own a worktree, sandbox, or
+  subagent.
+- Root's always-approved `prepare_diagnostic_session` tool resolves the fixed CKB
+  profile, creates or validates the diagnostic worktree, places the approved native
+  skill under `.agents/skills/`, and persists worktree/branch/HEAD/Codex-thread
+  state before delegating to the one `codex` worker.
 - A target-repository GitHub Issue is the shared context: existing human body is
   preserved, FailureReport adds a stable narrative block, and exactly one marked
   comment holds the full structured snapshot.
@@ -46,8 +51,9 @@ flowchart TD
 - The workpad `revision` and Issue `updated_at` make stale writes explicit. The
   MVP lifecycle state is `FailureReport.status`; a host may project it to labels
   or Project V2 without changing the protocol.
-- Codex App-server's `threadId`, assigned worktree identity, branch, and Git
-  revision are durable execution state, distinct from GitHub shared context.
+- Codex App Server's `threadId`, assigned worktree identity, branch, and Git
+  revision are durable `diagnostic_session` state, distinct from GitHub shared
+  context.
 - MCP and Temporal are outer packages that wrap the default Eve Channel for
   their own ecosystems; they do not create a second agent entry inside `eve/`.
 
@@ -68,7 +74,7 @@ examples/                 Extension and host examples
 `eve/agent/` is intentionally limited to Eve's filesystem
 slots: `agent.ts`, `instructions.md`, `tools/`, `skills/`, `extensions/`, `lib/`
 when shared authored code is needed, and declared `subagents/`. The Root runtime,
-generic execution helpers, and GitHub integration now live under `agent/lib/`:
+generic diagnostic-session helpers, and GitHub integration now live under `agent/lib/`:
 they are import-only authored code and are never mounted into a worker workspace.
 Product configuration and evaluation material remain alongside `agent/`.
 
@@ -83,9 +89,17 @@ pnpm check
 pnpm test
 ```
 
+To verify native Codex skill discovery locally without starting a model turn, run
+the opt-in App Server smoke test. It creates a temporary Git worktree, links the
+CKB skill beneath `.agents/skills`, and calls `skills/list` only:
+
+```bash
+FAILURE_REPORT_RUN_CODEX_APP_SERVER_SMOKE=1 pnpm --filter @Alive24/FailureReport test -- codex-native-skill.smoke.test.ts
+```
+
 FailureReport's MVP is a local product runtime. It uses the same `codex login`
 credentials in two distinct roles: a tool-capable Eve Root model via
-`experimental_chatgpt()`, and a Codex App-server provider for the coding worker.
+`experimental_chatgpt()`, and a Codex App Server provider for the diagnostic worker.
 The latter must be given an isolated worktree and must not be used as the Root
 model, because it does not support AI SDK custom tool schemas.
 
@@ -142,11 +156,14 @@ Add a domain as an Eve extension, starting with
 instructions, hooks, connections, and `lib/`. Mount it from
 `eve/agent/extensions/<domain>.ts`; its contributions compose
 under `<domain>__` names. Extensions cannot own an agent config, sandbox,
-schedules, or nested extensions, so the application retains provider/worktree
-policy and a generic Codex worker under `agent/subagents/`. Do not expose a
-domain id through MCP or Temporal. A Codex App-server worker must not rely on
-Eve-authored tools being callable by its model; provide domain guidance in the
-prepared delegation and use its shell, MCP, and worktree-scoped capabilities.
+schedules, or nested extensions, so the application retains diagnostic-session
+policy and one generic Codex worker under `agent/subagents/`. Add a fixed Root
+domain profile that maps the domain to its installed native skill assets; Root then
+materializes safe `.agents/skills` symlinks in each diagnostic worktree. Do not
+expose a domain id through MCP or Temporal. A Codex App Server worker must not rely
+on Eve-authored tools being callable by its model; the prepared delegation starts
+with its native `$skill` invocation and it uses shell, MCP, and worktree-scoped
+capabilities.
 
 Add an external wrapper at `packages/<name>-adapter/`. It converts platform
 events into `RootRequest`, calls the default Eve Channel, and returns a

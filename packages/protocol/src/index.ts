@@ -92,7 +92,7 @@ const verificationSchema = z
 /**
  * Validates the GitHub Issue binding stored alongside a report.
  *
- * This deliberately carries only collaboration metadata; execution state lives
+ * This deliberately carries only collaboration metadata; diagnostic session state lives
  * separately so a backend-specific resume token cannot become shared context.
  */
 export const githubIssueContextSchema = z
@@ -109,7 +109,7 @@ export const githubIssueContextSchema = z
   .strict();
 
 /** Validates the immutable identity and current revision of an isolated worktree. */
-export const executionWorktreeSchema = z
+export const diagnosticWorktreeSchema = z
   .object({
     path: z.string().min(1),
     identity: z.string().min(1),
@@ -120,16 +120,16 @@ export const executionWorktreeSchema = z
   .strict();
 
 /**
- * Validates durable backend state required to resume an isolated coding execution.
+ * Validates durable backend state required to resume an isolated diagnostic session.
  * The state belongs to the report but is intentionally outside `shared_context`.
  */
-export const executionStateSchema = z
+export const diagnosticSessionSchema = z
   .object({
     domain_id: identifierSchema,
     backend_id: identifierSchema,
     codex_thread_id: z.string().min(1).optional(),
-    worktree: executionWorktreeSchema,
-    last_execution_at: timestampSchema.optional(),
+    worktree: diagnosticWorktreeSchema,
+    last_diagnosed_at: timestampSchema.optional(),
   })
   .strict();
 
@@ -159,7 +159,7 @@ export const failureReportSchema = z
     created_at: timestampSchema,
     updated_at: timestampSchema,
     shared_context: githubIssueContextSchema.optional(),
-    execution_state: executionStateSchema.optional(),
+    diagnostic_session: diagnosticSessionSchema.optional(),
     origin: z
       .object({
         source: z.enum([
@@ -177,7 +177,7 @@ export const failureReportSchema = z
       .object({
         repository: z.string().min(1),
         revision: z.string().min(1),
-        worktree_identity: z.string().min(1),
+        source_checkout_path: z.string().min(1),
         components: z.array(z.string().min(1)).min(1),
         environment: z.array(environmentEntrySchema),
       })
@@ -406,10 +406,10 @@ export const rootResultSchema = z
 export type FailureReport = z.infer<typeof failureReportSchema>;
 /** Typed GitHub Issue context inferred from the durable schema. */
 export type GithubIssueContext = z.infer<typeof githubIssueContextSchema>;
-/** Typed durable execution state inferred from the durable schema. */
-export type ExecutionState = z.infer<typeof executionStateSchema>;
-/** Typed isolated-worktree identity inferred from the durable schema. */
-export type ExecutionWorktree = z.infer<typeof executionWorktreeSchema>;
+/** Typed durable diagnostic-session state inferred from the durable schema. */
+export type DiagnosticSession = z.infer<typeof diagnosticSessionSchema>;
+/** Typed isolated diagnostic-worktree identity inferred from the durable schema. */
+export type DiagnosticWorktree = z.infer<typeof diagnosticWorktreeSchema>;
 /** Typed public Root request inferred from the transport schema. */
 export type RootRequest = z.infer<typeof rootRequestSchema>;
 /** Typed public Root result inferred from the transport schema. */

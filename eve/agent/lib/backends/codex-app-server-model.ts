@@ -5,18 +5,20 @@ import {
 } from "ai-sdk-provider-codex-app-server";
 
 import {
-  parseExecutionEnvelope,
-  type ExecutionEnvelope,
-} from "../execution/envelope.js";
-import { ExecutionWorkpad } from "../execution/workpad.js";
-import { ExecutionWorktreeManager } from "../execution/worktree.js";
+  parseDiagnosticSessionEnvelope,
+  type DiagnosticSessionEnvelope,
+} from "../diagnostics/envelope.js";
+import { getDiagnosticDomainProfile } from "../diagnostics/domain-profiles.js";
+import { DiagnosticSessionWorkpad } from "../diagnostics/workpad.js";
+import { DiagnosticWorktreeManager } from "../diagnostics/worktree.js";
 import type { CodexAppServerBackendConfig } from "./codex-app-server-config.js";
 
 /**
- * Consumer-owned adapter from Eve's dynamic-model hook to Codex App-server.
+ * Root-owned adapter from Eve's dynamic-model hook to Codex App Server.
  *
- * Domain extensions prepare a bounded execution envelope. This adapter owns the
- * generic provider/session lifecycle and never contains domain instructions.
+ * It accepts only a Root-prepared diagnostic-session envelope, recovers the
+ * Root-owned worktree, and keeps the provider's persistent thread journaled in
+ * the workpad. Domain extensions never provide a callback or provider policy.
  */
 
 type CodexAppServerProviderFactory = typeof createCodexAppServer;
@@ -27,15 +29,16 @@ type CodexGenerateOptions = Parameters<
   CodexAppServerLanguageModel["doGenerate"]
 >[0];
 
-/** Test seams for the generic Codex model factory. */
+/** Test seams for the generic Codex diagnostic-model factory. */
 export type CodexAppServerModelFactoryDependencies = {
-  execution_workpad?: ExecutionWorkpad;
+  diagnostic_session_workpad?: DiagnosticSessionWorkpad;
   create_provider?: CodexAppServerProviderFactory;
 };
 
 /**
  * Builds Eve's dynamic model resolver for the consumer-owned Codex worker.
- * The resolver derives provider state only from a Root-prepared envelope.
+ * The resolver derives cwd, native skill links, and thread state only from a
+ * Root-prepared envelope plus the durable GitHub workpad.
  */
 export function createCodexAppServerModelResolver(
   config: CodexAppServerBackendConfig,
@@ -47,10 +50,10 @@ export function createCodexAppServerModelResolver(
   const createProvider = dependencies.create_provider ?? createCodexAppServer;
 
   return async (messages) => {
-    const envelope = parseExecutionEnvelope(messages);
+    const envelope = parseDiagnosticSessionEnvelope(messages);
     const workpad =
-      dependencies.execution_workpad ??
-      createExecutionWorkpad(config, envelope);
+      dependencies.diagnostic_session_workpad ??
+      createDiagnosticSessionWorkpad(config, envelope);
     return {
       model: await createCodexAppServerModel(
         envelope,
@@ -65,19 +68,19 @@ export function createCodexAppServerModelResolver(
 
 /**
  * Creates a fail-closed fallback required by Eve's dynamic-model API.
- * It cannot select a worktree or launch Codex, so a malformed message stays safe.
+ * It cannot select a cwd or launch Codex, so malformed messages remain safe.
  */
 export function createBlockedCodexAppServerModel(): LanguageModel {
   const blocked = async (): Promise<never> => {
     throw new Error(
-      "Codex execution may only run through a Root-prepared execution envelope.",
+      "Codex diagnosis may only run through a Root-prepared diagnostic-session envelope.",
     );
   };
 
   return {
     specificationVersion: "v3",
     provider: "failure-report-guard",
-    modelId: "codex-execution-required",
+    modelId: "codex-diagnostic-session-required",
     supportedUrls: {},
     defaultObjectGenerationMode: "json",
     supportsStructuredOutputs: true,
@@ -88,25 +91,27 @@ export function createBlockedCodexAppServerModel(): LanguageModel {
 }
 
 /**
- * Creates one persistent Codex provider bound to the workpad-validated worktree.
- * Thread creation and completion are journaled so a later Root invocation can
- * resume the same Codex conversation instead of creating an untracked one.
+ * Creates one persistent provider bound to the validated diagnostic worktree.
+ * Thread creation and completion are journaled so Root can resume the same
+ * Codex conversation without creating an untracked provider session.
  */
 async function createCodexAppServerModel(
-  envelope: ExecutionEnvelope,
+  envelope: DiagnosticSessionEnvelope,
   config: CodexAppServerBackendConfig,
-  workpad: ExecutionWorkpad,
+  workpad: DiagnosticSessionWorkpad,
   createProvider: CodexAppServerProviderFactory,
 ): Promise<LanguageModel> {
-  const loaded = await workpad.loadForExecution(envelope);
-  let threadId = loaded.execution.state.codex_thread_id;
+  const loaded = await workpad.loadForDiagnosticSession(envelope);
+  let threadId = loaded.diagnostic_session.state.codex_thread_id;
   let pendingThreadPersistence: Promise<void> | undefined;
   let persistenceError: unknown;
 
   const provider = createProvider({
     defaultSettings: {
       codexPath: config.codex_path,
-      cwd: loaded.execution.state.worktree.path,
+      cwd: loaded.diagnostic_session.state.worktree.path,
+      // `workspace-write` permits tests, caches, and diagnostic artifacts. It
+      // does not authorize a worker to turn diagnosis into an unapproved fix.
       approvalMode: config.approval_mode,
       sandboxMode: config.sandbox_mode,
       reasoningEffort: config.reasoning_effort,
@@ -114,8 +119,8 @@ async function createCodexAppServerModel(
       ...(threadId ? { resume: threadId } : {}),
       onSessionCreated(session) {
         threadId = session.threadId;
-        // Persist immediately rather than waiting for a streamed answer: a process
-        // interruption after session creation must still leave a resumable thread.
+        // Persist immediately rather than waiting for a streamed answer: process
+        // interruption after creation must still leave a resumable thread.
         pendingThreadPersistence = workpad
           .recordThread(envelope, session.threadId)
           .then(() => undefined)
@@ -131,7 +136,7 @@ async function createCodexAppServerModel(
     async ensureThread(): Promise<string> {
       if (!pendingThreadPersistence || !threadId) {
         throw new Error(
-          "Codex App-server did not expose a persistent execution thread id.",
+          "Codex App Server did not expose a persistent diagnostic thread id.",
         );
       }
       await pendingThreadPersistence;
@@ -149,14 +154,14 @@ async function createCodexAppServerModel(
   return trackCodexModel(rawModel, journal);
 }
 
-/** Binds generic execution identity to a fresh durable workpad when not injected. */
-function createExecutionWorkpad(
+/** Binds generic diagnostic identity to a fresh durable workpad when not injected. */
+function createDiagnosticSessionWorkpad(
   config: CodexAppServerBackendConfig,
-  envelope: ExecutionEnvelope,
-): ExecutionWorkpad {
-  return new ExecutionWorkpad({
-    worktrees: new ExecutionWorktreeManager({
-      domainId: envelope.domain_id,
+  envelope: DiagnosticSessionEnvelope,
+): DiagnosticSessionWorkpad {
+  return new DiagnosticSessionWorkpad({
+    worktrees: new DiagnosticWorktreeManager({
+      profile: getDiagnosticDomainProfile(envelope.domain_id),
       backendId: config.kind,
       root: config.worktree_root,
     }),

@@ -1,5 +1,5 @@
 ---
-name: ckb-debugging
+name: failure-report-ckb-debugging
 description: Investigate CKB smart-contract and transaction failures using explicit evidence, debugger scripts, and narrowly scoped diagnostic recommendations.
 ---
 

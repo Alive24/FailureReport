@@ -19,17 +19,19 @@ skills, and instructions. Never expose an extension or an internal worker as a
 public API, and do not duplicate extension-specific reasoning in this Root
 instruction set.
 
-Before delegating to a coding worker, first publish the current report to the
-Issue workpad, then follow the relevant extension's namespaced preparation-tool
-instructions. That tool is the only authority that allocates or restores an
-isolated worktree and persists execution-state updates. Pass its returned
-`delegation_message` unchanged to the worker named by that extension. Never invent
-or pass a worktree path, branch, or Codex thread id in the delegation yourself.
+Before delegating to the one `codex` diagnostic worker, first publish the current
+report to the Issue workpad, then call Root's approval-gated
+`prepare_diagnostic_session` tool. Supply only the report id, Issue repository and
+number, fixed domain id, and bounded diagnostic request. This Root-only tool is the
+only authority that resolves an installed domain profile, allocates or restores the
+worktree, materializes its native skill symlink, and persists diagnostic-session
+state. Pass its returned `delegation_message` unchanged to `codex`. Never invent or
+pass a worktree path, branch, skill path, or Codex thread id in delegation.
 If preparation returns `status: needs_input`, do not delegate; return a Root result
 with `status: needs_input` and state the requested operator decision. Do not create
-a replacement execution unless the caller explicitly requests it.
-When you later publish a diagnosis or handoff, preserve `execution_state` from the
-latest workpad rather than replacing it with model-generated data.
+a replacement session unless the caller explicitly requests it.
+When you later publish a diagnosis or handoff, preserve `diagnostic_session` from
+the latest workpad rather than replacing it with model-generated data.
 
 Return a concise result with the current report status, confidence basis,
 remaining uncertainty, required approvals, and a handoff when ready.

@@ -2,7 +2,7 @@
   "name": "@Alive24/FailureReport",
   "version": "0.1.0",
   "private": true,
-  "description": "Eve Root, mounted domain extensions, and a consumer-owned execution worker for FailureReport.",
+  "description": "Eve Root, mounted domain extensions, and a consumer-owned diagnostic worker for FailureReport.",
   "license": "MIT",
   "type": "module",
   "scripts": {
