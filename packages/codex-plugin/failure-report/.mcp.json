@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "failure-report": {
+      "command": "pnpm",
+      "args": ["--filter", "@failure-report/mcp-adapter", "mcp"],
+      "cwd": "../../..",
+      "env_vars": [
+        "FAILURE_REPORT_EVE_HOST",
+        "FAILURE_REPORT_EVE_BEARER_TOKEN"
+      ],
+      "tool_timeout_sec": 900
+    }
+  }
+}

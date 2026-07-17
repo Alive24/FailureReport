@@ -1,0 +1,30 @@
+{
+  "name": "failure-report",
+  "version": "0.1.0",
+  "description": "Use FailureReport's Eve-backed MCP tool for durable software failure investigations.",
+  "author": {
+    "name": "Alive24",
+    "url": "https://github.com/Alive24"
+  },
+  "homepage": "https://github.com/Alive24/FailureReport",
+  "repository": "https://github.com/Alive24/FailureReport",
+  "license": "MIT",
+  "keywords": ["failure-report", "eve", "mcp", "github", "incident-response"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "FailureReport",
+    "shortDescription": "Durable failure investigations through Eve.",
+    "longDescription": "Start, resume, and hand off evidence-backed software failure investigations through FailureReport's Eve-backed MCP tool.",
+    "developerName": "Alive24",
+    "category": "Productivity",
+    "capabilities": ["Interactive"],
+    "websiteURL": "https://github.com/Alive24/FailureReport",
+    "defaultPrompt": [
+      "Start a durable FailureReport investigation for this software failure.",
+      "Inspect the current FailureReport context for this GitHub Issue.",
+      "Resume this evidence-backed FailureReport investigation."
+    ],
+    "brandColor": "#1D4ED8"
+  },
+  "mcpServers": "./.mcp.json"
+}
