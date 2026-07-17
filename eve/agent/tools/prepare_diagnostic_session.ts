@@ -10,7 +10,6 @@ import { createDiagnosticSessionPreparer } from "../lib/diagnostics/session-prep
 const backend = parseCodexAppServerBackendConfig(backendJson);
 const prepareDiagnosticSession = createDiagnosticSessionPreparer({
   backend_id: backend.kind,
-  worktree_root: backend.worktree_root,
 });
 
 /**

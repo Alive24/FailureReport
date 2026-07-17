@@ -10,7 +10,6 @@ import { createDiagnosticSessionFinalizer } from "../lib/diagnostics/session-fin
 const backend = parseCodexAppServerBackendConfig(backendJson);
 const finalizeDiagnosticSession = createDiagnosticSessionFinalizer({
   backend_id: backend.kind,
-  worktree_root: backend.worktree_root,
 });
 
 /**

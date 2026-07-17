@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, mkdir, realpath, symlink } from "node:fs/promises";
-import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import type {
@@ -10,6 +9,13 @@ import type {
 } from "@failure-report/protocol";
 
 import type { DomainExtension, NativeSkill } from "./domain-extensions.js";
+import {
+  DiagnosticSourceCacheError,
+  DiagnosticSourceCacheManager,
+  resolveManagedDiagnosticWorkspaceLayout,
+  type DiagnosticSourceResolver,
+  type ResolvedDiagnosticSource,
+} from "./source-cache.js";
 
 /**
  * Deterministic, Root-owned diagnostic-worktree lifecycle management.
@@ -51,7 +57,9 @@ export type WorktreePathOperations = {
 export type DiagnosticWorktreeManagerOptions = {
   domainExtensions: readonly DomainExtension[];
   backendId: string;
-  root?: string;
+  /** Authored host-runtime seam; callers can never provide a workspace path. */
+  runtimeRoot?: string;
+  sourceCache?: DiagnosticSourceResolver;
   git?: GitCommandRunner;
   paths?: WorktreePathOperations;
 };
@@ -81,28 +89,32 @@ const defaultPathOperations: WorktreePathOperations = {
 
 /**
  * Allocates, restores, and inspects one deterministic diagnostic worktree per
- * report. The manager refuses unsafe state rather than falling back to the
- * source checkout, and materializes only selected extensions' approved native
- * skills.
+ * report. The manager refuses unsafe state rather than falling back to an
+ * arbitrary checkout, and materializes only selected extensions' approved
+ * native skills.
  */
 export class DiagnosticWorktreeManager {
   private readonly domainExtensions: readonly DomainExtension[];
   private readonly backendId: string;
-  private readonly root: string;
+  private readonly runtimeRoot?: string;
   private readonly git: GitCommandRunner;
   private readonly paths: WorktreePathOperations;
+  private readonly sourceCache: DiagnosticSourceResolver;
 
   constructor(options: DiagnosticWorktreeManagerOptions) {
     this.domainExtensions = [...options.domainExtensions];
     this.assertDomainExtensions();
     this.backendId = options.backendId;
-    this.root = resolve(
-      options.root ??
-        process.env.FAILURE_REPORT_WORKTREE_ROOT ??
-        join(homedir(), ".failure-report", "worktrees"),
-    );
+    this.runtimeRoot = options.runtimeRoot;
     this.git = options.git ?? runGit;
     this.paths = options.paths ?? defaultPathOperations;
+    this.sourceCache =
+      options.sourceCache ??
+      new DiagnosticSourceCacheManager({
+        runtimeRoot: this.runtimeRoot,
+        git: this.git,
+        paths: this.paths,
+      });
   }
 
   /** Exposes the fixed extension skill names for envelope validation without paths. */
@@ -132,14 +144,11 @@ export class DiagnosticWorktreeManager {
    * session may start. Skill sources are validated before Git mutates anything.
    */
   async allocate(report: FailureReport): Promise<VerifiedDiagnosticWorktree> {
-    const canonicalPath = await this.resolveCanonicalCheckout(report);
+    const source = await this.acquireCanonicalSource(report);
+    const canonicalPath = source.canonical_path;
     const nativeSkills = await this.resolveNativeSkillSources();
-    await this.paths.ensureDirectory(this.root);
     const isolatedRoot = await this.resolveIsolatedWorktreeRoot();
-    const baseRevision = await this.git({
-      cwd: canonicalPath,
-      args: ["rev-parse", "--verify", report.target.revision + "^{commit}"],
-    });
+    const baseRevision = source.base_revision;
     const worktreePath = this.worktreePath(report, isolatedRoot);
 
     if (resolve(worktreePath) === canonicalPath) {
@@ -169,11 +178,17 @@ export class DiagnosticWorktreeManager {
       args: ["worktree", "add", "--detach", worktreePath, baseRevision],
     });
 
+    const allocatedStat = await this.paths.lstat(worktreePath);
+    if (allocatedStat.isSymbolicLink() || !allocatedStat.isDirectory()) {
+      throw new DiagnosticSafetyError(
+        "The allocated diagnostic worktree must be a real directory, not a symlink or file.",
+      );
+    }
     const actualPath = await this.paths.realpath(worktreePath);
     // Resolve after `git worktree add` to reject a root containing hostile symlinks.
     if (!isPathInside(isolatedRoot, actualPath)) {
       throw new DiagnosticSafetyError(
-        "The allocated diagnostic worktree resolves outside the configured worktree root.",
+        "The allocated diagnostic worktree resolves outside Root-owned `.eve/sandbox-cache/worktrees`.",
       );
     }
     await this.provisionNativeSkills(actualPath, nativeSkills);
@@ -181,6 +196,7 @@ export class DiagnosticWorktreeManager {
       cwd: actualPath,
       args: ["rev-parse", "HEAD"],
     });
+    await this.assertSameOrigin(source.canonical_remote, actualPath);
 
     return {
       canonical_path: canonicalPath,
@@ -310,7 +326,11 @@ export class DiagnosticWorktreeManager {
       );
     }
 
-    const canonicalPath = await this.resolveCanonicalCheckout(report);
+    const source = await this.restoreCanonicalSource(
+      report,
+      state.worktree.base_revision,
+    );
+    const canonicalPath = source.canonical_path;
     const nativeSkills = await this.resolveNativeSkillSources();
     const isolatedRoot = await this.resolveIsolatedWorktreeRoot();
     const declaredPath = state.worktree.path;
@@ -326,7 +346,21 @@ export class DiagnosticWorktreeManager {
     }
     if (!isPathInside(isolatedRoot, declaredPath)) {
       throw new DiagnosticSafetyError(
-        "Diagnostic worktree is outside the configured worktree root.",
+        "Diagnostic worktree is outside Root-owned `.eve/sandbox-cache/worktrees`.",
+      );
+    }
+
+    let declaredStat: WorktreePathStat;
+    try {
+      declaredStat = await this.paths.lstat(declaredPath);
+    } catch {
+      throw new DiagnosticSafetyError(
+        "The saved diagnostic worktree no longer exists; do not fall back to the source checkout.",
+      );
+    }
+    if (declaredStat.isSymbolicLink() || !declaredStat.isDirectory()) {
+      throw new DiagnosticSafetyError(
+        "The saved diagnostic worktree must be a real directory, not a symlink or file.",
       );
     }
 
@@ -340,7 +374,7 @@ export class DiagnosticWorktreeManager {
     }
     if (!isPathInside(isolatedRoot, worktreePath)) {
       throw new DiagnosticSafetyError(
-        "The saved diagnostic worktree resolves outside the configured worktree root.",
+        "The saved diagnostic worktree resolves outside Root-owned `.eve/sandbox-cache/worktrees`.",
       );
     }
     if (worktreePath === canonicalPath) {
@@ -391,7 +425,7 @@ export class DiagnosticWorktreeManager {
       );
     }
 
-    await this.assertSameOrigin(canonicalPath, worktreePath);
+    await this.assertSameOrigin(source.canonical_remote, worktreePath);
     await this.provisionNativeSkills(worktreePath, nativeSkills);
 
     return {
@@ -556,67 +590,66 @@ export class DiagnosticWorktreeManager {
     }
   }
 
-  private async resolveCanonicalCheckout(
+  private async acquireCanonicalSource(
     report: FailureReport,
-  ): Promise<string> {
-    const declaredPath = report.target.source_checkout_path;
-    if (!isAbsolute(declaredPath)) {
-      throw new DiagnosticSafetyError(
-        "FailureReport.target.source_checkout_path must be an absolute source checkout path.",
-      );
-    }
-    const canonicalPath = await this.paths.realpath(declaredPath);
-    const topLevel = await this.paths.realpath(
-      await this.git({
-        cwd: canonicalPath,
-        args: ["rev-parse", "--show-toplevel"],
-      }),
+  ): Promise<ResolvedDiagnosticSource> {
+    return this.wrapSourceCache(() => this.sourceCache.acquire(report));
+  }
+
+  private async restoreCanonicalSource(
+    report: FailureReport,
+    recordedBaseRevision: string,
+  ): Promise<ResolvedDiagnosticSource> {
+    return this.wrapSourceCache(() =>
+      this.sourceCache.restore(report, recordedBaseRevision),
     );
-    if (topLevel !== canonicalPath) {
-      throw new DiagnosticSafetyError(
-        "FailureReport.target.source_checkout_path must point at the source Git worktree root.",
-      );
+  }
+
+  private async wrapSourceCache(
+    operation: () => Promise<ResolvedDiagnosticSource>,
+  ): Promise<ResolvedDiagnosticSource> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof DiagnosticSourceCacheError) {
+        throw new DiagnosticSafetyError(error.message);
+      }
+      throw error;
     }
-    return canonicalPath;
   }
 
   private async resolveIsolatedWorktreeRoot(): Promise<string> {
     try {
-      return await this.paths.realpath(this.root);
+      return (
+        await resolveManagedDiagnosticWorkspaceLayout({
+          runtimeRoot: this.runtimeRoot,
+          paths: this.paths,
+        })
+      ).worktree_root;
     } catch {
       throw new DiagnosticSafetyError(
-        "The configured diagnostic-worktree root cannot be resolved.",
+        "Root's `.eve/sandbox-cache/worktrees` directory cannot be resolved safely.",
       );
     }
   }
 
   private async assertSameOrigin(
-    canonicalPath: string,
+    canonicalRemote: string,
     worktreePath: string,
   ): Promise<void> {
-    const canonicalOrigin = await optionalGit(this.git, canonicalPath, [
-      "remote",
-      "get-url",
-      "origin",
-    ]);
-    if (!canonicalOrigin) {
-      // Repositories without `origin` are supported; the other identity checks
-      // still prevent durable state from selecting an arbitrary worktree path.
-      return;
-    }
     const worktreeOrigin = await optionalGit(this.git, worktreePath, [
       "remote",
       "get-url",
       "origin",
     ]);
-    if (worktreeOrigin !== canonicalOrigin) {
+    if (worktreeOrigin !== canonicalRemote) {
       throw new DiagnosticSafetyError(
-        "The saved diagnostic worktree points at a different Git origin.",
+        "The diagnostic worktree origin does not match Root's canonical managed source.",
       );
     }
   }
 
-  private worktreePath(report: FailureReport, root = this.root): string {
+  private worktreePath(report: FailureReport, root: string): string {
     return join(root, this.identityFor(report));
   }
 
@@ -670,6 +703,8 @@ export class DiagnosticWorktreeManager {
     const digest = createHash("sha256")
       .update(
         report.target.repository +
+          "\u0000" +
+          report.target.revision +
           "\u0000" +
           report.id +
           "\u0000" +

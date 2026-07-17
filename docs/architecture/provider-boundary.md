@@ -31,7 +31,7 @@ Only Root is public, through `eve/agent/channels/eve.ts`. An extension namespace
 | Layer | Owns | Does not own |
 | --- | --- | --- |
 | CKB extension | CKB instructions, `failure-report-ckb-debugging`, deterministic `ckb__recommend_log` | sandbox, worktree, provider config, session preparation, subagent |
-| FailureReport Root | domain-extension registry, approval, source-checkout verification, detached worktree allocation, snapshot finalization, workpad/session/thread journal, delegation | extension skill content, third-party Codex provider implementation |
+| FailureReport Root | domain-extension registry, approval, host-managed source cache, detached worktree allocation, snapshot finalization, workpad/session/thread journal, delegation | extension skill content, third-party Codex provider implementation |
 | Codex worker | shell/Git/MCP diagnosis in Root-provided `cwd`, tests and diagnostic artifacts | selecting `cwd`, checkout, branch, skill path, GitHub workpad writes, code changes by default |
 
 This respects [Eve extension boundaries](https://eve.dev/docs/extensions): extensions contribute capabilities but cannot define an agent, sandbox, schedule, or nested subagent.
@@ -44,7 +44,15 @@ Root's always-approved `prepare_diagnostic_session` tool accepts only:
 - a non-empty Root-selected `domain_extensions` set; and
 - a bounded diagnostic request.
 
-It never accepts model-provided `cwd`, branch, backend, or skill path. The fixed domain-extension registry resolves every selected installed native skill source, then Root creates or restores one deterministic detached diagnostic worktree. Before Codex runs, Root writes the durable state to the Issue workpad and materializes:
+It never accepts model-provided `cwd`, branch, backend, skill path, cache path, source checkout path, or host directory. The report target must contain only a repository identity and full immutable Git SHA. Root derives the canonical remote from the matching Root-published Issue, then uses host Git to create or verify the fixed local hierarchy:
+
+```text
+<FailureReport>/.eve/sandbox-cache/
+  sources/<canonical-repository-cache>
+  worktrees/<diagnostic-session>
+```
+
+The fixed domain-extension registry resolves every selected installed native skill source, then Root creates or restores one deterministic detached diagnostic worktree under that hierarchy. Before Codex runs, Root writes the durable state to the Issue workpad and materializes:
 
 ```text
 <diagnostic-worktree>/.agents/skills/failure-report-ckb-debugging
@@ -79,7 +87,7 @@ type DiagnosticSession = {
 };
 ```
 
-`target.source_checkout_path` identifies the Root-provided source checkout. It does not mean FailureReport created that checkout. Root validates canonical checkout, origin, deterministic worktree path, detached state, base revision, and HEAD before resume. External HEAD mutation becomes `needs_input`, never an implicit fallback to the source checkout. After explicit finalization of a clean session, Root creates `failure-report/diagnostic/<identity>` at the final HEAD without checking it out. That ref is a diagnostic-only snapshot: a future coding agent must use a separate implementation worktree/branch and must not create a PR from this snapshot.
+`target` contains only the repository identity and a full immutable Git SHA; it has no local checkout path or selector. Root derives the canonical remote from the Root-published GitHub Issue context and creates or verifies a persistent source cache under `.eve/sandbox-cache/sources/`. The source cache path is an internal implementation detail, while the persisted worktree path is Root-generated and must be revalidated before use. Root validates canonical origin, path containment, deterministic worktree path, detached state, base revision, and HEAD before resume. External HEAD mutation becomes `needs_input`, never an implicit fallback to an arbitrary checkout. After explicit finalization of a clean session, Root creates `failure-report/diagnostic/<identity>` at the final HEAD without checking it out. That ref is a diagnostic-only snapshot: a future coding agent must use a separate implementation worktree/branch and must not create a PR from this snapshot.
 
 GitHub's Issue body and marked workpad remain shared collaboration context; the workpad additionally persists diagnostic session state. The worker never gains GitHub write capability.
 
@@ -87,7 +95,7 @@ GitHub's Issue body and marked workpad remain shared collaboration context; the 
 
 The prepared delegation begins with every selected `$failure-report-…` native skill before the revision-bound diagnostic-session envelope. Codex's native skill discovery finds the worktree-local `.agents/skills` symlinks, so the worker uses native `$skill`, shell, Git, and MCP rather than Eve's `load_skill` tool or a copied global skill.
 
-The Codex App Server model is launched only after Root validates the envelope and workpad. It receives:
+Eve is pinned to its just-bash backend for Root orchestration. just-bash has a virtual filesystem and no real Git or package-manager binaries, so it is not a substitute for the controlled host workspace. Root's authored diagnostics adapters inspect and manage the fixed host workspace; Codex App Server is launched only after Root validates the envelope and workpad. It receives:
 
 ```text
 cwd: Root-owned detached diagnostic worktree
@@ -96,7 +104,7 @@ approvalMode: on-request
 sandboxMode: workspace-write
 ```
 
-`workspace-write` permits focused tests, caches, and debugging artifacts. It does not authorize a diagnostic worker to modify business code, commit, or turn the task into implementation unless Root explicitly grants that authority. After every turn, Root records the current HEAD, timestamp, and provider thread id so the same Codex thread can resume later.
+Codex runs directly in the user's existing host environment, retaining `~/.codex`, plugins, native skills, MCP configuration, authentication, Git credentials, model settings, and persistent thread storage. `workspace-write` permits focused tests, caches, and debugging artifacts. It does not authorize a diagnostic worker to modify business code, commit, or turn the task into implementation unless Root explicitly grants that authority. After every turn, Root records the current HEAD, timestamp, and provider thread id so the same Codex thread can resume later.
 
 ## Verification Scope
 

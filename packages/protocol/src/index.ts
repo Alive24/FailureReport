@@ -16,6 +16,11 @@ const identifierSchema = z
   .min(1)
   .regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/);
 
+/** A full SHA-1 or SHA-256 Git object identity; selectors are not source targets. */
+const immutableGitRevisionSchema = z
+  .string()
+  .regex(/^[0-9a-f]{40,64}$/i, "revision must be a full immutable Git SHA");
+
 const timestampSchema = z
   .string()
   .regex(
@@ -113,8 +118,8 @@ export const diagnosticWorktreeSchema = z
   .object({
     path: z.string().min(1),
     identity: z.string().min(1),
-    base_revision: z.string().min(1),
-    head_revision: z.string().min(1),
+    base_revision: immutableGitRevisionSchema,
+    head_revision: immutableGitRevisionSchema,
   })
   .strict();
 
@@ -122,7 +127,7 @@ export const diagnosticWorktreeSchema = z
 export const diagnosticBranchSchema = z
   .object({
     name: z.string().min(1),
-    head_revision: z.string().min(1),
+    head_revision: immutableGitRevisionSchema,
     finalized_at: timestampSchema,
     reuse_policy: z.literal("diagnostic_snapshot_only"),
   })
@@ -226,9 +231,10 @@ export const failureReportSchema = z
       .strict(),
     target: z
       .object({
-        repository: z.string().min(1),
-        revision: z.string().min(1),
-        source_checkout_path: z.string().min(1),
+        repository: z.string().regex(/^[^/\s]+\/[^/\s]+$/),
+        // Callers must bind a report before Root creates a diagnostic session;
+        // selectors such as HEAD and branch names are intentionally rejected.
+        revision: immutableGitRevisionSchema,
         components: z.array(z.string().min(1)).min(1),
         environment: z.array(environmentEntrySchema),
       })

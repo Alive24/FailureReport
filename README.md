@@ -15,15 +15,16 @@ flowchart TD
   E --> X["CKB mounted Eve extension"]
   E --> I["GitHub Issue narrative + workpad"]
   E --> D["Root prepare / finalize diagnostic session"]
-  D --> C["Consumer-owned Codex worker"]
-  C --> A["Codex App Server provider"]
-  A --> W["Detached diagnostic worktree + persistent Codex thread"]
+  E --> B["Eve just-bash orchestration sandbox"]
+  D --> W["Host-managed .eve/sandbox-cache source + detached worktree"]
+  W --> C["Consumer-owned Codex worker"]
+  C --> A["Host Codex App Server + existing Codex Home"]
 ```
 
 - Eve Root is the only public supervisor. Its primary public entry is Eve's built-in HTTP channel, declared at `eve/agent/channels/eve.ts` and exposed as `/eve/v1/session*`.
 - Root uses a **tool-capable** AI SDK model so Eve can retain Issue, approval, routing, and declared-subagent tools. The MVP runs locally by default, using Eve's `experimental_chatgpt()` helper with the signed-in Codex/ChatGPT session; this is the product default, not a test-only convenience. A remote host may opt into another tool-capable provider later.
 - CKB is the first mounted Eve extension, never a public API target. It provides CKB instructions, the `failure-report-ckb-debugging` native skill, and deterministic `ckb__recommend_log`; it does not own a worktree, sandbox, or subagent.
-- Root's always-approved `prepare_diagnostic_session` tool resolves a Root-selected non-empty `domain_extensions` set, creates or validates a detached diagnostic worktree, places every approved native skill under `.agents/skills/`, and persists worktree/HEAD/Codex-thread state before delegating to the one `codex` worker. Codex decides how to use the loaded skills; extensions never select a backend.
+- Root's always-approved `prepare_diagnostic_session` tool accepts a report bound to a repository and full immutable Git SHA, resolves a Root-selected non-empty `domain_extensions` set, and manages the source cache plus detached diagnostic worktree only under the repository's `.eve/sandbox-cache/`. It places every approved native skill under `.agents/skills/` and persists worktree/HEAD/Codex-thread state before delegating to the one `codex` worker. Codex decides how to use the loaded skills; extensions never select a backend.
 - Root's separate always-approved `finalize_diagnostic_session` tool creates `failure-report/diagnostic/<identity>` only after the diagnostic worktree is clean. It does not check the branch out. The workpad labels it a diagnostic-only snapshot: future coding must use a separate implementation worktree/branch and must not open a PR directly from the snapshot.
 - A target-repository GitHub Issue is the shared context: existing human body is preserved, FailureReport adds a stable narrative block, and exactly one marked comment holds the full structured snapshot.
 - Root owns GitHub as an internal integration. Octokit is the default API transport; by default it reuses the active local `gh auth login` identity once per process, then performs Issue and comment calls through the SDK.
@@ -43,6 +44,7 @@ packages/mcp-adapter      MCP stdio wrapper that calls the default Eve Channel
 packages/temporal-adapter Deterministic Temporal workflow and activities
 packages/codex-plugin/failure-report  Installable Codex plugin and Eve-backed MCP configuration
 examples/                 Extension and host examples
+.eve/sandbox-cache/       Root-owned host source caches and detached diagnostic worktrees (runtime state)
 ```
 
 `eve/agent/` is intentionally limited to Eve's filesystem slots: `agent.ts`, `instructions.md`, `tools/`, `skills/`, `extensions/`, `lib/` when shared authored code is needed, and declared `subagents/`. The Root runtime, generic diagnostic-session helpers, and GitHub integration now live under `agent/lib/`: they are import-only authored code and are never mounted into a worker workspace. Product configuration and evaluation material remain alongside `agent/`.
@@ -72,7 +74,17 @@ To use the public Root MCP surface through Codex, start Eve (and therefore its d
 pnpm --filter @Alive24/FailureReport dev
 ```
 
-Then load the repository-local Codex plugin at `packages/codex-plugin/failure-report`. Its `.mcp.json` starts the external `@failure-report/mcp-adapter` wrapper, which exposes the single `failure_report` tool and calls the default Eve Channel. `FAILURE_REPORT_EVE_HOST` can point that wrapper at a deployed Root; set `FAILURE_REPORT_EVE_BEARER_TOKEN` when the Eve Channel requires bearer auth. Set `FAILURE_REPORT_WORKTREE_ROOT` to choose where Root-owned isolated domain worktrees live; otherwise the local default is `~/.failure-report/worktrees`.
+Then load the repository-local Codex plugin at `packages/codex-plugin/failure-report`. Its `.mcp.json` starts the external `@failure-report/mcp-adapter` wrapper, which exposes the single `failure_report` tool and calls the default Eve Channel. `FAILURE_REPORT_EVE_HOST` can point that wrapper at a deployed Root; set `FAILURE_REPORT_EVE_BEARER_TOKEN` when the Eve Channel requires bearer auth.
+
+For a local diagnosis, Root accepts only a repository identity and a full immutable Git SHA. It never accepts a source checkout path, cache path, worktree path, branch, or Codex `cwd`. Root derives the canonical remote, then manages this fixed host-owned hierarchy inside the FailureReport checkout:
+
+```text
+.eve/sandbox-cache/
+  sources/<canonical-repository-cache>
+  worktrees/<diagnostic-session>
+```
+
+The actual `git clone`, `git fetch`, `git worktree`, test, and package-manager commands run in the host runtime. Eve is pinned to `just-bash` for Root orchestration; its virtual shell is not a replacement Git runtime. Root's host-side diagnostics adapters inspect the controlled workspace and Codex App Server runs directly on the host with the validated worktree as `cwd`, retaining the user's existing `~/.codex`, plugins, skills, MCP settings, authentication, Git credentials, model configuration, and thread persistence. No path-setting environment variable is supported for this boundary.
 
 ## GitHub Runtime Authentication
 
@@ -83,6 +95,8 @@ gh auth login
 ```
 
 When Root first needs GitHub, it reads the active CLI credential with `gh auth token` once in that process, keeps it only in memory, and passes it to Octokit. All Issue and comment reads/writes then use Octokit, not `gh api`. This applies equally to local MCP and Temporal-backed Root execution; each Root host needs its own active `gh` login by default.
+
+Diagnostic source acquisition is separate from the GitHub API client: Root runs `git clone` and `git fetch` through the host's ordinary Git runtime, only inside its Root-owned `.eve/sandbox-cache/sources/` cache. A public or private repository is supported whenever that runtime can reach and authenticate to the canonical remote. Configure ordinary host Git authentication externally; FailureReport never writes credentials into a report, workpad, plugin configuration, or log.
 
 Runtime configuration is optional for that common path. These alternatives are available when a host cannot use a CLI login:
 

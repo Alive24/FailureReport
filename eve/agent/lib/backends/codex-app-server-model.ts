@@ -163,7 +163,6 @@ function createDiagnosticSessionWorkpad(
     worktrees: new DiagnosticWorktreeManager({
       domainExtensions: getDomainExtensions(envelope.domain_extensions),
       backendId: config.kind,
-      root: config.worktree_root,
     }),
   });
 }

@@ -35,7 +35,6 @@ export type FinalizeDiagnosticSessionResult =
 /** Host-only dependencies for Root's explicit diagnostic finalization path. */
 export type DiagnosticSessionFinalizerOptions = {
   backend_id: string;
-  worktree_root?: string;
   gateway?:
     DiagnosticSessionIssueGateway | Promise<DiagnosticSessionIssueGateway>;
   now?: () => string;
@@ -101,7 +100,6 @@ export function createDiagnosticSessionFinalizer(
         worktrees: new DiagnosticWorktreeManager({
           domainExtensions,
           backendId: options.backend_id,
-          root: options.worktree_root,
         }),
       });
       const finalized = await workpad.finalize(input);

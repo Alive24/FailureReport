@@ -34,7 +34,6 @@
   "target": {
     "repository": "Alive24/CKBoost",
     "revision": "396113ce312617edc7c9515919b1dedaca4a0b86",
-    "source_checkout_path": "/Volumes/Bohemialive/GitHub/CKBoost",
     "components": [
       "quest submission UI",
       "Nostr publication",

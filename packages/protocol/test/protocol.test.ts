@@ -139,10 +139,62 @@ describe("FailureReport protocol", () => {
         ...report,
         target: {
           ...report.target,
-          worktree_identity: report.target.source_checkout_path,
+          source_checkout_path: "/host/checkout",
         },
       }),
     ).toThrow();
+  });
+
+  it("requires an immutable SHA and rejects selectors or legacy checkout paths", async () => {
+    const report = failureReportSchema.parse(
+      await loadFixture("issue-54.json"),
+    );
+
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        target: {
+          ...report.target,
+          revision: undefined,
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        target: {
+          ...report.target,
+          revision: "HEAD",
+        },
+      }),
+    ).toThrow("full immutable Git SHA");
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        target: {
+          ...report.target,
+          revision: "main",
+        },
+      }),
+    ).toThrow("full immutable Git SHA");
+
+    for (const [field, value] of Object.entries({
+      source_checkout_path: "/Volumes/Bohemialive/GitHub/CKBoost",
+      cache_path: "/tmp/cache",
+      worktree_path: "/tmp/worktree",
+      branch: "main",
+      cwd: "/tmp/worktree",
+    })) {
+      expect(() =>
+        failureReportSchema.parse({
+          ...report,
+          target: {
+            ...report.target,
+            [field]: value,
+          },
+        }),
+      ).toThrow();
+    }
   });
 
   it("requires canonical extension sets and a branch for finalized diagnostics", async () => {

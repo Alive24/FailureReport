@@ -26,7 +26,6 @@
   "target": {
     "repository": "Alive24/CKBoost",
     "revision": "9665745d1d39f0aa6395569e5e1b0fe6f3400695",
-    "source_checkout_path": "/Volumes/Bohemialive/GitHub/CKBoost",
     "components": [
       "ckboost-protocol-type",
       "transaction recipe validation",

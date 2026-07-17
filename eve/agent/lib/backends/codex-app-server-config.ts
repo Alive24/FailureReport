@@ -19,7 +19,6 @@ export const codexAppServerBackendConfigSchema = z
     ]),
     reasoning_effort: z.enum(["low", "medium", "high"]),
     model_context_window_tokens: modelContextWindowTokens,
-    worktree_root: z.string().min(1).optional(),
   })
   .strict();
 

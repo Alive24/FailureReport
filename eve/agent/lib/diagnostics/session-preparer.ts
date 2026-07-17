@@ -40,7 +40,6 @@ export type PrepareDiagnosticSessionResult =
 /** Host-only policy required by the generic Root session preparer. */
 export type DiagnosticSessionPreparerOptions = {
   backend_id: string;
-  worktree_root?: string;
 };
 
 /**
@@ -75,7 +74,6 @@ export function createDiagnosticSessionPreparer(
         worktrees: new DiagnosticWorktreeManager({
           domainExtensions,
           backendId: options.backend_id,
-          root: options.worktree_root,
         }),
       });
       const prepared = await workpad.prepare(envelope);

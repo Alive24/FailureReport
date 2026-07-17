@@ -9,13 +9,17 @@ import {
 } from "@failure-report/protocol";
 
 import { createCodexAppServerModelResolver } from "../agent/lib/backends/codex-app-server-model.js";
-import type { CodexAppServerBackendConfig } from "../agent/lib/backends/codex-app-server-config.js";
+import {
+  parseCodexAppServerBackendConfig,
+  type CodexAppServerBackendConfig,
+} from "../agent/lib/backends/codex-app-server-config.js";
 import { diagnosticSessionPreparationEnvelopeSchema } from "../agent/lib/diagnostics/envelope.js";
 import type { DomainExtension } from "../agent/lib/diagnostics/domain-extensions.js";
 import {
   DiagnosticSessionWorkpad,
   type DiagnosticSessionIssueGateway,
 } from "../agent/lib/diagnostics/workpad.js";
+import type { DiagnosticSourceResolver } from "../agent/lib/diagnostics/source-cache.js";
 import {
   DiagnosticWorktreeManager,
   type GitCommandRunner,
@@ -25,11 +29,14 @@ import {
   prepareIssueWorkpadMutation,
   type GithubIssueSnapshot,
 } from "../agent/lib/integrations/github/issue-workpad.js";
+import sandbox from "../agent/sandbox.js";
 
 /** End-to-end-in-memory coverage for Root's Codex diagnostic-session boundary. */
 
 const canonicalPath = "/canonical/CKBoost";
-const worktreeRoot = "/isolated/failure-report";
+const canonicalRemote = "https://github.com/Alive24/CKBoost.git";
+const runtimeRoot = "/sandbox/failure-report";
+const worktreeRoot = join(runtimeRoot, ".eve", "sandbox-cache", "worktrees");
 const ckbSkillRoot = "/extensions/ckb-domain-pack";
 const ckbSkillSource =
   ckbSkillRoot + "/extension/skills/failure-report-ckb-debugging";
@@ -48,7 +55,6 @@ const backend: CodexAppServerBackendConfig = {
   sandbox_mode: "workspace-write",
   reasoning_effort: "medium",
   model_context_window_tokens: 200000,
-  worktree_root: worktreeRoot,
 };
 
 type Harness = {
@@ -66,6 +72,24 @@ type Harness = {
 };
 
 describe("Codex diagnostic session", () => {
+  it("pins Eve to just-bash and rejects configurable host workspace roots", () => {
+    expect(
+      (sandbox as unknown as { backend?: { name?: string } }).backend?.name,
+    ).toBe("just-bash");
+    expect(() =>
+      parseCodexAppServerBackendConfig({
+        ...backend,
+        worktree_root: "/caller-selected/worktree-root",
+      }),
+    ).toThrow();
+    expect(() =>
+      parseCodexAppServerBackendConfig({
+        ...backend,
+        source_root: "/caller-selected/source-root",
+      }),
+    ).toThrow();
+  });
+
   it("allocates a detached Root-owned worktree and rejects an external HEAD change", async () => {
     const harness = await createHarness();
     const allocated = await harness.manager.allocate(harness.report);
@@ -104,15 +128,31 @@ describe("Codex diagnostic session", () => {
       },
     });
 
-    harness.setHead("changed-outside-failure-report");
+    const externallyChangedHead = "b".repeat(40);
+    harness.setHead(externallyChangedHead);
     await expect(
       harness.manager.restore(harness.report, allocated.state),
     ).rejects.toThrow("HEAD changed outside FailureReport");
     await expect(
       harness.manager.captureCurrent(harness.report, allocated.state),
     ).resolves.toMatchObject({
-      state: { worktree: { head_revision: "changed-outside-failure-report" } },
+      state: { worktree: { head_revision: externallyChangedHead } },
     });
+  });
+
+  it("rejects a symlinked managed worktree root before allocating a checkout", async () => {
+    const harness = await createHarness();
+    harness.paths.addDirectory("/outside/worktrees");
+    harness.paths.setLink(worktreeRoot, "/outside/worktrees");
+
+    await expect(harness.manager.allocate(harness.report)).rejects.toThrow(
+      "`.eve/sandbox-cache/worktrees` directory cannot be resolved safely",
+    );
+    expect(
+      harness.calls.some(
+        (call) => call.args[0] === "worktree" && call.args[1] === "add",
+      ),
+    ).toBe(false);
   });
 
   it("materializes every selected extension skill in deterministic delegation order", async () => {
@@ -384,13 +424,7 @@ async function createHarness(
   const loaded = failureReportSchema.parse(
     JSON.parse(await readFile(fixture, "utf8")),
   );
-  const report = failureReportSchema.parse({
-    ...loaded,
-    target: {
-      ...loaded.target,
-      source_checkout_path: canonicalPath,
-    },
-  });
+  const report = loaded;
   const calls: Array<{ cwd: string; args: string[] }> = [];
   const snapshotBranches = new Map<string, string>();
   let worktreePath: string | undefined;
@@ -448,15 +482,32 @@ async function createHarness(
       return report.target.revision;
     }
     if (command === "remote get-url origin") {
-      return "git@github.com:Alive24/CKBoost.git";
+      return canonicalRemote;
     }
     throw new Error("Unexpected git command: " + input.cwd + " git " + command);
   };
   const domainExtensions = options.domainExtensions ?? [createCkbExtension()];
+  const sourceCache: DiagnosticSourceResolver = {
+    async acquire() {
+      return {
+        canonical_path: canonicalPath,
+        canonical_remote: canonicalRemote,
+        base_revision: report.target.revision,
+      };
+    },
+    async restore(_report, recordedBaseRevision) {
+      return {
+        canonical_path: canonicalPath,
+        canonical_remote: canonicalRemote,
+        base_revision: recordedBaseRevision,
+      };
+    },
+  };
   const manager = new DiagnosticWorktreeManager({
     domainExtensions,
     backendId: "codex_app_server",
-    root: worktreeRoot,
+    runtimeRoot,
+    sourceCache,
     git,
     paths,
   });
@@ -612,6 +663,7 @@ function createIssueGateway(
 /** In-memory filesystem with symlink visibility and no implicit overwrites. */
 class FakePathOperations implements WorktreePathOperations {
   private readonly directories = new Set<string>([
+    runtimeRoot,
     canonicalPath,
     worktreeRoot,
     ckbSkillRoot,
