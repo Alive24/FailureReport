@@ -18,7 +18,7 @@ const resolveModel = createCodexAppServerModelResolver(backend);
 
 export default defineAgent({
   description:
-    "Execute a Root-prepared coding investigation in its verified isolated worktree through Codex App-server.",
+    "Diagnose a Root-prepared failure in its verified isolated worktree through Codex App Server.",
   model: defineDynamic({
     fallback: createBlockedCodexAppServerModel(),
     events: {

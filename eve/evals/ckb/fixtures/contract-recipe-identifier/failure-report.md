@@ -1,9 +1,6 @@
 # Gold Failure Report: Protocol Recipe Method Path Mismatch
 
-Fixture ID: `ckboost/commit-44b1c88-recipe-identifier`
-Schema target: `failure-report/v1`
-Fixture perspective: reconstructed from repository history before the one-line fix
-Last reconstructed: 2026-07-11
+Fixture ID: `ckboost/commit-44b1c88-recipe-identifier` Schema target: `failure-report/v1` Fixture perspective: reconstructed from repository history before the one-line fix Last reconstructed: 2026-07-11
 
 ## Report State
 
@@ -11,13 +8,10 @@ Last reconstructed: 2026-07-11
 - Domain pack: `ckb`
 - Severity: medium, contract-validation blocking
 - Confidence in root cause: high
-- UAT required: no, provided contract tests and deterministic validation are the
-  required verification surface
+- UAT required: no, provided contract tests and deterministic validation are the required verification surface
 - Historical fix: commit `44b1c88481df2d176c0ee96226996017fcad85f5`
 
-No original user-authored issue or Codex repair conversation was found locally for
-this 2025 commit. This fixture is explicitly marked as repository-history
-reconstruction, not as a recovered historical transcript.
+No original user-authored issue or Codex repair conversation was found locally for this 2025 commit. This fixture is explicitly marked as repository-history reconstruction, not as a recovered historical transcript.
 
 ## Target
 
@@ -31,24 +25,16 @@ reconstruction, not as a recovered historical transcript.
 
 ## Reconstructed Failure
 
-The protocol contract receives a transaction recipe whose method path is the fully
-qualified identifier `CKBoostProtocol.update_protocol`. The fallback, SSRI entry
-point, protocol module, and integration-test witnesses all use that identifier.
+The protocol contract receives a transaction recipe whose method path is the fully qualified identifier `CKBoostProtocol.update_protocol`. The fallback, SSRI entry point, protocol module, and integration-test witnesses all use that identifier.
 
-At the parent revision, the `update_protocol` validation rule was constructed with
-the shorter byte string `update_protocol`. The validation framework compares the
-recipe method path and rule method path exactly. It therefore returns
-`WrongMethodPath` before the intended cell-count, immutability, and business-rule
-checks can run.
+At the parent revision, the `update_protocol` validation rule was constructed with the shorter byte string `update_protocol`. The validation framework compares the recipe method path and rule method path exactly. It therefore returns `WrongMethodPath` before the intended cell-count, immutability, and business-rule checks can run.
 
 ## Expected Behavior
 
 - The rule identifier exactly matches the method path carried by the recipe witness.
 - A valid protocol creation or update reaches the intended validation rules.
-- Invalid admin-lock, type-script, argument, and protocol-data changes continue to
-  fail for their own reasons.
-- The fix remains local to the method-path contract and does not rename the public
-  SSRI method or change transaction data structures.
+- Invalid admin-lock, type-script, argument, and protocol-data changes continue to fail for their own reasons.
+- The fix remains local to the method-path contract and does not rename the public SSRI method or change transaction data structures.
 
 ## Evidence
 
@@ -59,40 +45,33 @@ checks can run.
 - `modules.rs` creates recipe witnesses with `CKBoostProtocol.update_protocol`.
 - Integration tests construct the same fully qualified witness path.
 - `recipes.rs` alone used `update_protocol` in `TransactionValidationRules::new`.
-- `TransactionValidationRules::validate` compares the two byte sequences exactly
-  and returns `WrongMethodPath` on mismatch.
+- `TransactionValidationRules::validate` compares the two byte sequences exactly and returns `WrongMethodPath` on mismatch.
 - Commit `44b1c88` changes only that short identifier to the fully qualified one.
 
 ### Unknown Or Unverified
 
-- The original failing transaction and exact runtime log are not present in the
-  recovered local history.
-- The ignored integration test suite was not a reliable historical execution
-  record; its ignore annotations mention witness-position limitations.
+- The original failing transaction and exact runtime log are not present in the recovered local history.
+- The ignored integration test suite was not a reliable historical execution record; its ignore annotations mention witness-position limitations.
 - The fixture does not claim a production deployment or chain-level UAT result.
 
 ## Hypotheses
 
-| Hypothesis                                                             | Status                    | Evidence                                                            |
-| ---------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------- |
-| The validation rule method path is shorter than the recipe method path | Confirmed                 | Exact source comparison and one-line historical fix                 |
-| The recipe witness is malformed                                        | Rejected as primary cause | All callers use the expected fully qualified path                   |
-| Contract cell/business rules are the first failing layer               | Rejected as primary cause | Method-path comparison occurs before those rules                    |
-| The public method should be renamed to the short path                  | Rejected                  | Entrypoints, modules, and tests consistently use the qualified path |
+| Hypothesis | Status | Evidence |
+| --- | --- | --- |
+| The validation rule method path is shorter than the recipe method path | Confirmed | Exact source comparison and one-line historical fix |
+| The recipe witness is malformed | Rejected as primary cause | All callers use the expected fully qualified path |
+| Contract cell/business rules are the first failing layer | Rejected as primary cause | Method-path comparison occurs before those rules |
+| The public method should be renamed to the short path | Rejected | Entrypoints, modules, and tests consistently use the qualified path |
 
 ## Diagnosis
 
-This is a contract-internal identifier drift failure. A refactor normalized method
-names across the contract surface but missed the validation-rule constructor. The
-agent must recognize that a one-token namespace mismatch can prevent all deeper
-smart-contract reasoning from executing.
+This is a contract-internal identifier drift failure. A refactor normalized method names across the contract surface but missed the validation-rule constructor. The agent must recognize that a one-token namespace mismatch can prevent all deeper smart-contract reasoning from executing.
 
 ## Todo Handoff
 
 ### Goal
 
-Restore exact method-path agreement for protocol update validation without changing
-the public contract method, transaction recipe format, or unrelated rules.
+Restore exact method-path agreement for protocol update validation without changing the public contract method, transaction recipe format, or unrelated rules.
 
 ### Scope In
 
@@ -109,13 +88,9 @@ the public contract method, transaction recipe format, or unrelated rules.
 
 ### Verification
 
-- A valid protocol creation/update fixture reaches validation without
-  `WrongMethodPath`.
-- Existing invalid-lock and invalid-type-script tests still reject the invalid
-  transactions.
-- Source search finds one canonical qualified method path across dispatch,
-  witness construction, modules, and validation rules.
+- A valid protocol creation/update fixture reaches validation without `WrongMethodPath`.
+- Existing invalid-lock and invalid-type-script tests still reject the invalid transactions.
+- Source search finds one canonical qualified method path across dispatch, witness construction, modules, and validation rules.
 - Any ignored test limitation is reported separately from the method-path result.
 
-The historical repair is intentionally a one-line correction. The fixture should
-not reward a broad rewrite for this failure class.
+The historical repair is intentionally a one-line correction. The fixture should not reward a broad rewrite for this failure class.

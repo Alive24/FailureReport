@@ -92,7 +92,7 @@ const verificationSchema = z
 /**
  * Validates the GitHub Issue binding stored alongside a report.
  *
- * This deliberately carries only collaboration metadata; execution state lives
+ * This deliberately carries only collaboration metadata; diagnostic session state lives
  * separately so a backend-specific resume token cannot become shared context.
  */
 export const githubIssueContextSchema = z
@@ -109,29 +109,80 @@ export const githubIssueContextSchema = z
   .strict();
 
 /** Validates the immutable identity and current revision of an isolated worktree. */
-export const executionWorktreeSchema = z
+export const diagnosticWorktreeSchema = z
   .object({
     path: z.string().min(1),
     identity: z.string().min(1),
-    branch: z.string().min(1),
     base_revision: z.string().min(1),
     head_revision: z.string().min(1),
   })
   .strict();
 
-/**
- * Validates durable backend state required to resume an isolated coding execution.
- * The state belongs to the report but is intentionally outside `shared_context`.
- */
-export const executionStateSchema = z
+/** A finalized, diagnostic-only Git snapshot. */
+export const diagnosticBranchSchema = z
   .object({
-    domain_id: identifierSchema,
-    backend_id: identifierSchema,
-    codex_thread_id: z.string().min(1).optional(),
-    worktree: executionWorktreeSchema,
-    last_execution_at: timestampSchema.optional(),
+    name: z.string().min(1),
+    head_revision: z.string().min(1),
+    finalized_at: timestampSchema,
+    reuse_policy: z.literal("diagnostic_snapshot_only"),
   })
   .strict();
+
+/**
+ * Canonical Root-selected extension set for a diagnosis.
+ *
+ * The ordering is part of the durable contract so worktree identity, symlink
+ * materialization, and rendered native-skill delegation stay deterministic.
+ */
+export const diagnosticDomainExtensionsSchema = z
+  .array(identifierSchema)
+  .min(1)
+  .superRefine((extensions, context) => {
+    for (let index = 0; index < extensions.length; index += 1) {
+      const current = extensions[index];
+      const previous = extensions[index - 1];
+      if (previous && current && previous >= current) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "domain_extensions must be unique and sorted in ascending order",
+          path: [index],
+        });
+      }
+    }
+  });
+
+/**
+ * Validates durable backend state required to resume an isolated diagnostic session.
+ * The state belongs to the report but is intentionally outside `shared_context`.
+ */
+export const diagnosticSessionSchema = z
+  .object({
+    lifecycle: z.enum(["active", "finalized"]),
+    domain_extensions: diagnosticDomainExtensionsSchema,
+    backend_id: identifierSchema,
+    codex_thread_id: z.string().min(1).optional(),
+    worktree: diagnosticWorktreeSchema,
+    diagnostic_branch: diagnosticBranchSchema.optional(),
+    last_diagnosed_at: timestampSchema.optional(),
+  })
+  .strict()
+  .superRefine((session, context) => {
+    if (session.lifecycle === "active" && session.diagnostic_branch) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "an active diagnostic session cannot have a diagnostic_branch",
+        path: ["diagnostic_branch"],
+      });
+    }
+    if (session.lifecycle === "finalized" && !session.diagnostic_branch) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "a finalized diagnostic session requires a diagnostic_branch",
+        path: ["diagnostic_branch"],
+      });
+    }
+  });
 
 /**
  * Validates the complete evidence-backed failure report persisted in a workpad.
@@ -159,7 +210,7 @@ export const failureReportSchema = z
     created_at: timestampSchema,
     updated_at: timestampSchema,
     shared_context: githubIssueContextSchema.optional(),
-    execution_state: executionStateSchema.optional(),
+    diagnostic_session: diagnosticSessionSchema.optional(),
     origin: z
       .object({
         source: z.enum([
@@ -177,7 +228,7 @@ export const failureReportSchema = z
       .object({
         repository: z.string().min(1),
         revision: z.string().min(1),
-        worktree_identity: z.string().min(1),
+        source_checkout_path: z.string().min(1),
         components: z.array(z.string().min(1)).min(1),
         environment: z.array(environmentEntrySchema),
       })
@@ -406,10 +457,10 @@ export const rootResultSchema = z
 export type FailureReport = z.infer<typeof failureReportSchema>;
 /** Typed GitHub Issue context inferred from the durable schema. */
 export type GithubIssueContext = z.infer<typeof githubIssueContextSchema>;
-/** Typed durable execution state inferred from the durable schema. */
-export type ExecutionState = z.infer<typeof executionStateSchema>;
-/** Typed isolated-worktree identity inferred from the durable schema. */
-export type ExecutionWorktree = z.infer<typeof executionWorktreeSchema>;
+/** Typed durable diagnostic-session state inferred from the durable schema. */
+export type DiagnosticSession = z.infer<typeof diagnosticSessionSchema>;
+/** Typed isolated diagnostic-worktree identity inferred from the durable schema. */
+export type DiagnosticWorktree = z.infer<typeof diagnosticWorktreeSchema>;
 /** Typed public Root request inferred from the transport schema. */
 export type RootRequest = z.infer<typeof rootRequestSchema>;
 /** Typed public Root result inferred from the transport schema. */

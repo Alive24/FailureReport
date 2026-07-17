@@ -1,13 +1,10 @@
 # Provider Boundary
 
-> **Status: implemented MVP architecture.** Eve Root, the mounted CKB extension,
-> and the consumer-owned Codex worker have deliberately separate responsibilities.
+> **Status: implemented MVP architecture.** FailureReport has three separate layers: an Eve extension supplies domain capability, Root owns the diagnostic workspace/session, and the one Codex worker diagnoses inside that workspace.
 
 ## Decision
 
-FailureReport keeps Eve as the public Root Supervisor. CKB is a reusable Eve
-extension, while the application owns the generic Codex App-server worker that
-executes a Root-prepared coding task.
+Eve Root is the only public supervisor. The CKB package is an internal reusable extension, and `agent/subagents/codex/` is the only declared worker. Outer MCP, Temporal, and Codex-plugin packages call Eve's default Channel; they never call a domain extension or a worker directly.
 
 ```text
 MCP / Temporal / Codex plugin
@@ -17,168 +14,95 @@ MCP / Temporal / Codex plugin
   Eve default HTTP Channel
             |
        Eve Root Supervisor
-            |
-   tool-capable Root provider
-            |
-  mounted CKB Eve extension
-            |
- consumer-owned Codex worker
-            |
-   Codex App-server provider
-            |
- persistent Codex thread + isolated worktree
+       /                 \
+domain extensions    prepare/finalize diagnostic session
+ domain capability          |
+                    Root-owned detached worktree + workpad session
+                               |
+                    one Codex App Server worker
+                               |
+             persistent Codex thread in diagnostic worktree
 ```
 
-Only Root is public, through the default Eve Channel at
-`eve/agent/channels/eve.ts`. Neither an extension namespace, a domain id, a
-worker name, nor a provider id becomes an MCP or Temporal API.
+Only Root is public, through `eve/agent/channels/eve.ts`. An extension namespace, domain id, worker name, provider id, Git worktree path, or native-skill source is never an MCP or Temporal API field.
 
-## Root Provider
+## Responsibility Split
 
-Root needs AI SDK custom-tool support. It must be able to call Issue workpad,
-approval, routing, and declared-subagent tools, so its provider cannot ignore the
-tools Eve supplies.
+| Layer | Owns | Does not own |
+| --- | --- | --- |
+| CKB extension | CKB instructions, `failure-report-ckb-debugging`, deterministic `ckb__recommend_log` | sandbox, worktree, provider config, session preparation, subagent |
+| FailureReport Root | domain-extension registry, approval, source-checkout verification, detached worktree allocation, snapshot finalization, workpad/session/thread journal, delegation | extension skill content, third-party Codex provider implementation |
+| Codex worker | shell/Git/MCP diagnosis in Root-provided `cwd`, tests and diagnostic artifacts | selecting `cwd`, checkout, branch, skill path, GitHub workpad writes, code changes by default |
 
-FailureReport's MVP is intentionally local-first. Eve's experimental_chatgpt()
-helper reads the local codex login credentials and acts as the default,
-tool-capable AI SDK model for the product runtime; it is not just a development
-or test convenience. A Root provider factory keeps a remote deployment
-switchable later, for example to a hosted OpenAI, Anthropic, or Gateway-backed
-model.
+This respects [Eve extension boundaries](https://eve.dev/docs/extensions): extensions contribute capabilities but cannot define an agent, sandbox, schedule, or nested subagent.
 
-Do not use the Codex App-server provider as Root's model by default. The provider
-is valuable for coding work, but it does not support AI SDK custom tool schemas.
-Using it at Root would disable the mechanisms that make Root a supervisor.
+## Root-Owned Diagnostic Session
 
-## CKB Extension
+Root's always-approved `prepare_diagnostic_session` tool accepts only:
 
-packages/ckb-domain-pack/extension/ owns CKB-specific instructions, the
-ckb-debugging skill, diagnostic helpers, and tools. The application mounts the
-package at agent/extensions/ckb.ts, so Eve composes its capabilities under the
-ckb__ namespace:
+- report id and GitHub Issue identity;
+- a non-empty Root-selected `domain_extensions` set; and
+- a bounded diagnostic request.
+
+It never accepts model-provided `cwd`, branch, backend, or skill path. The fixed domain-extension registry resolves every selected installed native skill source, then Root creates or restores one deterministic detached diagnostic worktree. Before Codex runs, Root writes the durable state to the Issue workpad and materializes:
 
 ```text
-ckb__prepare_execution
-ckb__recommend_log
-ckb__ckb-debugging
+<diagnostic-worktree>/.agents/skills/failure-report-ckb-debugging
+  -> <installed-ckb-extension>/extension/skills/failure-report-ckb-debugging
 ```
 
-The extension's approval-gated ckb__prepare_execution tool accepts CKB request
-data, invokes the consumer-injected execution preparer, and appends CKB guidance
-to the returned delegation message. The mount supplies application policy — the
-backend id and worktree root — without moving CKB instructions into the app.
+The link is created only when missing. A normal file, an unexpected/broken link, a source without `SKILL.md`, or any path escaping the assigned worktree/package fails closed with `needs_input`; Root never overwrites target-repository content.
 
-This boundary follows Eve's extension rules: an extension may contribute tools,
-connections, skills, instructions, hooks, and shared lib code, but cannot declare
-agent.ts, a sandbox, schedules, limits, or nested extensions. It also does not
-compose an extension-local declared subagent. Those concerns stay with the
-consuming application.
+`finalize_diagnostic_session` accepts only the same report/Issue identity. Root rehydrates the extension set from the workpad, verifies the detached worktree and saved HEAD, then requires `git status --porcelain --untracked-files=all` to contain no target-repository changes. The only allowed untracked entries are the exact Root-created `.agents/skills/<native-skill>` symlinks; any other file, including a diagnostic artifact, requires cleanup or external evidence persistence first.
 
-## Codex App-server Worker
-
-agent/subagents/codex/ is the application-owned worker. Its dynamic model is the
-Codex App-server AI SDK provider configured with:
-
-```text
-cwd: assigned isolated worktree
-threadMode: persistent
-approvalMode: on-request
-sandboxMode: workspace-write
-```
-
-The worker uses Codex-native shell and Git capabilities and any explicitly
-configured MCP servers. Domain guidance is carried in the Root-prepared
-delegation message. The worker's load_skill framework tool is explicitly
-disabled; do not expect Eve-authored tools to be available to an
-App-server-backed worker.
-
-The App-server provider's persistent session exposes a Codex thread id. The
-system retains that id so a later FailureReport resume can continue the same
-coding conversation rather than recreate it from scratch.
-
-## Execution and Worktree Ownership
-
-Deterministic application-owned execution infrastructure, not a model, owns
-worktree allocation and safety. A mounted extension identifies the domain and
-supplies the instruction layer; the application host owns the worktree manager,
-Issue workpad gateway, and provider policy:
-
-- Root publishes the current report, then invokes the extension's approval-gated
-  preparation tool such as ckb__prepare_execution.
-- The application host allocates or validates the isolated worktree and persists
-  execution state before the extension returns a delegation message.
-- Keep the canonical checkout outside the worker's writable scope.
-- The MVP uses one deterministic mutable CKB worktree per report. A future
-  concurrent execution feature must add explicit leases or separate worktrees.
-- Record branch, base revision, and current HEAD after each execution.
-
-Codex owns the work **inside** its allocated worktree: repository inspection,
-debugger execution, code edits, tests, and the evidence-backed conclusion.
-
-## Durable State and Resume
-
-GitHub Issue state remains the collaboration source of truth. The Issue body is
-human-readable and one failure-report-workpad comment is the structured
-snapshot.
-
-The report has an optional typed execution_state rather than extending the
-GitHub-specific shared_context object:
+The report directly uses `diagnostic_session`, with no `execution_state` migration:
 
 ```ts
-type ExecutionState = {
-  domain_id: string;
+type DiagnosticSession = {
+  lifecycle: "active" | "finalized";
+  domain_extensions: string[];
   backend_id: "codex_app_server";
   codex_thread_id?: string;
   worktree: {
     identity: string;
     path: string;
-    branch: string;
     base_revision: string;
     head_revision: string;
   };
-  last_execution_at?: string;
+  diagnostic_branch?: {
+    name: string;
+    head_revision: string;
+    finalized_at: string;
+    reuse_policy: "diagnostic_snapshot_only";
+  };
+  last_diagnosed_at?: string;
 };
 ```
 
-Before resuming the worker, generic execution infrastructure reloads the workpad
-and validates the worktree, repository origin, branch, base revision, and Git
-state. The generic Codex model factory then resumes its provider session. A
-missing or unsafe worktree requires an explicit new execution or needs_input;
-never silently fall back to the canonical checkout.
+`target.source_checkout_path` identifies the Root-provided source checkout. It does not mean FailureReport created that checkout. Root validates canonical checkout, origin, deterministic worktree path, detached state, base revision, and HEAD before resume. External HEAD mutation becomes `needs_input`, never an implicit fallback to the source checkout. After explicit finalization of a clean session, Root creates `failure-report/diagnostic/<identity>` at the final HEAD without checking it out. That ref is a diagnostic-only snapshot: a future coding agent must use a separate implementation worktree/branch and must not create a PR from this snapshot.
 
-## Implementation Constraints
+GitHub's Issue body and marked workpad remain shared collaboration context; the workpad additionally persists diagnostic session state. The worker never gains GitHub write capability.
 
-- Keep RootRequest and RootResult stable at every outer boundary. An MCP or
-  Temporal host may use `eve/client` to call the default Eve Channel, but must
-  never import `eve/agent`, a domain extension, or a provider implementation.
-- Root owns Issue-write approval. The Codex worker cannot write GitHub; a
-  deterministic host journal persists its provider session metadata only inside
-  a Root-approved execution.
-- Domain extensions stay internal and are selected only by Root.
-- Wrap the community Codex App-server provider behind a local factory and pin its
-  version. It is an integration dependency, not a new public contract.
-- Tests cover protocol validation, extension compilation, worktree allocation and
-  rejection paths, and Codex thread start/resume without a live model call.
+## Codex Native Skill and Worker
 
-## Verification
+The prepared delegation begins with every selected `$failure-report-…` native skill before the revision-bound diagnostic-session envelope. Codex's native skill discovery finds the worktree-local `.agents/skills` symlinks, so the worker uses native `$skill`, shell, Git, and MCP rather than Eve's `load_skill` tool or a copied global skill.
 
-Use the CKBoost #54 fixture for a read-only end-to-end check:
+The Codex App Server model is launched only after Root validates the envelope and workpad. It receives:
 
-1. Root publishes and approves a CKB-appropriate report through
-   ckb__prepare_execution.
-2. The extension returns a CKB-guided delegation after the consumer host has
-   prepared the allocated worktree.
-3. The codex worker receives that exact delegation and creates a Codex
-   App-server thread.
-4. The provider journal writes its thread id and final worktree HEAD to the
-   workpad without allowing the worker to mutate GitHub.
-5. A second call resumes the stored thread and worktree without creating a
-   duplicate workpad comment.
+```text
+cwd: Root-owned detached diagnostic worktree
+threadMode: persistent
+approvalMode: on-request
+sandboxMode: workspace-write
+```
 
-Use #45 as the sparse-evidence case: the worker should preserve uncertainty and
-avoid inventing a diagnosis.
+`workspace-write` permits focused tests, caches, and debugging artifacts. It does not authorize a diagnostic worker to modify business code, commit, or turn the task into implementation unless Root explicitly grants that authority. After every turn, Root records the current HEAD, timestamp, and provider thread id so the same Codex thread can resume later.
+
+## Verification Scope
+
+Tests cover direct protocol renames and legacy-field rejection; allocation and resume; external-HEAD rejection; workpad/thread persistence; native-skill link creation, repair, and fail-closed conflicts; and the CKB extension's pure-capability shape. An optional local App Server smoke test can query `skills/list` in a temporary Git worktree without starting a model turn.
 
 ## References
 
 - [Eve extensions](https://eve.dev/docs/extensions)
-- [Codex CLI App Server provider](https://ai-sdk.dev/providers/community-providers/codex-app-server)
+- [Codex App Server native skills](https://learn.chatgpt.com/docs/app-server#skills)

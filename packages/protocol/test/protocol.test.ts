@@ -75,28 +75,108 @@ describe("FailureReport protocol", () => {
     expect(withIssue.shared_context?.workpad_revision).toBe(3);
   });
 
-  it("keeps Codex execution state typed and outside shared Issue context", async () => {
+  it("keeps multi-extension Codex diagnostic-session state typed and outside shared Issue context", async () => {
     const report = failureReportSchema.parse(
       await loadFixture("issue-54.json"),
     );
-    const withExecution = failureReportSchema.parse({
+    const withDiagnosticSession = failureReportSchema.parse({
       ...report,
-      execution_state: {
-        domain_id: "ckb",
+      diagnostic_session: {
+        lifecycle: "active",
+        domain_extensions: ["ckb", "evm"],
         backend_id: "codex_app_server",
         codex_thread_id: "thr_ckb_54",
         worktree: {
           path: "/tmp/failure-report/ckb-54",
-          identity: "ckb-issue-54",
-          branch: "failure-report/ckb-issue-54",
+          identity: "issue-54",
           base_revision: report.target.revision,
           head_revision: report.target.revision,
         },
-        last_execution_at: report.updated_at,
+        last_diagnosed_at: report.updated_at,
       },
     });
 
-    expect(withExecution.execution_state?.codex_thread_id).toBe("thr_ckb_54");
-    expect(withExecution.shared_context).toBeUndefined();
+    expect(withDiagnosticSession.diagnostic_session?.codex_thread_id).toBe(
+      "thr_ckb_54",
+    );
+    expect(withDiagnosticSession.diagnostic_session?.domain_extensions).toEqual(
+      ["ckb", "evm"],
+    );
+    expect(withDiagnosticSession.shared_context).toBeUndefined();
+  });
+
+  it("rejects legacy execution fields rather than silently migrating a workpad", async () => {
+    const report = failureReportSchema.parse(
+      await loadFixture("issue-54.json"),
+    );
+
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        diagnostic_session: {
+          domain_id: "ckb",
+          backend_id: "codex_app_server",
+          worktree: {
+            path: "/tmp/failure-report/ckb-54",
+            identity: "ckb-issue-54",
+            branch: "failure-report/diagnostic/ckb/ckb-issue-54",
+            base_revision: report.target.revision,
+            head_revision: report.target.revision,
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        execution_state: {
+          domain_id: "ckb",
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        target: {
+          ...report.target,
+          worktree_identity: report.target.source_checkout_path,
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("requires canonical extension sets and a branch for finalized diagnostics", async () => {
+    const report = failureReportSchema.parse(
+      await loadFixture("issue-54.json"),
+    );
+    const worktree = {
+      path: "/tmp/failure-report/issue-54",
+      identity: "diagnostic-issue-54",
+      base_revision: report.target.revision,
+      head_revision: report.target.revision,
+    };
+
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        diagnostic_session: {
+          lifecycle: "active",
+          domain_extensions: ["evm", "ckb"],
+          backend_id: "codex_app_server",
+          worktree,
+        },
+      }),
+    ).toThrow("domain_extensions must be unique and sorted");
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        diagnostic_session: {
+          lifecycle: "finalized",
+          domain_extensions: ["ckb"],
+          backend_id: "codex_app_server",
+          worktree,
+        },
+      }),
+    ).toThrow("requires a diagnostic_branch");
   });
 });

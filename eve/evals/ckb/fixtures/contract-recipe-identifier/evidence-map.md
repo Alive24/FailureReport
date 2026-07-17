@@ -20,8 +20,7 @@ The following surfaces use `CKBoostProtocol.update_protocol`:
 - `contracts/tests/src/protocol_type_tests.rs`
 - `contracts/tests/src/transaction_context_integration_tests.rs`
 
-This establishes the canonical identifier from multiple independent callers and
-test builders.
+This establishes the canonical identifier from multiple independent callers and test builders.
 
 ### E2: Mismatching Rule Identifier
 
@@ -31,8 +30,7 @@ At the parent revision, only this constructor used the short path:
 TransactionValidationRules::new(b"update_protocol")
 ```
 
-The rule lives in `recipes.rs`, while the transaction recipe carries the qualified
-path from E1.
+The rule lives in `recipes.rs`, while the transaction recipe carries the qualified path from E1.
 
 ### E3: Exact Framework Comparison
 
@@ -55,15 +53,11 @@ update_protocol
 -> CKBoostProtocol.update_protocol
 ```
 
-No other file changes. This is strong repair evidence, but it does not itself prove
-the original runtime trace.
+No other file changes. This is strong repair evidence, but it does not itself prove the original runtime trace.
 
 ### E5: Test Context
 
-The repository contains protocol and transaction-context tests using the qualified
-path. Several integration tests were ignored because the test framework required a
-TransactionRecipe witness in the last position. That limitation must remain a
-separate verification note, not be misdiagnosed as the method-path bug.
+The repository contains protocol and transaction-context tests using the qualified path. Several integration tests were ignored because the test framework required a TransactionRecipe witness in the last position. That limitation must remain a separate verification note, not be misdiagnosed as the method-path bug.
 
 ## Causal Classification
 
