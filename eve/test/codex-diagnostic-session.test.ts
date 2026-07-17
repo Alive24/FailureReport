@@ -297,6 +297,29 @@ describe("Codex diagnostic session", () => {
             stream: new ReadableStream({
               start(controller) {
                 controller.enqueue({
+                  type: "tool-input-start",
+                  id: "native-command",
+                  toolName: "exec",
+                });
+                controller.enqueue({
+                  type: "tool-call",
+                  toolCallId: "native-command",
+                  toolName: "exec",
+                  input: { command: "git status --short" },
+                  providerExecuted: true,
+                });
+                controller.enqueue({
+                  type: "tool-result",
+                  toolCallId: "native-command",
+                  toolName: "exec",
+                  result: { exitCode: 0 },
+                });
+                controller.enqueue({
+                  type: "text-delta",
+                  id: "diagnostic-text",
+                  delta: "Collected native diagnostic evidence.",
+                });
+                controller.enqueue({
                   type: "finish",
                   providerMetadata: { codex: { sessionId: threadId } },
                 });
@@ -323,9 +346,16 @@ describe("Codex diagnostic session", () => {
     };
     const result = await streamingModel.doStream({});
     const reader = result.stream.getReader();
-    while (!(await reader.read()).done) {
-      // Drain the finish part so the workpad journal records the final HEAD.
+    const parts: Array<{ type?: string }> = [];
+    while (true) {
+      const next = await reader.read();
+      if (next.done) {
+        break;
+      }
+      parts.push(next.value as { type?: string });
     }
+
+    expect(parts.map((part) => part.type)).toEqual(["text-delta", "finish"]);
 
     expect(providerSettings[0]?.cwd).toBe(
       prepared.diagnostic_session.state.worktree.path,

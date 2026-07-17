@@ -169,7 +169,9 @@ function createDiagnosticSessionWorkpad(
 
 /**
  * Wraps Codex's model so durable thread and worktree state is saved at lifecycle
- * boundaries without exposing GitHub-writing tools to the model itself.
+ * boundaries. Codex's own shell, Git, and MCP actions are provider-executed and
+ * must not become Eve tool calls: Eve would otherwise schedule a second worker
+ * model step whose messages no longer contain Root's prepared envelope.
  */
 function trackCodexModel(
   rawModel: CodexAppServerLanguageModel,
@@ -208,9 +210,10 @@ function trackCodexModel(
 }
 
 /**
- * Mirrors a streaming response and persists completion exactly once.
- * A provider may emit a finish part before the reader reports `done`, so both
- * paths share the same idempotent completion guard.
+ * Mirrors a streaming response and persists completion exactly once, while
+ * keeping Codex-native tool traffic inside the App Server boundary. A provider
+ * may emit a finish part before the reader reports `done`, so both paths share
+ * the same idempotent completion guard.
  */
 function persistAfterFinish<T>(
   stream: ReadableStream<T>,
@@ -232,16 +235,22 @@ function persistAfterFinish<T>(
   return new ReadableStream<T>({
     async pull(controller) {
       try {
-        const next = await reader.read();
-        if (next.done) {
-          await persistCompletion();
-          controller.close();
+        while (true) {
+          const next = await reader.read();
+          if (next.done) {
+            await persistCompletion();
+            controller.close();
+            return;
+          }
+          if (isFinishPart(next.value)) {
+            await persistCompletion(next.value);
+          }
+          if (isCodexNativeToolStreamPart(next.value)) {
+            continue;
+          }
+          controller.enqueue(next.value);
           return;
         }
-        if (isFinishPart(next.value)) {
-          await persistCompletion(next.value);
-        }
-        controller.enqueue(next.value);
       } catch (error) {
         controller.error(error);
       }
@@ -255,6 +264,26 @@ function persistAfterFinish<T>(
 /** Identifies the provider stream part that carries final completion metadata. */
 function isFinishPart(value: unknown): boolean {
   return isRecord(value) && value.type === "finish";
+}
+
+/**
+ * Codex App Server executes these actions itself. Re-emitting them as AI SDK
+ * tool parts would make Eve's harness start another model step, which is both
+ * an incorrect ownership boundary and loses the one-time delegation envelope.
+ */
+function isCodexNativeToolStreamPart(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return false;
+  }
+  return new Set([
+    "tool-input-start",
+    "tool-input-delta",
+    "tool-input-end",
+    "tool-call",
+    "tool-result",
+    "tool-approval-request",
+    "tool-approval-response",
+  ]).has(value.type);
 }
 
 /** Extracts the optional session id from the Codex provider's finish metadata. */
