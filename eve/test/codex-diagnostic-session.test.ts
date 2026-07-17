@@ -11,7 +11,7 @@ import {
 import { createCodexAppServerModelResolver } from "../agent/lib/backends/codex-app-server-model.js";
 import type { CodexAppServerBackendConfig } from "../agent/lib/backends/codex-app-server-config.js";
 import { diagnosticSessionPreparationEnvelopeSchema } from "../agent/lib/diagnostics/envelope.js";
-import type { DiagnosticDomainProfile } from "../agent/lib/diagnostics/domain-profiles.js";
+import type { DomainExtension } from "../agent/lib/diagnostics/domain-extensions.js";
 import {
   DiagnosticSessionWorkpad,
   type DiagnosticSessionIssueGateway,
@@ -30,10 +30,14 @@ import {
 
 const canonicalPath = "/canonical/CKBoost";
 const worktreeRoot = "/isolated/failure-report";
-const nativeSkillRoot = "/extensions/ckb-domain-pack";
-const nativeSkillSource =
-  nativeSkillRoot + "/extension/skills/failure-report-ckb-debugging";
-const nativeSkillName = "failure-report-ckb-debugging";
+const ckbSkillRoot = "/extensions/ckb-domain-pack";
+const ckbSkillSource =
+  ckbSkillRoot + "/extension/skills/failure-report-ckb-debugging";
+const ckbSkillName = "failure-report-ckb-debugging";
+const evmSkillRoot = "/extensions/evm-domain-pack";
+const evmSkillSource =
+  evmSkillRoot + "/extension/skills/failure-report-evm-debugging";
+const evmSkillName = "failure-report-evm-debugging";
 
 const backend: CodexAppServerBackendConfig = {
   schema_version: "failure-report/codex-app-server/v1",
@@ -49,45 +53,56 @@ const backend: CodexAppServerBackendConfig = {
 
 type Harness = {
   report: FailureReport;
-  profile: DiagnosticDomainProfile;
+  domainExtensions: readonly DomainExtension[];
   manager: DiagnosticWorktreeManager;
   workpad: DiagnosticSessionWorkpad;
   paths: FakePathOperations;
   currentReport(): FailureReport;
+  currentBranch(): string;
   setHead(value: string): void;
+  setPorcelain(value: string): void;
+  setSnapshotBranch(name: string, head: string): void;
   calls: Array<{ cwd: string; args: string[] }>;
 };
 
 describe("Codex diagnostic session", () => {
-  it("allocates a Root-owned worktree, materializes the native skill, and rejects an external HEAD change", async () => {
+  it("allocates a detached Root-owned worktree and rejects an external HEAD change", async () => {
     const harness = await createHarness();
     const allocated = await harness.manager.allocate(harness.report);
-    const skillLink = nativeSkillLink(allocated.state.worktree.path);
-
-    expect(harness.paths.linkTarget(skillLink)).toBe(nativeSkillSource);
-    expect(allocated.state.worktree.branch).toMatch(
-      /^failure-report\/diagnostic\/ckb\//,
+    const skillLink = nativeSkillLink(
+      allocated.state.worktree.path,
+      ckbSkillName,
     );
-    await expect(
-      harness.manager.restore(harness.report, allocated.state),
-    ).resolves.toMatchObject({
-      state: {
-        domain_id: "ckb",
-        worktree: { branch: allocated.state.worktree.branch },
+
+    expect(harness.paths.linkTarget(skillLink)).toBe(ckbSkillSource);
+    expect(allocated.state).toMatchObject({
+      lifecycle: "active",
+      domain_extensions: ["ckb"],
+      worktree: {
+        identity: expect.stringMatching(/^diagnostic-/),
       },
     });
+    expect(allocated.state.worktree).not.toHaveProperty("branch");
+    expect(harness.currentBranch()).toBe("");
     expect(harness.calls).toContainEqual(
       expect.objectContaining({
         args: [
           "worktree",
           "add",
-          "-b",
-          allocated.state.worktree.branch,
+          "--detach",
           allocated.state.worktree.path,
           harness.report.target.revision,
         ],
       }),
     );
+    await expect(
+      harness.manager.restore(harness.report, allocated.state),
+    ).resolves.toMatchObject({
+      state: {
+        lifecycle: "active",
+        domain_extensions: ["ckb"],
+      },
+    });
 
     harness.setHead("changed-outside-failure-report");
     await expect(
@@ -100,16 +115,47 @@ describe("Codex diagnostic session", () => {
     });
   });
 
+  it("materializes every selected extension skill in deterministic delegation order", async () => {
+    const harness = await createHarness({
+      domainExtensions: [createCkbExtension(), createEvmExtension()],
+    });
+    const prepared = await harness.workpad.prepare(preparationFor(harness));
+    const allocated = prepared.diagnostic_session;
+
+    expect(allocated.state.domain_extensions).toEqual(["ckb", "evm"]);
+    expect(
+      harness.paths.linkTarget(
+        nativeSkillLink(allocated.state.worktree.path, ckbSkillName),
+      ),
+    ).toBe(ckbSkillSource);
+    expect(
+      harness.paths.linkTarget(
+        nativeSkillLink(allocated.state.worktree.path, evmSkillName),
+      ),
+    ).toBe(evmSkillSource);
+
+    expect(prepared.delegation_message).toMatch(
+      /^\$failure-report-ckb-debugging \$failure-report-evm-debugging/m,
+    );
+    expect(prepared.diagnostic_session.state.domain_extensions).toEqual([
+      "ckb",
+      "evm",
+    ]);
+  });
+
   it("rebuilds only a missing native skill symlink and rejects unsafe replacements", async () => {
     const harness = await createHarness();
     const allocated = await harness.manager.allocate(harness.report);
-    const skillLink = nativeSkillLink(allocated.state.worktree.path);
+    const skillLink = nativeSkillLink(
+      allocated.state.worktree.path,
+      ckbSkillName,
+    );
 
     harness.paths.removeLink(skillLink);
     await expect(
       harness.manager.restore(harness.report, allocated.state),
     ).resolves.toBeDefined();
-    expect(harness.paths.linkTarget(skillLink)).toBe(nativeSkillSource);
+    expect(harness.paths.linkTarget(skillLink)).toBe(ckbSkillSource);
 
     harness.paths.setLink(skillLink, "/unexpected-skill-source");
     harness.paths.addDirectory("/unexpected-skill-source");
@@ -124,47 +170,68 @@ describe("Codex diagnostic session", () => {
     ).rejects.toThrow("non-symlink native skill entry");
   });
 
-  it("fails closed when the registered skill source is missing", async () => {
-    const profile = createProfile("/missing/skill-source");
-    const harness = await createHarness({ profile });
-
-    await expect(harness.manager.allocate(harness.report)).rejects.toThrow(
+  it("fails closed when a selected extension skill source is missing or escapes its package", async () => {
+    const missing = await createHarness({
+      domainExtensions: [createCkbExtension("/missing/skill-source")],
+    });
+    await expect(missing.manager.allocate(missing.report)).rejects.toThrow(
       "native skill source is missing",
     );
     expect(
-      harness.calls.some(
+      missing.calls.some(
         (call) => call.args[0] === "worktree" && call.args[1] === "add",
       ),
     ).toBe(false);
-  });
 
-  it("fails closed when a registered skill source escapes its extension package", async () => {
-    const profile = createProfile("/external/skill-source");
-    const harness = await createHarness({ profile });
-    harness.paths.addDirectory("/external/skill-source");
-    harness.paths.addFile("/external/skill-source/SKILL.md");
-
-    await expect(harness.manager.allocate(harness.report)).rejects.toThrow(
+    const escaped = await createHarness({
+      domainExtensions: [createCkbExtension("/external/skill-source")],
+    });
+    escaped.paths.addDirectory("/external/skill-source");
+    escaped.paths.addFile("/external/skill-source/SKILL.md");
+    await expect(escaped.manager.allocate(escaped.report)).rejects.toThrow(
       "resolves outside its extension package",
     );
+
+    const duplicate = await createHarness({
+      domainExtensions: [
+        createCkbExtension(),
+        {
+          id: "evm",
+          native_skills: [
+            {
+              name: ckbSkillName,
+              source_root: evmSkillRoot,
+              source_directory: evmSkillSource,
+            },
+          ],
+        },
+      ],
+    });
+    await expect(duplicate.manager.allocate(duplicate.report)).rejects.toThrow(
+      "invalid native skill name",
+    );
+  });
+
+  it("rejects an envelope that tries to change the active extension set", async () => {
+    const harness = await createHarness();
+    await expect(
+      harness.workpad.prepare(
+        diagnosticSessionPreparationEnvelopeSchema.parse({
+          schema_version: "failure-report/diagnostic-session/v1",
+          domain_extensions: ["ckb", "evm"],
+          report_id: harness.report.id,
+          repository: "Alive24/CKBoost",
+          issue_number: 54,
+          request: "Inspect the first failing CKB boundary.",
+          native_skill_names: [ckbSkillName, evmSkillName],
+        }),
+      ),
+    ).rejects.toThrow("native skills do not match");
   });
 
   it("persists a Codex thread and resumes it in the same Root-provided cwd", async () => {
     const harness = await createHarness();
-    const prepared = await harness.workpad.prepare(
-      diagnosticSessionPreparationEnvelopeSchema.parse({
-        schema_version: "failure-report/diagnostic-session/v1",
-        domain_id: "ckb",
-        report_id: harness.report.id,
-        repository: "Alive24/CKBoost",
-        issue_number: 54,
-        request: "Inspect the first failing CKB boundary.",
-        native_skill_names: [nativeSkillName],
-      }),
-    );
-    expect(prepared.delegation_message).toMatch(
-      new RegExp("^\\$" + nativeSkillName),
-    );
+    const prepared = await harness.workpad.prepare(preparationFor(harness));
 
     const providerSettings: Array<Record<string, unknown>> = [];
     const createProvider = ((options: {
@@ -238,10 +305,77 @@ describe("Codex diagnostic session", () => {
     ]);
     expect(providerSettings[1]?.resume).toBe("thr-ckb-54");
   });
+
+  it("finalizes a clean detached diagnosis into an idempotent snapshot branch without checkout", async () => {
+    const harness = await createHarness();
+    const prepared = await harness.workpad.prepare(preparationFor(harness));
+    const input = finalizationInput(harness);
+    const expectedBranch =
+      "failure-report/diagnostic/" +
+      prepared.diagnostic_session.state.worktree.identity;
+    harness.setPorcelain("?? .agents/skills/" + ckbSkillName);
+
+    const finalized = await harness.workpad.finalize(input);
+    expect(finalized.diagnostic_session).toMatchObject({
+      lifecycle: "finalized",
+      diagnostic_branch: {
+        name: expectedBranch,
+        head_revision: harness.report.target.revision,
+        reuse_policy: "diagnostic_snapshot_only",
+      },
+    });
+    expect(harness.currentBranch()).toBe("");
+    expect(harness.calls).toContainEqual(
+      expect.objectContaining({
+        args: ["status", "--porcelain", "--untracked-files=all"],
+      }),
+    );
+    expect(harness.calls).toContainEqual(
+      expect.objectContaining({
+        args: ["branch", expectedBranch, harness.report.target.revision],
+      }),
+    );
+
+    const repeated = await harness.workpad.finalize(input);
+    expect(repeated.workpad_revision).toBe(finalized.workpad_revision);
+    expect(
+      harness.calls.filter(
+        (call) => call.args[0] === "branch" && call.args[1] === expectedBranch,
+      ),
+    ).toHaveLength(1);
+    await expect(
+      harness.workpad.prepare(preparationFor(harness)),
+    ).rejects.toThrow("finalized");
+    await expect(
+      harness.manager.restore(harness.report, finalized.diagnostic_session),
+    ).rejects.toThrow("finalized");
+  });
+
+  it("refuses dirty worktrees and conflicting diagnostic snapshot refs", async () => {
+    const dirty = await createHarness();
+    await dirty.workpad.prepare(preparationFor(dirty));
+    dirty.setPorcelain("?? diagnostic-output.txt");
+    await expect(
+      dirty.workpad.finalize(finalizationInput(dirty)),
+    ).rejects.toThrow("must be clean");
+
+    const conflicting = await createHarness();
+    const prepared = await conflicting.workpad.prepare(
+      preparationFor(conflicting),
+    );
+    conflicting.setSnapshotBranch(
+      "failure-report/diagnostic/" +
+        prepared.diagnostic_session.state.worktree.identity,
+      "some-other-revision",
+    );
+    await expect(
+      conflicting.workpad.finalize(finalizationInput(conflicting)),
+    ).rejects.toThrow("already points at a different revision");
+  });
 });
 
 async function createHarness(
-  options: { profile?: DiagnosticDomainProfile } = {},
+  options: { domainExtensions?: readonly DomainExtension[] } = {},
 ): Promise<Harness> {
   const fixture = new URL(
     "../../packages/protocol/test/fixtures/issue-54.json",
@@ -258,9 +392,11 @@ async function createHarness(
     },
   });
   const calls: Array<{ cwd: string; args: string[] }> = [];
+  const snapshotBranches = new Map<string, string>();
   let worktreePath: string | undefined;
-  let branch = "";
+  let currentBranch = "";
   let head = report.target.revision;
+  let porcelain = "";
   const paths = new FakePathOperations({
     getWorktreePath: () => worktreePath,
   });
@@ -275,22 +411,38 @@ async function createHarness(
         return worktreePath;
       }
     }
-    if (
-      command ===
-      "rev-parse --verify " + report.target.revision + "^{commit}"
-    ) {
-      return report.target.revision;
+    if (input.args[0] === "rev-parse" && input.args[1] === "--verify") {
+      const revision = input.args[2];
+      if (revision === report.target.revision + "^{commit}") {
+        return report.target.revision;
+      }
+      const prefix = "refs/heads/";
+      const suffix = "^{commit}";
+      if (revision?.startsWith(prefix) && revision.endsWith(suffix)) {
+        const name = revision.slice(prefix.length, -suffix.length);
+        const snapshotHead = snapshotBranches.get(name);
+        if (snapshotHead) {
+          return snapshotHead;
+        }
+      }
+      throw new Error("Missing test ref: " + revision);
     }
     if (input.args[0] === "worktree" && input.args[1] === "add") {
-      branch = input.args[3] ?? "";
-      worktreePath = input.args[4];
+      worktreePath = input.args[3];
       return "";
     }
     if (command === "rev-parse HEAD") {
       return head;
     }
     if (command === "branch --show-current") {
-      return branch;
+      return currentBranch;
+    }
+    if (input.args[0] === "branch" && input.args[1] && input.args[2]) {
+      snapshotBranches.set(input.args[1], input.args[2]);
+      return "";
+    }
+    if (command === "status --porcelain --untracked-files=all") {
+      return porcelain;
     }
     if (command === "merge-base " + report.target.revision + " " + head) {
       return report.target.revision;
@@ -300,9 +452,9 @@ async function createHarness(
     }
     throw new Error("Unexpected git command: " + input.cwd + " git " + command);
   };
-  const profile = options.profile ?? createProfile();
+  const domainExtensions = options.domainExtensions ?? [createCkbExtension()];
   const manager = new DiagnosticWorktreeManager({
-    profile,
+    domainExtensions,
     backendId: "codex_app_server",
     root: worktreeRoot,
     git,
@@ -318,30 +470,70 @@ async function createHarness(
 
   return {
     report,
-    profile,
+    domainExtensions,
     manager,
     workpad,
     paths,
     currentReport: gateway.currentReport,
+    currentBranch: () => currentBranch,
     setHead(value) {
       head = value;
+    },
+    setPorcelain(value) {
+      porcelain = value;
+    },
+    setSnapshotBranch(name, snapshotHead) {
+      snapshotBranches.set(name, snapshotHead);
     },
     calls,
   };
 }
 
-function createProfile(
-  sourceDirectory = nativeSkillSource,
-): DiagnosticDomainProfile {
+function createCkbExtension(sourceDirectory = ckbSkillSource): DomainExtension {
   return {
-    domain_id: "ckb",
+    id: "ckb",
     native_skills: [
       {
-        name: nativeSkillName,
-        source_root: nativeSkillRoot,
+        name: ckbSkillName,
+        source_root: ckbSkillRoot,
         source_directory: sourceDirectory,
       },
     ],
+  };
+}
+
+function createEvmExtension(): DomainExtension {
+  return {
+    id: "evm",
+    native_skills: [
+      {
+        name: evmSkillName,
+        source_root: evmSkillRoot,
+        source_directory: evmSkillSource,
+      },
+    ],
+  };
+}
+
+function preparationFor(harness: Harness) {
+  return diagnosticSessionPreparationEnvelopeSchema.parse({
+    schema_version: "failure-report/diagnostic-session/v1",
+    domain_extensions: harness.domainExtensions.map(
+      (extension) => extension.id,
+    ),
+    report_id: harness.report.id,
+    repository: "Alive24/CKBoost",
+    issue_number: 54,
+    request: "Inspect the first failing boundary.",
+    native_skill_names: harness.manager.nativeSkillNames(),
+  });
+}
+
+function finalizationInput(harness: Harness) {
+  return {
+    report_id: harness.report.id,
+    repository: "Alive24/CKBoost",
+    issue_number: 54,
   };
 }
 
@@ -422,11 +614,14 @@ class FakePathOperations implements WorktreePathOperations {
   private readonly directories = new Set<string>([
     canonicalPath,
     worktreeRoot,
-    nativeSkillRoot,
-    nativeSkillSource,
+    ckbSkillRoot,
+    ckbSkillSource,
+    evmSkillRoot,
+    evmSkillSource,
   ]);
   private readonly files = new Set<string>([
-    join(nativeSkillSource, "SKILL.md"),
+    join(ckbSkillSource, "SKILL.md"),
+    join(evmSkillSource, "SKILL.md"),
   ]);
   private readonly links = new Map<string, string>();
   private readonly getWorktreePath: () => string | undefined;
@@ -508,8 +703,8 @@ class FakePathOperations implements WorktreePathOperations {
   }
 }
 
-function nativeSkillLink(worktreePath: string): string {
-  return join(worktreePath, ".agents", "skills", nativeSkillName);
+function nativeSkillLink(worktreePath: string, skillName: string): string {
+  return join(worktreePath, ".agents", "skills", skillName);
 }
 
 function fakeStat(isSymbolicLink: boolean, isDirectory: boolean) {

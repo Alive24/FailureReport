@@ -1,6 +1,8 @@
 import type { ModelMessage } from "ai";
 import { z } from "zod";
 
+import { diagnosticDomainExtensionsSchema } from "@failure-report/protocol";
+
 /**
  * Root-to-Codex diagnostic-session envelope utilities.
  *
@@ -12,33 +14,41 @@ import { z } from "zod";
 const envelopeStart = "<failure-report-diagnostic-session>";
 const envelopeEnd = "</failure-report-diagnostic-session>";
 
-/** Validates a stable internal mounted-extension domain identifier. */
-export const diagnosticDomainIdSchema = z
-  .string()
-  .regex(/^[a-z][a-z0-9_-]*$/, "domain id must be a stable identifier");
-
 /** Validates a Codex-native skill identifier that is safe to render as `$name`. */
 export const nativeSkillNameSchema = z
   .string()
   .regex(/^[a-z][a-z0-9-]*$/, "native skill name must be a stable identifier");
 
+/** Stable, deterministic Root-selected native skill list. */
+const nativeSkillNamesSchema = nativeSkillNameSchema
+  .array()
+  .min(1)
+  .superRefine((names, context) => {
+    for (let index = 0; index < names.length; index += 1) {
+      const current = names[index];
+      const previous = names[index - 1];
+      if (previous && current && previous >= current) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "native skill names must be unique and sorted in ascending order",
+          path: [index],
+        });
+      }
+    }
+  });
+
 /** Validates the complete, revision-bound delegation identity for one diagnosis. */
 export const diagnosticSessionEnvelopeSchema = z
   .object({
     schema_version: z.literal("failure-report/diagnostic-session/v1"),
-    domain_id: diagnosticDomainIdSchema,
+    domain_extensions: diagnosticDomainExtensionsSchema,
     report_id: z.string().min(1),
     repository: z.string().regex(/^[^/\s]+\/[^/\s]+$/),
     issue_number: z.number().int().positive(),
     workpad_revision: z.number().int().nonnegative(),
     request: z.string().min(1),
-    native_skill_names: z
-      .array(nativeSkillNameSchema)
-      .min(1)
-      .refine(
-        (names) => new Set(names).size === names.length,
-        "native skill names must be unique",
-      ),
+    native_skill_names: nativeSkillNamesSchema,
   })
   .strict();
 

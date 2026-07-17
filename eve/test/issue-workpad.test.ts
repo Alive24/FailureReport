@@ -62,6 +62,35 @@ describe("GitHub Issue workpad", () => {
     expect(upsertIssueNarrative(body, report)).toBe(body);
   });
 
+  it("marks a finalized diagnostic branch as a snapshot rather than an implementation branch", async () => {
+    const report = await loadReport();
+    const finalized = failureReportSchema.parse({
+      ...report,
+      diagnostic_session: {
+        lifecycle: "finalized",
+        domain_extensions: ["ckb"],
+        backend_id: "codex_app_server",
+        worktree: {
+          path: "/tmp/failure-report/issue-54",
+          identity: "diagnostic-issue-54",
+          base_revision: report.target.revision,
+          head_revision: report.target.revision,
+        },
+        diagnostic_branch: {
+          name: "failure-report/diagnostic/diagnostic-issue-54",
+          head_revision: report.target.revision,
+          finalized_at: report.updated_at,
+          reuse_policy: "diagnostic_snapshot_only",
+        },
+      },
+    });
+
+    const narrative = renderIssueBody(finalized);
+    expect(narrative).toContain("Diagnostic Snapshot");
+    expect(narrative).toContain("Do not continue implementation");
+    expect(narrative).toContain("separate implementation worktree/branch");
+  });
+
   it("increments the single workpad revision on resume", async () => {
     const report = await loadReport();
     const first = prepareIssueWorkpadMutation(

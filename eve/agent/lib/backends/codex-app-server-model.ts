@@ -8,7 +8,7 @@ import {
   parseDiagnosticSessionEnvelope,
   type DiagnosticSessionEnvelope,
 } from "../diagnostics/envelope.js";
-import { getDiagnosticDomainProfile } from "../diagnostics/domain-profiles.js";
+import { getDomainExtensions } from "../diagnostics/domain-extensions.js";
 import { DiagnosticSessionWorkpad } from "../diagnostics/workpad.js";
 import { DiagnosticWorktreeManager } from "../diagnostics/worktree.js";
 import type { CodexAppServerBackendConfig } from "./codex-app-server-config.js";
@@ -161,7 +161,7 @@ function createDiagnosticSessionWorkpad(
 ): DiagnosticSessionWorkpad {
   return new DiagnosticSessionWorkpad({
     worktrees: new DiagnosticWorktreeManager({
-      profile: getDiagnosticDomainProfile(envelope.domain_id),
+      domainExtensions: getDomainExtensions(envelope.domain_extensions),
       backendId: config.kind,
       root: config.worktree_root,
     }),

@@ -3,9 +3,9 @@ import {
   type DiagnosticSessionPreparationEnvelope,
 } from "./envelope.js";
 import {
-  DiagnosticDomainProfileError,
-  getDiagnosticDomainProfile,
-} from "./domain-profiles.js";
+  DomainExtensionRegistryError,
+  getDomainExtensions,
+} from "./domain-extensions.js";
 import { DiagnosticSessionWorkpad } from "./workpad.js";
 import {
   DiagnosticSafetyError,
@@ -14,7 +14,7 @@ import {
 
 /** Root-controlled input for preparing one diagnostic session. */
 export type PrepareDiagnosticSessionInput = {
-  domain_id: string;
+  domain_extensions: readonly string[];
   report_id: string;
   repository: string;
   issue_number: number;
@@ -25,14 +25,14 @@ export type PrepareDiagnosticSessionInput = {
 export type PrepareDiagnosticSessionResult =
   | {
       status: "prepared";
-      domain_id: string;
+      domain_extensions: readonly string[];
       report_id: string;
       workpad_revision: number;
       delegation_message: string;
     }
   | {
       status: "needs_input";
-      domain_id: string;
+      domain_extensions: readonly string[];
       report_id: string;
       reason: string;
     };
@@ -46,7 +46,7 @@ export type DiagnosticSessionPreparerOptions = {
 /**
  * Creates Root's only preparation path for a Codex diagnostic session.
  *
- * The profile registry owns native-skill discovery. This API intentionally does
+ * The extension registry owns native-skill discovery. This API intentionally does
  * not accept a cwd, branch, source path, backend, or skill name from a model.
  */
 export function createDiagnosticSessionPreparer(
@@ -56,15 +56,24 @@ export function createDiagnosticSessionPreparer(
 ) => Promise<PrepareDiagnosticSessionResult> {
   return async (input) => {
     try {
-      const profile = getDiagnosticDomainProfile(input.domain_id);
+      const domainExtensions = getDomainExtensions(input.domain_extensions);
+      const domainExtensionIds = domainExtensions.map(
+        (extension) => extension.id,
+      );
+      const nativeSkillNames = domainExtensions
+        .flatMap((extension) =>
+          extension.native_skills.map((skill) => skill.name),
+        )
+        .sort();
       const envelope = diagnosticSessionPreparationEnvelopeSchema.parse({
         schema_version: "failure-report/diagnostic-session/v1",
         ...input,
-        native_skill_names: profile.native_skills.map((skill) => skill.name),
+        domain_extensions: domainExtensionIds,
+        native_skill_names: nativeSkillNames,
       }) as DiagnosticSessionPreparationEnvelope;
       const workpad = new DiagnosticSessionWorkpad({
         worktrees: new DiagnosticWorktreeManager({
-          profile,
+          domainExtensions,
           backendId: options.backend_id,
           root: options.worktree_root,
         }),
@@ -72,7 +81,7 @@ export function createDiagnosticSessionPreparer(
       const prepared = await workpad.prepare(envelope);
       return {
         status: "prepared",
-        domain_id: input.domain_id,
+        domain_extensions: domainExtensionIds,
         report_id: prepared.report.id,
         workpad_revision: prepared.workpad_revision,
         delegation_message: prepared.delegation_message,
@@ -80,11 +89,11 @@ export function createDiagnosticSessionPreparer(
     } catch (error) {
       if (
         error instanceof DiagnosticSafetyError ||
-        error instanceof DiagnosticDomainProfileError
+        error instanceof DomainExtensionRegistryError
       ) {
         return {
           status: "needs_input",
-          domain_id: input.domain_id,
+          domain_extensions: [...input.domain_extensions],
           report_id: input.report_id,
           reason: error.message,
         };

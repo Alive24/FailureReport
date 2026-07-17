@@ -16,9 +16,9 @@ const prepareDiagnosticSession = createDiagnosticSessionPreparer({
 /**
  * Root's only mutable diagnostic-session preparation boundary.
  *
- * Input deliberately contains report/Issue identity, domain, and a bounded
- * request only. Root resolves all checkout, branch, backend, and native-skill
- * policy from its fixed host configuration and domain-profile registry.
+ * Input deliberately contains report/Issue identity, a Root-selected extension
+ * set, and a bounded request only. Root resolves all checkout, backend, and
+ * native-skill policy from fixed host configuration and its extension registry.
  */
 export default defineTool({
   description:
@@ -28,7 +28,7 @@ export default defineTool({
       report_id: z.string().min(1),
       repository: z.string().regex(/^[^/\s]+\/[^/\s]+$/),
       issue_number: z.number().int().positive(),
-      domain_id: z.string().regex(/^[a-z][a-z0-9_-]*$/),
+      domain_extensions: z.array(z.string().regex(/^[a-z][a-z0-9_-]*$/)).min(1),
       request: z.string().min(1),
     })
     .strict(),

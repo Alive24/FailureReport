@@ -1,9 +1,6 @@
 # CKBoost Issue #45: Sparse-Evidence Fixture
 
-This fixture is intentionally not a reconstructed failure report. The retained
-source material is a public GitHub Issue, its one follow-up comment, and the
-linked local fix commit. No original debugging conversation, command output, or
-reproduction trace was recovered.
+This fixture is intentionally not a reconstructed failure report. The retained source material is a public GitHub Issue, its one follow-up comment, and the linked local fix commit. No original debugging conversation, command output, or reproduction trace was recovered.
 
 ## Source Facts
 
@@ -15,11 +12,7 @@ reproduction trace was recovered.
 
 ## Evaluation Rule
 
-An investigator may identify a plausible connection between cell selection,
-change/fee cells, and fee handling. It must not claim a reproduced root cause,
-specific runtime error, or verified end-user outcome that is absent from the
-artifacts. The correct next step is to obtain a failing transaction or reproduce
-the one-cell scenario with a targeted debugger script.
+An investigator may identify a plausible connection between cell selection, change/fee cells, and fee handling. It must not claim a reproduced root cause, specific runtime error, or verified end-user outcome that is absent from the artifacts. The correct next step is to obtain a failing transaction or reproduce the one-cell scenario with a targeted debugger script.
 
 ## Artifacts
 

@@ -58,6 +58,10 @@ export type ExistingWorkpad = {
 
 /** Renders the concise human-facing Issue narrative for a structured report. */
 export function renderIssueBody(report: FailureReport): string {
+  const diagnosticBranch =
+    report.diagnostic_session?.lifecycle === "finalized"
+      ? report.diagnostic_session.diagnostic_branch
+      : undefined;
   return [
     issueNarrativeStartMarker,
     "# Failure Report: " + report.id,
@@ -76,6 +80,15 @@ export function renderIssueBody(report: FailureReport): string {
     "## Current Conclusion",
     report.conclusion.diagnosis,
     "",
+    ...(diagnosticBranch
+      ? [
+          "## Diagnostic Snapshot",
+          "- Branch: `" + diagnosticBranch.name + "`",
+          "- This is a diagnostic-only snapshot. Do not continue implementation or open a pull request from it.",
+          "- A future coding agent must use a separate implementation worktree/branch and decide whether to reuse its findings.",
+          "",
+        ]
+      : []),
     "## Durable Workpad",
     "The canonical structured FailureReport snapshot is maintained in the single",
     "comment marked `" + workpadMarker + "`. Large or sensitive evidence stays",

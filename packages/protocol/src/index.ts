@@ -113,11 +113,44 @@ export const diagnosticWorktreeSchema = z
   .object({
     path: z.string().min(1),
     identity: z.string().min(1),
-    branch: z.string().min(1),
     base_revision: z.string().min(1),
     head_revision: z.string().min(1),
   })
   .strict();
+
+/** A finalized, diagnostic-only Git snapshot. */
+export const diagnosticBranchSchema = z
+  .object({
+    name: z.string().min(1),
+    head_revision: z.string().min(1),
+    finalized_at: timestampSchema,
+    reuse_policy: z.literal("diagnostic_snapshot_only"),
+  })
+  .strict();
+
+/**
+ * Canonical Root-selected extension set for a diagnosis.
+ *
+ * The ordering is part of the durable contract so worktree identity, symlink
+ * materialization, and rendered native-skill delegation stay deterministic.
+ */
+export const diagnosticDomainExtensionsSchema = z
+  .array(identifierSchema)
+  .min(1)
+  .superRefine((extensions, context) => {
+    for (let index = 0; index < extensions.length; index += 1) {
+      const current = extensions[index];
+      const previous = extensions[index - 1];
+      if (previous && current && previous >= current) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "domain_extensions must be unique and sorted in ascending order",
+          path: [index],
+        });
+      }
+    }
+  });
 
 /**
  * Validates durable backend state required to resume an isolated diagnostic session.
@@ -125,13 +158,31 @@ export const diagnosticWorktreeSchema = z
  */
 export const diagnosticSessionSchema = z
   .object({
-    domain_id: identifierSchema,
+    lifecycle: z.enum(["active", "finalized"]),
+    domain_extensions: diagnosticDomainExtensionsSchema,
     backend_id: identifierSchema,
     codex_thread_id: z.string().min(1).optional(),
     worktree: diagnosticWorktreeSchema,
+    diagnostic_branch: diagnosticBranchSchema.optional(),
     last_diagnosed_at: timestampSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((session, context) => {
+    if (session.lifecycle === "active" && session.diagnostic_branch) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "an active diagnostic session cannot have a diagnostic_branch",
+        path: ["diagnostic_branch"],
+      });
+    }
+    if (session.lifecycle === "finalized" && !session.diagnostic_branch) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "a finalized diagnostic session requires a diagnostic_branch",
+        path: ["diagnostic_branch"],
+      });
+    }
+  });
 
 /**
  * Validates the complete evidence-backed failure report persisted in a workpad.
