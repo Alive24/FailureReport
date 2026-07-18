@@ -59,7 +59,10 @@ export function createDiagnosticSessionFinalizer(
         input.repository,
         input.issue_number,
       );
-      const existing = findExistingWorkpad(issue);
+      const existing = findExistingWorkpad(
+        issue,
+        gateway.getWorkpadProducerConfiguration(),
+      );
       if (!existing || existing.report.id !== input.report_id) {
         throw new DiagnosticSafetyError(
           "Diagnostic finalization requires the matching Root-published FailureReport workpad.",

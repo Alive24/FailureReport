@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createGithubIssueGateway,
   readGithubGatewayRuntimeConfig,
+  readWorkpadProducerConfiguration,
 } from "../agent/lib/integrations/github/gateway-factory.js";
 import { OctokitIssueGateway } from "../agent/lib/integrations/github/octokit-issue-gateway.js";
 
@@ -89,6 +90,7 @@ describe("GitHub gateway runtime composition", () => {
     const fallback = {
       readIssue: vi.fn(),
       publishSharedContext: vi.fn(),
+      getWorkpadProducerConfiguration: vi.fn(),
     };
     const createGithubCliGateway = vi.fn().mockReturnValue(fallback);
 
@@ -98,6 +100,28 @@ describe("GitHub gateway runtime composition", () => {
 
     expect(gateway).toBe(fallback);
     expect(createGithubCliGateway).toHaveBeenCalledWith("fixture-gh");
+  });
+
+  it("requires an explicit immutable producer registry before a managed workpad can be trusted", () => {
+    const producers = readWorkpadProducerConfiguration({
+      FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ID: "root-gh",
+      FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ACTOR_ID: "101",
+      FAILURE_REPORT_GITHUB_WORKPAD_PRODUCERS:
+        '{"root-gh":"101","root-app":"202"}',
+    });
+
+    expect(producers).toEqual({
+      current: { id: "root-gh", github_actor_id: "101" },
+      producers: [
+        { id: "root-gh", github_actor_id: "101" },
+        { id: "root-app", github_actor_id: "202" },
+      ],
+    });
+    expect(() =>
+      readWorkpadProducerConfiguration({
+        FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ID: "root-gh",
+      }),
+    ).toThrow("must be configured together");
   });
 });
 
