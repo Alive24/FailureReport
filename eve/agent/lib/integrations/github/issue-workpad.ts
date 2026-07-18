@@ -26,6 +26,7 @@ export type GithubIssueComment = {
 export type GithubIssueSnapshot = {
   repository: string;
   issue_number: number;
+  title: string;
   issue_url: string;
   body: string;
   updated_at: string;

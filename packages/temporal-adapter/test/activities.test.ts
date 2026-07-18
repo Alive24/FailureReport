@@ -25,4 +25,18 @@ describe("Temporal Root Activity", () => {
     expect(result.status).toBe("accepted");
     expect(invoke).toHaveBeenCalledTimes(1);
   });
+
+  it("rejects the retired approval-continuation request before invoking Root", async () => {
+    const invoke = vi.fn();
+    const activities = createFailureReportActivities({ invoke } as RootInvoker);
+
+    await expect(
+      activities.invokeRoot({
+        request_id: "temporal-approval-1",
+        operation: "submit_action_result",
+        action_result: { approved: true },
+      } as never),
+    ).rejects.toThrow();
+    expect(invoke).not.toHaveBeenCalled();
+  });
 });

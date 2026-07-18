@@ -143,7 +143,11 @@ export class DiagnosticWorktreeManager {
    * Creates a fresh deterministic worktree and durable state before a Codex
    * session may start. Skill sources are validated before Git mutates anything.
    */
-  async allocate(report: FailureReport): Promise<VerifiedDiagnosticWorktree> {
+  async allocate(
+    report: FailureReport,
+    diagnosticBranchSlug: string,
+  ): Promise<VerifiedDiagnosticWorktree> {
+    this.assertDiagnosticBranchSlug(diagnosticBranchSlug);
     const source = await this.acquireCanonicalSource(report);
     const canonicalPath = source.canonical_path;
     const nativeSkills = await this.resolveNativeSkillSources();
@@ -210,6 +214,7 @@ export class DiagnosticWorktreeManager {
           base_revision: baseRevision,
           head_revision: headRevision,
         },
+        diagnostic_branch_slug: diagnosticBranchSlug,
       },
     };
   }
@@ -265,8 +270,15 @@ export class DiagnosticWorktreeManager {
       );
     }
 
-    const branch = this.branchFor(report);
+    const branch = this.branchFor(report, verified.state);
+    const remoteRef = "refs/heads/" + branch;
     const headRevision = verified.state.worktree.head_revision;
+    const remoteHead = await this.remoteBranchHead(worktreePath, remoteRef);
+    if (remoteHead && remoteHead !== headRevision) {
+      throw new DiagnosticSafetyError(
+        "The remote diagnostic snapshot branch already points at a different revision; explicit operator input is required.",
+      );
+    }
     const existingHead = await optionalGit(this.git, worktreePath, [
       "rev-parse",
       "--verify",
@@ -284,6 +296,23 @@ export class DiagnosticWorktreeManager {
         args: ["branch", branch, headRevision],
       });
     }
+    try {
+      await this.git({
+        cwd: worktreePath,
+        args: ["push", "origin", remoteRef + ":" + remoteRef],
+      });
+    } catch (error) {
+      throw new DiagnosticSafetyError(
+        "Unable to push the diagnostic snapshot branch without force: " +
+          errorMessage(error),
+      );
+    }
+    const pushedHead = await this.remoteBranchHead(worktreePath, remoteRef);
+    if (pushedHead !== headRevision) {
+      throw new DiagnosticSafetyError(
+        "The remote diagnostic snapshot branch did not resolve to the finalized diagnostic HEAD.",
+      );
+    }
 
     return {
       ...verified,
@@ -293,6 +322,10 @@ export class DiagnosticWorktreeManager {
         diagnostic_branch: {
           name: branch,
           head_revision: headRevision,
+          remote_name: "origin",
+          remote_ref: remoteRef,
+          remote_url: this.branchUrlFor(report, branch),
+          pushed_at: finalizedAt,
           finalized_at: finalizedAt,
           reuse_policy: "diagnostic_snapshot_only",
         },
@@ -715,8 +748,76 @@ export class DiagnosticWorktreeManager {
     return "diagnostic-" + (slug || "report") + "-" + digest;
   }
 
-  private branchFor(report: FailureReport): string {
-    return "failure-report/diagnostic/" + this.identityFor(report);
+  private branchFor(report: FailureReport, state: DiagnosticSession): string {
+    const issueNumber = report.shared_context?.issue_number;
+    if (!issueNumber) {
+      throw new DiagnosticSafetyError(
+        "Diagnostic snapshot branching requires a Root-published GitHub Issue context.",
+      );
+    }
+    return (
+      "diagnostic/" + String(issueNumber) + "-" + state.diagnostic_branch_slug
+    );
+  }
+
+  private branchUrlFor(report: FailureReport, branch: string): string {
+    const issue = report.shared_context;
+    if (!issue) {
+      throw new DiagnosticSafetyError(
+        "Diagnostic snapshot publishing requires a Root-published GitHub Issue context.",
+      );
+    }
+    const issueSuffix = "/issues/" + String(issue.issue_number);
+    if (!issue.issue_url.endsWith(issueSuffix)) {
+      throw new DiagnosticSafetyError(
+        "Diagnostic snapshot publishing requires a canonical GitHub Issue URL.",
+      );
+    }
+    return (
+      issue.issue_url.slice(0, -issueSuffix.length) +
+      "/tree/" +
+      branch.split("/").map(encodeURIComponent).join("/")
+    );
+  }
+
+  private async remoteBranchHead(
+    worktreePath: string,
+    remoteRef: string,
+  ): Promise<string | undefined> {
+    let output: string;
+    try {
+      output = await this.git({
+        cwd: worktreePath,
+        args: ["ls-remote", "--heads", "origin", remoteRef],
+      });
+    } catch (error) {
+      throw new DiagnosticSafetyError(
+        "Unable to inspect the remote diagnostic snapshot branch: " +
+          errorMessage(error),
+      );
+    }
+    if (!output) {
+      return undefined;
+    }
+    const [revision, ref] = output.split(/\s+/, 2);
+    if (
+      !revision ||
+      ref !== remoteRef ||
+      !/^[0-9a-f]{40,64}$/i.test(revision)
+    ) {
+      throw new DiagnosticSafetyError(
+        "The remote diagnostic snapshot branch returned an invalid Git reference.",
+      );
+    }
+    return revision;
+  }
+
+  private assertDiagnosticBranchSlug(slug: string): void {
+    if (!/^[\p{L}\p{N}][\p{L}\p{N}-]{0,79}$/u.test(slug)) {
+      throw new DiagnosticSafetyError(
+        "Diagnostic branch slug must be a non-empty safe Issue-title slug.",
+      );
+    }
   }
 }
 

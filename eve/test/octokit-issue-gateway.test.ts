@@ -18,6 +18,7 @@ import { OctokitIssueGateway } from "../agent/lib/integrations/github/octokit-is
 /** Stable target Issue identity used by the in-memory Octokit scenarios. */
 const repository = "Alive24/CKBoost";
 const issueNumber = 54;
+const issueTitle = "CKBoost Issue 54";
 const issueUrl = "https://github.com/Alive24/CKBoost/issues/54";
 
 /** Loads a schema-validated report fixture for gateway publication tests. */
@@ -41,6 +42,7 @@ describe("Octokit Issue gateway", () => {
               body: null,
               html_url: issueUrl,
               number: issueNumber,
+              title: issueTitle,
               updated_at: "2026-07-15T10:00:00Z",
             },
           }),
@@ -70,6 +72,7 @@ describe("Octokit Issue gateway", () => {
     expect(issue).toEqual({
       repository,
       issue_number: issueNumber,
+      title: issueTitle,
       issue_url: issueUrl,
       body: "",
       updated_at: "2026-07-15T10:00:00Z",
@@ -205,6 +208,7 @@ function snapshot(
   return {
     repository,
     issue_number: issueNumber,
+    title: issueTitle,
     issue_url: issueUrl,
     body: "# Existing Issue",
     updated_at: "2026-07-15T10:00:00Z",
@@ -230,6 +234,7 @@ function createMutableOctokit() {
             body,
             html_url: issueUrl,
             number: issueNumber,
+            title: issueTitle,
             updated_at: updatedAt,
           },
         })),
@@ -299,6 +304,7 @@ function createScriptedOctokit(snapshots: GithubIssueSnapshot[]) {
               body: current.body,
               html_url: current.issue_url,
               number: current.issue_number,
+              title: current.title,
               updated_at: current.updated_at,
             },
           };

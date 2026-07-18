@@ -25,6 +25,8 @@ export type FinalizeDiagnosticSessionResult =
       workpad_revision: number;
       diagnostic_branch: string;
       head_revision: string;
+      remote_ref: string;
+      remote_url: string;
     }
   | {
       status: "needs_input";
@@ -132,6 +134,8 @@ function finalizedResult(
     | {
         name: string;
         head_revision: string;
+        remote_ref: string;
+        remote_url: string;
       }
     | undefined,
 ): FinalizeDiagnosticSessionResult {
@@ -146,5 +150,7 @@ function finalizedResult(
     workpad_revision: workpadRevision,
     diagnostic_branch: diagnosticBranch.name,
     head_revision: diagnosticBranch.head_revision,
+    remote_ref: diagnosticBranch.remote_ref,
+    remote_url: diagnosticBranch.remote_url,
   };
 }

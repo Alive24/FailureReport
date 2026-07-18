@@ -13,6 +13,7 @@ const issueSnapshotSchema = z
   .object({
     repository: z.string().min(1),
     issue_number: z.number().int().positive(),
+    title: z.string().min(1),
     issue_url: z.string().min(1),
     body: z.string(),
     updated_at: z.string().min(1),
@@ -30,8 +31,8 @@ const issueSnapshotSchema = z
 
 /**
  * Prepares an optimistic-concurrency-checked Issue workpad mutation without I/O.
- * Root can inspect the resulting revision/body before calling the approval-gated
- * publishing tool.
+ * Root can inspect the resulting revision/body before calling the publishing
+ * tool.
  */
 export default defineTool({
   description:

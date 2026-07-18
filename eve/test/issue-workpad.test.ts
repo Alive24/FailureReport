@@ -25,6 +25,7 @@ async function loadReport() {
 const issue = {
   repository: "Alive24/CKBoost",
   issue_number: 54,
+  title: "CKBoost Issue 54",
   issue_url: "https://github.com/Alive24/CKBoost/issues/54",
   body: "# Existing Issue",
   updated_at: "2026-07-15T10:00:00Z",
@@ -76,9 +77,15 @@ describe("GitHub Issue workpad", () => {
           base_revision: report.target.revision,
           head_revision: report.target.revision,
         },
+        diagnostic_branch_slug: "ckboost-issue-54",
         diagnostic_branch: {
-          name: "failure-report/diagnostic/diagnostic-issue-54",
+          name: "diagnostic/54-ckboost-issue-54",
           head_revision: report.target.revision,
+          remote_name: "origin",
+          remote_ref: "refs/heads/diagnostic/54-ckboost-issue-54",
+          remote_url:
+            "https://github.com/Alive24/CKBoost/tree/diagnostic/54-ckboost-issue-54",
+          pushed_at: report.updated_at,
           finalized_at: report.updated_at,
           reuse_policy: "diagnostic_snapshot_only",
         },

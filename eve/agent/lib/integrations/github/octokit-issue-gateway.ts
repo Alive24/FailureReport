@@ -43,6 +43,7 @@ export class OctokitIssueGateway extends IssueWorkpadGateway {
     return {
       repository,
       issue_number: issue.data.number,
+      title: issue.data.title,
       issue_url: issue.data.html_url,
       body: issue.data.body ?? "",
       updated_at: issue.data.updated_at,

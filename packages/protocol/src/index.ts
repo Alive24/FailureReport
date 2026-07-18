@@ -123,11 +123,22 @@ export const diagnosticWorktreeSchema = z
   })
   .strict();
 
+/** A human-readable, persisted portion of a diagnostic snapshot branch name. */
+export const diagnosticBranchSlugSchema = z
+  .string()
+  .min(1)
+  .max(80)
+  .regex(/^[\p{L}\p{N}][\p{L}\p{N}-]*$/u);
+
 /** A finalized, diagnostic-only Git snapshot. */
 export const diagnosticBranchSchema = z
   .object({
     name: z.string().min(1),
     head_revision: immutableGitRevisionSchema,
+    remote_name: z.literal("origin"),
+    remote_ref: z.string().min(1),
+    remote_url: z.string().url(),
+    pushed_at: timestampSchema,
     finalized_at: timestampSchema,
     reuse_policy: z.literal("diagnostic_snapshot_only"),
   })
@@ -168,6 +179,7 @@ export const diagnosticSessionSchema = z
     backend_id: identifierSchema,
     codex_thread_id: z.string().min(1).optional(),
     worktree: diagnosticWorktreeSchema,
+    diagnostic_branch_slug: diagnosticBranchSlugSchema,
     diagnostic_branch: diagnosticBranchSchema.optional(),
     last_diagnosed_at: timestampSchema.optional(),
   })
@@ -425,7 +437,6 @@ export const rootOperationSchema = z.enum([
   "start",
   "resume",
   "inspect",
-  "submit_action_result",
   "render_handoff",
 ]);
 
@@ -437,7 +448,6 @@ export const rootRequestSchema = z
     report: failureReportSchema.optional(),
     issue: githubIssueContextSchema.optional(),
     message: z.string().min(1).optional(),
-    action_result: z.unknown().optional(),
   })
   .strict();
 
@@ -445,13 +455,7 @@ export const rootRequestSchema = z
 export const rootResultSchema = z
   .object({
     request_id: identifierSchema,
-    status: z.enum([
-      "accepted",
-      "completed",
-      "waiting_for_approval",
-      "needs_input",
-      "failed",
-    ]),
+    status: z.enum(["accepted", "completed", "needs_input", "failed"]),
     report: failureReportSchema.optional(),
     issue: githubIssueContextSchema.optional(),
     summary: z.string().min(1),

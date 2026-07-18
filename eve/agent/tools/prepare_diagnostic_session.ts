@@ -1,5 +1,4 @@
 import { defineTool } from "eve/tools";
-import { always } from "eve/tools/approval";
 import { z } from "zod";
 
 import backendJson from "../../config/workers/codex-app-server.json" with { type: "json" };
@@ -21,7 +20,7 @@ const prepareDiagnosticSession = createDiagnosticSessionPreparer({
  */
 export default defineTool({
   description:
-    "Prepare or resume an approval-gated Root-owned diagnostic worktree and return the only valid Codex diagnostic delegation message.",
+    "Prepare or resume a Root-owned diagnostic worktree and return the only valid Codex diagnostic delegation message.",
   inputSchema: z
     .object({
       report_id: z.string().min(1),
@@ -31,9 +30,6 @@ export default defineTool({
       request: z.string().min(1),
     })
     .strict(),
-  // Allocation/restoration creates or validates a Git worktree and publishes its
-  // durable session state, so every invocation requires Root approval.
-  approval: always(),
   async execute(input) {
     return prepareDiagnosticSession(input);
   },

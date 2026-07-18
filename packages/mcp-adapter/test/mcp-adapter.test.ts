@@ -26,4 +26,18 @@ describe("MCP Root adapter", () => {
       expect.objectContaining({ operation: "inspect" }),
     );
   });
+
+  it("rejects the retired approval-continuation request before invoking Root", async () => {
+    const invoke = vi.fn();
+    const handle = createRootRequestHandler({ invoke } as RootInvoker);
+
+    await expect(
+      handle({
+        request_id: "mcp-approval-1",
+        operation: "submit_action_result",
+        action_result: { approved: true },
+      } as never),
+    ).rejects.toThrow();
+    expect(invoke).not.toHaveBeenCalled();
+  });
 });

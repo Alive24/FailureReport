@@ -1,5 +1,4 @@
 import { defineTool } from "eve/tools";
-import { always } from "eve/tools/approval";
 import { z } from "zod";
 
 import backendJson from "../../config/workers/codex-app-server.json" with { type: "json" };
@@ -13,7 +12,7 @@ const finalizeDiagnosticSession = createDiagnosticSessionFinalizer({
 });
 
 /**
- * Root's explicit, approval-gated boundary for creating a diagnostic snapshot.
+ * Root's explicit boundary for creating and publishing a diagnostic snapshot.
  *
  * No caller can supply a checkout, ref, branch, extension, or skill source. Root
  * rehydrates that state from the durable workpad and only finalizes a clean active
@@ -29,7 +28,6 @@ export default defineTool({
       issue_number: z.number().int().positive(),
     })
     .strict(),
-  approval: always(),
   async execute(input) {
     return finalizeDiagnosticSession(input);
   },

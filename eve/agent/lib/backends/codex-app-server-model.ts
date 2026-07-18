@@ -111,7 +111,7 @@ async function createCodexAppServerModel(
       codexPath: config.codex_path,
       cwd: loaded.diagnostic_session.state.worktree.path,
       // `workspace-write` permits tests, caches, and diagnostic artifacts. It
-      // does not authorize a worker to turn diagnosis into an unapproved fix.
+      // does not turn a diagnostic session into implementation work.
       approvalMode: config.approval_mode,
       sandboxMode: config.sandbox_mode,
       reasoningEffort: config.reasoning_effort,

@@ -5,6 +5,8 @@ import {
   failureReportSchema,
   parseFailureReportWorkpad,
   renderFailureReportWorkpad,
+  rootRequestSchema,
+  rootResultSchema,
   workpadMarker,
 } from "../src/index.js";
 
@@ -92,6 +94,7 @@ describe("FailureReport protocol", () => {
           base_revision: report.target.revision,
           head_revision: report.target.revision,
         },
+        diagnostic_branch_slug: "ckboost-issue-54",
         last_diagnosed_at: report.updated_at,
       },
     });
@@ -114,6 +117,8 @@ describe("FailureReport protocol", () => {
       failureReportSchema.parse({
         ...report,
         diagnostic_session: {
+          lifecycle: "active",
+          domain_extensions: ["ckb"],
           domain_id: "ckb",
           backend_id: "codex_app_server",
           worktree: {
@@ -123,6 +128,7 @@ describe("FailureReport protocol", () => {
             base_revision: report.target.revision,
             head_revision: report.target.revision,
           },
+          diagnostic_branch_slug: "ckboost-issue-54",
         },
       }),
     ).toThrow();
@@ -216,6 +222,7 @@ describe("FailureReport protocol", () => {
           domain_extensions: ["evm", "ckb"],
           backend_id: "codex_app_server",
           worktree,
+          diagnostic_branch_slug: "ckboost-issue-54",
         },
       }),
     ).toThrow("domain_extensions must be unique and sorted");
@@ -227,8 +234,56 @@ describe("FailureReport protocol", () => {
           domain_extensions: ["ckb"],
           backend_id: "codex_app_server",
           worktree,
+          diagnostic_branch_slug: "ckboost-issue-54",
         },
       }),
     ).toThrow("requires a diagnostic_branch");
+
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        diagnostic_session: {
+          lifecycle: "finalized",
+          domain_extensions: ["ckb"],
+          backend_id: "codex_app_server",
+          worktree,
+          diagnostic_branch_slug: "ckboost-issue-54",
+          diagnostic_branch: {
+            name: "diagnostic/54-ckboost-issue-54",
+            head_revision: report.target.revision,
+            finalized_at: report.updated_at,
+            reuse_policy: "diagnostic_snapshot_only",
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects the retired Root approval operation and result state", () => {
+    const baseRequest = {
+      request_id: "root-request-54",
+      operation: "inspect",
+      message: "Inspect the shared diagnostic context.",
+    };
+
+    expect(() =>
+      rootRequestSchema.parse({
+        ...baseRequest,
+        operation: "submit_action_result",
+      }),
+    ).toThrow();
+    expect(() =>
+      rootRequestSchema.parse({
+        ...baseRequest,
+        action_result: { approved: true },
+      }),
+    ).toThrow();
+    expect(() =>
+      rootResultSchema.parse({
+        request_id: baseRequest.request_id,
+        status: "waiting_for_approval",
+        summary: "Awaiting approval.",
+      }),
+    ).toThrow();
   });
 });

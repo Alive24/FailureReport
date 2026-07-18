@@ -103,7 +103,10 @@ export class DiagnosticSessionWorkpad {
         report.diagnostic_session,
       );
     } else {
-      diagnosticSession = await this.worktrees.allocate(report);
+      diagnosticSession = await this.worktrees.allocate(
+        report,
+        diagnosticBranchSlugFor(current.issue.title),
+      );
       // Persist state before exposing a delegation. Codex must never start in a
       // worktree that Root cannot validate and recover on the next invocation.
       const nextReport = failureReportSchema.parse({
@@ -300,7 +303,11 @@ export class DiagnosticSessionWorkpad {
       DiagnosticSessionEnvelope,
       "repository" | "issue_number" | "report_id"
     >,
-  ): Promise<{ report: FailureReport; revision: number }> {
+  ): Promise<{
+    report: FailureReport;
+    revision: number;
+    issue: Awaited<ReturnType<DiagnosticSessionIssueGateway["readIssue"]>>;
+  }> {
     const gateway = await this.gateway;
     const issue = await gateway.readIssue(
       envelope.repository,
@@ -328,6 +335,20 @@ export class DiagnosticSessionWorkpad {
         "The durable FailureReport workpad is not consistently bound to the requested GitHub Issue.",
       );
     }
-    return { report: workpad.report, revision: workpad.revision };
+    return { report: workpad.report, revision: workpad.revision, issue };
   }
+}
+
+/** Derives the stable, human-readable title portion of a diagnostic branch. */
+export function diagnosticBranchSlugFor(issueTitle: string): string {
+  const normalized = issueTitle
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "");
+  const bounded = Array.from(normalized)
+    .slice(0, 80)
+    .join("")
+    .replace(/-+$/g, "");
+  return bounded || "diagnostic";
 }
