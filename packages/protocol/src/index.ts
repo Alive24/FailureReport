@@ -29,6 +29,10 @@ const timestampSchema = z
 
 const stringListSchema = z.array(z.string().min(1));
 
+/** Canonical identity pieces shared by initial Issue selectors and workpad context. */
+const githubRepositorySchema = z.string().regex(/^[^/\s]+\/[^/\s]+$/);
+const githubIssueNumberSchema = z.number().int().positive();
+
 const artifactSchema = z
   .object({
     ref: z.string().min(1),
@@ -95,6 +99,19 @@ const verificationSchema = z
   .strict();
 
 /**
+ * Validates the minimal identity a caller may use to begin existing-Issue intake.
+ *
+ * This is deliberately not a partial workpad context: Root must read GitHub to
+ * derive the URL, workpad state, and canonical context before it resumes work.
+ */
+export const githubIssueSelectorSchema = z
+  .object({
+    repository: githubRepositorySchema,
+    issue_number: githubIssueNumberSchema,
+  })
+  .strict();
+
+/**
  * Validates the GitHub Issue binding stored alongside a report.
  *
  * This deliberately carries only collaboration metadata; diagnostic session state lives
@@ -103,8 +120,8 @@ const verificationSchema = z
 export const githubIssueContextSchema = z
   .object({
     provider: z.literal("github_issue"),
-    repository: z.string().regex(/^[^/\s]+\/[^/\s]+$/),
-    issue_number: z.number().int().positive(),
+    repository: githubRepositorySchema,
+    issue_number: githubIssueNumberSchema,
     issue_url: z.string().min(1),
     workpad_marker: z.literal(workpadMarker),
     workpad_comment_ref: z.string().min(1).optional(),
@@ -435,11 +452,37 @@ export const rootRequestSchema = z
     request_id: identifierSchema,
     operation: rootOperationSchema,
     report: failureReportSchema.optional(),
+    issue_selector: githubIssueSelectorSchema.optional(),
     issue: githubIssueContextSchema.optional(),
     message: z.string().min(1).optional(),
     action_result: z.unknown().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((request, context) => {
+    if (request.issue_selector && request.issue) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "provide either issue_selector or a fully rehydrated issue context, not both",
+        path: ["issue_selector"],
+      });
+    }
+
+    const reportIssue = request.report?.shared_context;
+    if (
+      request.issue_selector &&
+      reportIssue &&
+      (request.issue_selector.repository !== reportIssue.repository ||
+        request.issue_selector.issue_number !== reportIssue.issue_number)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "issue_selector must identify the same Issue as report.shared_context",
+        path: ["issue_selector"],
+      });
+    }
+  });
 
 /** Validates the only result shape adapters are allowed to return to callers. */
 export const rootResultSchema = z
@@ -463,6 +506,8 @@ export const rootResultSchema = z
 export type FailureReport = z.infer<typeof failureReportSchema>;
 /** Typed GitHub Issue context inferred from the durable schema. */
 export type GithubIssueContext = z.infer<typeof githubIssueContextSchema>;
+/** Typed minimal GitHub Issue identity accepted for first intake and retry. */
+export type GithubIssueSelector = z.infer<typeof githubIssueSelectorSchema>;
 /** Typed durable diagnostic-session state inferred from the durable schema. */
 export type DiagnosticSession = z.infer<typeof diagnosticSessionSchema>;
 /** Typed isolated diagnostic-worktree identity inferred from the durable schema. */

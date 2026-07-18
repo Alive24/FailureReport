@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createMcpRootInvoker,
+  InMemoryRootSessionStore,
   type EveChannelRootTransport,
 } from "../src/index.js";
 
@@ -24,7 +25,10 @@ describe("MCP Root composition", () => {
       },
     };
 
-    const result = await createMcpRootInvoker({ transport }).invoke({
+    const result = await createMcpRootInvoker({
+      transport,
+      session_store: new InMemoryRootSessionStore(),
+    }).invoke({
       request_id: "mcp-root-composition",
       operation: "inspect",
       message: "Inspect the durable report.",

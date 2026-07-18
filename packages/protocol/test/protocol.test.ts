@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   failureReportSchema,
+  githubIssueSelectorSchema,
   parseFailureReportWorkpad,
   renderFailureReportWorkpad,
+  rootRequestSchema,
   workpadMarker,
 } from "../src/index.js";
 
@@ -73,6 +75,79 @@ describe("FailureReport protocol", () => {
     });
 
     expect(withIssue.shared_context?.workpad_revision).toBe(3);
+  });
+
+  it("accepts a strictly minimal existing-Issue selector without weakening durable context validation", async () => {
+    const selector = githubIssueSelectorSchema.parse({
+      repository: "Alive24/CKBoost",
+      issue_number: 54,
+    });
+    const request = rootRequestSchema.parse({
+      request_id: "existing-issue-selector",
+      operation: "start",
+      issue_selector: selector,
+      message: "Start from the existing Issue.",
+    });
+
+    expect(request.issue_selector).toEqual(selector);
+    expect(() =>
+      githubIssueSelectorSchema.parse({
+        repository: "not a repository",
+        issue_number: 54,
+      }),
+    ).toThrow();
+    expect(() =>
+      githubIssueSelectorSchema.parse({
+        repository: "Alive24/CKBoost",
+        issue_number: 0,
+      }),
+    ).toThrow();
+    for (const callerSuppliedContext of [
+      { issue_url: "https://github.com/Alive24/CKBoost/issues/54" },
+      { workpad_marker: workpadMarker },
+      { workpad_comment_ref: "IC_workpad_54" },
+      { workpad_revision: 0 },
+    ]) {
+      expect(() =>
+        rootRequestSchema.parse({
+          request_id: "selector-with-persisted-context",
+          operation: "start",
+          issue_selector: {
+            repository: "Alive24/CKBoost",
+            issue_number: 54,
+            ...callerSuppliedContext,
+          },
+        }),
+      ).toThrow();
+    }
+    expect(() =>
+      rootRequestSchema.parse({
+        request_id: "selector-and-context",
+        operation: "start",
+        issue_selector: selector,
+        issue: {
+          provider: "github_issue",
+          repository: "Alive24/CKBoost",
+          issue_number: 54,
+          issue_url: "https://github.com/Alive24/CKBoost/issues/54",
+          workpad_marker: workpadMarker,
+          workpad_revision: 0,
+        },
+      }),
+    ).toThrow("provide either issue_selector");
+    expect(() =>
+      rootRequestSchema.parse({
+        request_id: "incomplete-durable-context",
+        operation: "resume",
+        issue: {
+          provider: "github_issue",
+          repository: "Alive24/CKBoost",
+          issue_number: 54,
+          workpad_marker: workpadMarker,
+          workpad_revision: 0,
+        },
+      }),
+    ).toThrow();
   });
 
   it("keeps multi-extension Codex diagnostic-session state typed and outside shared Issue context", async () => {

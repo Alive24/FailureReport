@@ -156,6 +156,32 @@ export function findExistingWorkpad(
 }
 
 /**
+ * Derives a complete, caller-safe Issue context from a freshly read snapshot.
+ *
+ * An Issue without a workpad is still a valid initial state. Its canonical
+ * context has revision zero and no comment reference, while the caller can use
+ * the separate workpad presence signal to distinguish it from a persisted
+ * revision-zero comment.
+ */
+export function rehydrateGithubIssueContext(
+  issue: GithubIssueSnapshot,
+  workpad: ExistingWorkpad | undefined,
+): GithubIssueContext {
+  return githubIssueContextSchema.parse({
+    provider: "github_issue",
+    repository: issue.repository,
+    issue_number: issue.issue_number,
+    issue_url: issue.issue_url,
+    workpad_marker: workpadMarker,
+    ...(workpad ? { workpad_comment_ref: workpad.comment.id } : {}),
+    workpad_revision: workpad?.revision ?? 0,
+    ...(workpad?.report.shared_context?.synced_at
+      ? { synced_at: workpad.report.shared_context.synced_at }
+      : {}),
+  });
+}
+
+/**
  * Prepares a new report revision and the matching Issue/workpad mutation.
  * This function performs no I/O so callers can retry safely after a freshness check.
  */

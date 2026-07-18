@@ -12,8 +12,10 @@ import {
 export {
   buildRootInvocationMessage,
   createMcpRootInvoker,
+  defaultRootSessionStorePath,
   EveChannelRootInvoker,
   EveChannelRootTransport,
+  FileRootSessionStore,
   InMemoryRootSessionStore,
   rootSessionKey,
   type EveChannelRootTransportOptions,

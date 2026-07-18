@@ -1,3 +1,8 @@
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+
 import {
   Client,
   type ClientAuth,
@@ -38,6 +43,82 @@ export class InMemoryRootSessionStore implements RootSessionStore {
   async write(key: string, state: SessionState): Promise<void> {
     this.entries.set(key, state);
   }
+}
+
+/**
+ * Private on-disk session store used by the local MCP host across restarts.
+ *
+ * Eve's session state is explicitly serializable, so persisting this small
+ * cursor lets a fresh adapter process resume the same Issue-scoped Root
+ * conversation without exposing any runtime path through the public contract.
+ */
+export class FileRootSessionStore implements RootSessionStore {
+  private writeTail: Promise<void> = Promise.resolve();
+
+  constructor(private readonly filePath: string) {}
+
+  async read(key: string): Promise<SessionState | undefined> {
+    const entries = await this.readEntries();
+    return entries[key];
+  }
+
+  async write(key: string, state: SessionState): Promise<void> {
+    const write = this.writeTail.then(async () => {
+      const entries = await this.readEntries();
+      entries[key] = state;
+      await mkdir(dirname(this.filePath), { recursive: true, mode: 0o700 });
+      const temporaryPath = this.filePath + "." + randomUUID() + ".tmp";
+      await writeFile(
+        temporaryPath,
+        JSON.stringify({ version: 1, entries }, null, 2) + "\n",
+        { encoding: "utf8", mode: 0o600 },
+      );
+      // A rename keeps a reader from observing a partially written session
+      // cursor if the MCP host is restarted while a turn is completing.
+      await rename(temporaryPath, this.filePath);
+    });
+    this.writeTail = write.catch(() => undefined);
+    await write;
+  }
+
+  private async readEntries(): Promise<Record<string, SessionState>> {
+    let raw: string;
+    try {
+      raw = await readFile(this.filePath, "utf8");
+    } catch (error) {
+      if (hasErrorCode(error, "ENOENT")) {
+        return {};
+      }
+      throw error;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error("FailureReport MCP session store contains invalid JSON.");
+    }
+    return parsePersistedRootSessions(parsed);
+  }
+}
+
+/**
+ * Resolves the user-private state file for the local MCP adapter.
+ *
+ * Hosts can set `FAILURE_REPORT_MCP_SESSION_STORE` to choose their own durable
+ * location, such as a managed state volume. This location is host configuration
+ * only and is never accepted from a public Root request.
+ */
+export function defaultRootSessionStorePath(
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  const configured = environment.FAILURE_REPORT_MCP_SESSION_STORE?.trim();
+  if (configured) {
+    return configured;
+  }
+  const stateRoot =
+    environment.XDG_STATE_HOME?.trim() || join(homedir(), ".local", "state");
+  return join(stateRoot, "failure-report", "mcp-root-sessions.json");
 }
 
 /** Normalized result returned by any Eve Channel transport implementation. */
@@ -145,6 +226,17 @@ export class EveChannelRootInvoker implements RootInvoker {
         summary: "Eve Root returned a result for a different request id.",
       };
     }
+    const selectorResultFailure = validateSelectorRehydration(
+      parsedRequest,
+      parsedResult.data,
+    );
+    if (selectorResultFailure) {
+      return {
+        request_id: parsedRequest.request_id,
+        status: "failed",
+        summary: selectorResultFailure,
+      };
+    }
     return parsedResult.data;
   }
 }
@@ -155,6 +247,7 @@ export type McpRootCompositionOptions = {
   bearer?: string;
   transport?: EveChannelRootTransport;
   session_store?: RootSessionStore;
+  session_store_path?: string;
 };
 
 /**
@@ -166,16 +259,20 @@ export type McpRootCompositionOptions = {
 export function createMcpRootInvoker(
   options: McpRootCompositionOptions = {},
 ): RootInvoker {
+  const host = options.host ?? "http://127.0.0.1:3000";
   const transport =
     options.transport ??
     new EveChannelRootTransport({
-      host: options.host ?? "http://127.0.0.1:3000",
+      host,
       ...(options.bearer ? { auth: { bearer: options.bearer } } : {}),
     });
 
   return new EveChannelRootInvoker(
     transport,
-    options.session_store ?? new InMemoryRootSessionStore(),
+    options.session_store ??
+      new FileRootSessionStore(
+        options.session_store_path ?? defaultRootSessionStorePath(),
+      ),
   );
 }
 
@@ -191,6 +288,8 @@ export function buildRootInvocationMessage(request: RootRequest): string {
     "Follow your Root instructions, use Root-owned tools and declared internal subagents when useful,",
     "and return a result conforming exactly to the requested output schema.",
     "Keep request_id unchanged. Do not expose internal subagent identities to the caller.",
+    "If request data contains issue_selector, call read_shared_context first. A null workpad is valid;",
+    "return its shared_context as result.issue and never ask the caller to invent workpad fields.",
     "",
     "ROOT_REQUEST_DATA",
     JSON.stringify(request, null, 2),
@@ -204,20 +303,78 @@ export function buildRootInvocationMessage(request: RootRequest): string {
  * a single Eve conversation, while unrelated ad-hoc requests remain isolated.
  */
 export function rootSessionKey(request: RootRequest): string {
-  if (request.issue) {
-    return (
-      "issue:" +
-      request.issue.repository +
-      "#" +
-      String(request.issue.issue_number)
-    );
-  }
-  if (request.report?.shared_context) {
-    const issue = request.report.shared_context;
+  const issue =
+    request.issue_selector ?? request.issue ?? request.report?.shared_context;
+  if (issue) {
     return "issue:" + issue.repository + "#" + String(issue.issue_number);
   }
   if (request.report) {
     return "report:" + request.report.id;
   }
   return "request:" + request.request_id;
+}
+
+/** Enforces that a successful selector intake gives callers a reusable context. */
+function validateSelectorRehydration(
+  request: RootRequest,
+  result: RootResult,
+): string | undefined {
+  const selector = request.issue_selector;
+  if (!selector || result.status === "failed") {
+    return undefined;
+  }
+  if (!result.issue) {
+    return (
+      "Eve Root accepted an issue_selector without returning its rehydrated " +
+      "Issue context."
+    );
+  }
+  if (
+    result.issue.repository !== selector.repository ||
+    result.issue.issue_number !== selector.issue_number
+  ) {
+    return "Eve Root returned a rehydrated Issue context for a different Issue.";
+  }
+  return undefined;
+}
+
+/** Parses the private file format before a serialized cursor reaches Eve. */
+function parsePersistedRootSessions(
+  value: unknown,
+): Record<string, SessionState> {
+  if (!isRecord(value) || value.version !== 1 || !isRecord(value.entries)) {
+    throw new Error("FailureReport MCP session store has an invalid format.");
+  }
+
+  const entries: Record<string, SessionState> = {};
+  for (const [key, state] of Object.entries(value.entries)) {
+    if (!isSessionState(state)) {
+      throw new Error(
+        "FailureReport MCP session store has an invalid session.",
+      );
+    }
+    entries[key] = state;
+  }
+  return entries;
+}
+
+/** Checks the explicitly serializable subset Eve accepts as a session cursor. */
+function isSessionState(value: unknown): value is SessionState {
+  return (
+    isRecord(value) &&
+    typeof value.streamIndex === "number" &&
+    Number.isInteger(value.streamIndex) &&
+    value.streamIndex >= 0 &&
+    (value.continuationToken === undefined ||
+      typeof value.continuationToken === "string") &&
+    (value.sessionId === undefined || typeof value.sessionId === "string")
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return isRecord(error) && error.code === code;
 }
