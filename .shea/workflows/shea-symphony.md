@@ -70,7 +70,7 @@ main_lane:
 tmux:
   command: tmux
   agent_command: codex
-  review_agent_command: agy
+  review_agent_command: /Users/chuntengxiao/.local/bin/agy
   session_prefix: shea-failure-report
 
 codex:
@@ -82,7 +82,7 @@ codex:
 
 review_lane:
   backend: agy-cli
-  agy_command: agy
+  agy_command: /Users/chuntengxiao/.local/bin/agy
   agy_model: "Gemini 3.1 Pro (High)"
   timeout_ms: 1200000
   max_concurrent_workers: 1
