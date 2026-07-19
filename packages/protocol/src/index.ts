@@ -9,6 +9,11 @@ import { z } from "zod";
 
 /** Marker used to locate the one structured FailureReport workpad comment. */
 export const workpadMarker = "<!-- failure-report-workpad -->";
+/** Versioned delimiter around one immutable entry in a managed workpad comment. */
+export const workpadEntryStartMarker =
+  "<!-- failure-report-workpad-entry/v2 -->";
+/** Closing delimiter for a managed v2 workpad entry. */
+export const workpadEntryEndMarker = "<!-- /failure-report-workpad-entry -->";
 
 /** Shared primitive for IDs that may safely appear in report and transport keys. */
 const identifierSchema = z
@@ -109,6 +114,10 @@ export const githubIssueContextSchema = z
     workpad_marker: z.literal(workpadMarker),
     workpad_comment_ref: z.string().min(1).optional(),
     workpad_revision: z.number().int().nonnegative(),
+    workpad_logical_session_id: identifierSchema.optional(),
+    workpad_entry_id: identifierSchema.optional(),
+    workpad_producer_id: identifierSchema.optional(),
+    workpad_predecessor_comment_ref: z.string().min(1).optional(),
     synced_at: timestampSchema.optional(),
   })
   .strict();
@@ -515,94 +524,282 @@ export interface RootInvoker {
   invoke(request: RootRequest): Promise<RootResult>;
 }
 
-/** Decoded contents of the single structured workpad comment. */
-export type FailureReportWorkpad = {
+/** Immutable producer identity recorded in every public workpad entry. */
+export const failureReportWorkpadProducerSchema = z
+  .object({
+    id: identifierSchema,
+    github_actor_id: z.string().regex(/^\d+$/),
+  })
+  .strict();
+
+/** Versioned metadata paired with one round-trippable public report snapshot. */
+export const failureReportWorkpadEntryEnvelopeSchema = z
+  .object({
+    schema_version: z.literal("failure-report-workpad-entry/v2"),
+    producer: failureReportWorkpadProducerSchema,
+    logical_session_id: identifierSchema,
+    entry_id: identifierSchema,
+    revision: z.number().int().nonnegative(),
+    predecessor_comment_ref: z.string().min(1).optional(),
+  })
+  .strict();
+
+/** Complete immutable entry persisted in a FailureReport-managed comment. */
+export type FailureReportWorkpadEntry = z.infer<
+  typeof failureReportWorkpadEntryEnvelopeSchema
+> & {
   report: FailureReport;
-  revision: number;
 };
 
+/** Decoded entries from one managed workpad comment, ordered by rendered history. */
+export type FailureReportWorkpad = {
+  entries: FailureReportWorkpadEntry[];
+};
+
+const failureReportWorkpadPayloadSchema = z
+  .object({
+    entry: failureReportWorkpadEntryEnvelopeSchema,
+    failure_report: failureReportSchema,
+  })
+  .strict();
+
 /**
- * Serializes a report as the canonical, machine-readable Issue workpad payload.
- *
- * The header redundantly carries report ID and revision so parsing can reject a
- * copied JSON block that was attached to the wrong Issue comment.
+ * Renders one managed comment containing its first immutable entry. Later entries
+ * must be appended with `appendFailureReportWorkpadEntry` so rendered history is
+ * never regenerated or rewritten.
  */
 export function renderFailureReportWorkpad(
-  report: FailureReport,
-  revision: number,
+  entry: FailureReportWorkpadEntry,
 ): string {
+  return [workpadMarker, renderFailureReportWorkpadEntry(entry), ""].join("\n");
+}
+
+/**
+ * Appends one entry without changing any byte already present in the comment.
+ * GitHub's update API still replaces the transport body, but the logical entries
+ * that existed before this call remain an untouched prefix of the new body.
+ */
+export function appendFailureReportWorkpadEntry(
+  existingMarkdown: string,
+  entry: FailureReportWorkpadEntry,
+): string {
+  parseFailureReportWorkpad(existingMarkdown);
+  return (
+    existingMarkdown +
+    (existingMarkdown.endsWith("\n") ? "\n" : "\n\n") +
+    renderFailureReportWorkpadEntry(entry) +
+    "\n"
+  );
+}
+
+/** Renders the human summary before the folded canonical JSON payload. */
+export function renderFailureReportWorkpadEntry(
+  entry: FailureReportWorkpadEntry,
+): string {
+  const payload = failureReportWorkpadPayloadSchema.parse({
+    entry: withoutReport(entry),
+    failure_report: entry.report,
+  });
+  assertPublicWorkpadPayload(payload.failure_report);
+
   return [
-    workpadMarker,
-    '<!-- failure-report/v1 report-id="' +
-      report.id +
-      '" revision="' +
-      String(revision) +
-      '" -->',
-    "~~~json",
-    JSON.stringify({ failure_report: report }, null, 2),
-    "~~~",
+    workpadEntryStartMarker,
+    "### FailureReport update",
+    "- Report: `" + payload.failure_report.id + "`",
+    "- Status: `" + payload.failure_report.status + "`",
+    "- Severity: `" + payload.failure_report.severity + "`",
+    "- Revision: `" + String(payload.entry.revision) + "`",
     "",
+    "<details>",
+    "<summary>Canonical FailureReport snapshot</summary>",
+    "",
+    "~~~json",
+    JSON.stringify(payload, null, 2),
+    "~~~",
+    "</details>",
+    workpadEntryEndMarker,
   ].join("\n");
 }
 
 /**
- * Parses and validates a persisted workpad comment before it becomes runtime state.
- *
- * Parsing the marker, header, JSON fence, and schema separately makes corruption
- * failures explicit instead of leaking a partially trusted object downstream.
+ * Parses every immutable entry before a comment can become runtime state.
+ * Marker-only v1 comments intentionally fail here: they have no producer or
+ * lineage proof and must be resolved through `needs_input` instead of migrated.
  */
-export type FailureReportWorkpadParseOptions = {
-  /**
-   * An explicitly opted-in, transport-owned normalization applied to decoded
-   * JSON before the normal strict workpad contract is validated.
-   */
-  normalize_payload?: (payload: unknown) => unknown;
-};
-
 export function parseFailureReportWorkpad(
   markdown: string,
-  options: FailureReportWorkpadParseOptions = {},
 ): FailureReportWorkpad {
   if (!markdown.includes(workpadMarker)) {
     throw new Error("Missing FailureReport workpad marker.");
   }
 
-  const header = markdown.match(
-    /<!-- failure-report\/v1 report-id="([^"]+)" revision="(\d+)" -->/,
+  const entries: FailureReportWorkpadEntry[] = [];
+  const startMarkers = countOccurrences(markdown, workpadEntryStartMarker);
+  const endMarkers = countOccurrences(markdown, workpadEntryEndMarker);
+  if (startMarkers !== endMarkers) {
+    throw new Error("FailureReport workpad has an unclosed or stray v2 entry.");
+  }
+  if (markdown.includes("<!-- failure-report/v1 ")) {
+    throw new Error(
+      "FailureReport workpad contains a legacy v1 payload and requires input.",
+    );
+  }
+  const entryPattern = new RegExp(
+    escapeRegExp(workpadEntryStartMarker) +
+      "\\s*([\\s\\S]*?)\\s*" +
+      escapeRegExp(workpadEntryEndMarker),
+    "g",
   );
-  const payload = markdown.match(/~~~json\s*([\s\S]*?)\s*~~~/);
+  let match: RegExpExecArray | null;
+  while ((match = entryPattern.exec(markdown))) {
+    const body = match[1];
+    if (!body) {
+      throw new Error("FailureReport workpad entry is empty.");
+    }
+    const summary = body.indexOf("### FailureReport update");
+    const details = body.indexOf("<details>");
+    if (
+      summary === -1 ||
+      details === -1 ||
+      summary > details ||
+      !body.includes("<summary>Canonical FailureReport snapshot</summary>") ||
+      !body.includes("</details>")
+    ) {
+      throw new Error(
+        "FailureReport workpad entry is missing its required public summary or folded snapshot.",
+      );
+    }
+    const payload = body.match(/~~~json\s*([\s\S]*?)\s*~~~/);
+    if (!payload?.[1]) {
+      throw new Error(
+        "FailureReport workpad entry is missing its JSON snapshot.",
+      );
+    }
+    const decoded: unknown = JSON.parse(payload[1]);
+    const parsed = failureReportWorkpadPayloadSchema.parse(decoded);
+    if (
+      parsed.failure_report.shared_context?.workpad_revision !==
+      parsed.entry.revision
+    ) {
+      throw new Error(
+        "FailureReport workpad entry revision does not match shared context.",
+      );
+    }
+    if (
+      parsed.failure_report.shared_context?.workpad_entry_id !==
+      parsed.entry.entry_id
+    ) {
+      throw new Error(
+        "FailureReport workpad entry id does not match shared context.",
+      );
+    }
+    if (
+      parsed.failure_report.shared_context?.workpad_logical_session_id !==
+      parsed.entry.logical_session_id
+    ) {
+      throw new Error(
+        "FailureReport workpad logical session does not match shared context.",
+      );
+    }
+    entries.push({ ...parsed.entry, report: parsed.failure_report });
+  }
 
-  if (!header || !payload) {
+  if (entries.length === 0) {
     throw new Error(
-      "FailureReport workpad is missing a header or JSON payload.",
+      "FailureReport workpad has no schema-valid v2 entry; legacy or copied markers require input.",
     );
   }
-
-  const reportId = header[1];
-  const revision = header[2];
-  const jsonPayload = payload[1];
-
-  if (!reportId || !revision || !jsonPayload) {
-    throw new Error(
-      "FailureReport workpad has an incomplete header or JSON payload.",
-    );
+  if (entries.length !== startMarkers) {
+    throw new Error("FailureReport workpad has an unparsable v2 entry.");
   }
+  return { entries };
+}
 
-  const decoded: unknown = JSON.parse(jsonPayload);
-  const normalized = options.normalize_payload
-    ? options.normalize_payload(decoded)
-    : decoded;
-  const parsed = z
-    .object({ failure_report: failureReportSchema })
-    .strict()
-    .parse(normalized);
+/** Drops the convenience `report` property before serializing the schema envelope. */
+function withoutReport(
+  entry: FailureReportWorkpadEntry,
+): z.infer<typeof failureReportWorkpadEntryEnvelopeSchema> {
+  const { report: _report, ...envelope } = entry;
+  return envelope;
+}
 
-  if (parsed.failure_report.id !== reportId) {
-    throw new Error("FailureReport workpad header does not match report id.");
+/** Escapes literal marker text before using it in the entry parser's regex. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function countOccurrences(text: string, value: string): number {
+  let count = 0;
+  let index = text.indexOf(value);
+  while (index !== -1) {
+    count += 1;
+    index = text.indexOf(value, index + value.length);
   }
+  return count;
+}
 
-  return {
-    report: parsed.failure_report,
-    revision: Number(revision),
+/**
+ * Prevents credentials, host-local paths, or non-opaque private evidence from
+ * entering the public JSON payload. Restricted evidence may be referenced only
+ * through an opaque `protected://` handle; its contents stay outside GitHub.
+ */
+function assertPublicWorkpadPayload(report: FailureReport): void {
+  const prohibitedPath =
+    /(?:^|[\s"'`(])(?:\/Users\/|\/Volumes\/|\/home\/|[A-Za-z]:\\\\)/;
+  const credential =
+    /(?:ghp_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|(?:api[_-]?key|token|secret|password|credential)\s*[:=]|bearer\s+\S+|-----BEGIN [A-Z ]*PRIVATE KEY-----)/i;
+
+  const inspect = (value: unknown, path: string): void => {
+    if (typeof value === "string") {
+      if (prohibitedPath.test(value)) {
+        throw new Error(
+          "FailureReport workpad cannot publish a prohibited host path at " +
+            path +
+            ".",
+        );
+      }
+      if (credential.test(value)) {
+        throw new Error(
+          "FailureReport workpad cannot publish credential-like content at " +
+            path +
+            ".",
+        );
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item, index) =>
+        inspect(item, path + "[" + String(index) + "]"),
+      );
+      return;
+    }
+    if (value && typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) {
+        inspect(child, path + "." + key);
+      }
+    }
   };
+
+  for (const input of report.inputs) {
+    assertOpaquePrivateArtifact(input.artifact.ref, input.artifact.sensitivity);
+  }
+  for (const evidence of report.evidence) {
+    for (const artifact of evidence.artifacts) {
+      assertOpaquePrivateArtifact(artifact.ref, artifact.sensitivity);
+    }
+  }
+  inspect(report, "failure_report");
+}
+
+function assertOpaquePrivateArtifact(
+  ref: string,
+  sensitivity: "public" | "internal" | "restricted" | "secret",
+): void {
+  const opaqueReference =
+    ref.startsWith("protected://") || /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(ref);
+  if (sensitivity !== "public" && !opaqueReference) {
+    throw new Error(
+      "Non-public evidence must use an opaque protected:// or logical reference before public workpad rendering.",
+    );
+  }
 }

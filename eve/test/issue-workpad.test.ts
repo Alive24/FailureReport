@@ -2,16 +2,19 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 import {
-  findExistingWorkpad,
-  prepareIssueWorkpadMutation,
-  renderIssueBody,
-  upsertIssueNarrative,
-} from "../agent/lib/integrations/github/issue-workpad.js";
-import {
   failureReportSchema,
   parseFailureReportWorkpad,
   workpadMarker,
 } from "@failure-report/protocol";
+
+import {
+  WorkpadNeedsInputError,
+  findExistingWorkpad,
+  prepareIssueWorkpadMutation,
+  type GithubIssueComment,
+  type GithubIssueSnapshot,
+  type WorkpadProducerConfiguration,
+} from "../agent/lib/integrations/github/issue-workpad.js";
 
 /** Loads a schema-validated report fixture instead of exposing raw JSON to tests. */
 async function loadReport() {
@@ -22,206 +25,217 @@ async function loadReport() {
   return failureReportSchema.parse(JSON.parse(await readFile(file, "utf8")));
 }
 
-/** Minimal target Issue used to test pure narrative and workpad transformations. */
-const issue = {
-  repository: "Alive24/CKBoost",
-  issue_number: 54,
-  title: "CKBoost Issue 54",
-  issue_url: "https://github.com/Alive24/CKBoost/issues/54",
-  body: "# Existing Issue",
-  updated_at: "2026-07-15T10:00:00Z",
-  comments: [],
+const rootGh: WorkpadProducerConfiguration = {
+  current: { id: "root-gh", github_actor_id: "101" },
+  producers: [
+    { id: "root-gh", github_actor_id: "101" },
+    { id: "root-app", github_actor_id: "202" },
+  ],
 };
 
-/** Covers the single-comment, revision-checked workpad protocol. */
+const rootApp: WorkpadProducerConfiguration = {
+  ...rootGh,
+  current: { id: "root-app", github_actor_id: "202" },
+};
+
+/** Minimal target Issue used to test pure managed-comment transformations. */
+function issue(comments: GithubIssueComment[] = []): GithubIssueSnapshot {
+  return {
+    repository: "Alive24/CKBoost",
+    issue_number: 54,
+    title: "CKBoost Issue 54",
+    issue_url: "https://github.com/Alive24/CKBoost/issues/54",
+    body: "# Human-authored Issue context\n\nDo not erase.",
+    updated_at: "2026-07-15T10:00:00Z",
+    comments,
+  };
+}
+
+function managedComment(
+  id: string,
+  body: string,
+  actorId: string,
+): GithubIssueComment {
+  return {
+    id,
+    body,
+    updated_at: "2026-07-15T10:01:00Z",
+    author: { id: actorId, login: "fixture-" + actorId },
+  };
+}
+
+/** Covers provenance, append-only behavior, continuations, and fail-closed reentry. */
 describe("GitHub Issue workpad", () => {
-  it("creates the first immutable-context workpad on a target Issue", async () => {
+  it("creates the first provenance-bound workpad without changing the Issue body", async () => {
     const report = await loadReport();
+    const target = issue();
     const mutation = prepareIssueWorkpadMutation(
-      issue,
+      target,
       report,
       "2026-07-15T10:01:00Z",
+      rootGh,
     );
     const parsed = parseFailureReportWorkpad(mutation.workpad_comment_body);
 
     expect(mutation.mode).toBe("create");
     expect(mutation.expected_workpad_revision).toBeNull();
-    expect(parsed.revision).toBe(0);
-    expect(mutation.report.shared_context?.issue_number).toBe(54);
-    expect(renderIssueBody(report)).toContain("Durable Workpad");
-  });
-
-  it("adds a stable narrative block without deleting existing Issue context", async () => {
-    const report = await loadReport();
-    const body = upsertIssueNarrative(
-      "# Existing human context\n\nDo not erase.",
-      report,
+    expect(target.body).toBe("# Human-authored Issue context\n\nDo not erase.");
+    expect(parsed.entries[0]?.producer).toEqual(rootGh.current);
+    expect(parsed.entries[0]?.logical_session_id).toContain(
+      "Alive24/CKBoost/54",
     );
-
-    expect(body).toContain("Existing human context");
-    expect(body).toContain("Do not erase.");
-    expect(body).toContain("failure-report-issue:start");
-    expect(upsertIssueNarrative(body, report)).toBe(body);
+    expect(parsed.entries[0]?.report.shared_context?.workpad_revision).toBe(0);
   });
 
-  it("marks a finalized diagnostic branch as a snapshot rather than an implementation branch", async () => {
-    const report = await loadReport();
-    const finalized = failureReportSchema.parse({
-      ...report,
-      diagnostic_session: {
-        lifecycle: "finalized",
-        domain_extensions: ["ckb"],
-        backend_id: "codex_app_server",
-        worktree: {
-          path: "/tmp/failure-report/issue-54",
-          identity: "diagnostic-issue-54",
-          base_revision: report.target.revision,
-          head_revision: report.target.revision,
-        },
-        diagnostic_branch_slug: "ckboost-issue-54",
-        diagnostic_branch: {
-          name: "diagnostic/54-ckboost-issue-54",
-          head_revision: report.target.revision,
-          remote_name: "origin",
-          remote_ref: "refs/heads/diagnostic/54-ckboost-issue-54",
-          remote_url:
-            "https://github.com/Alive24/CKBoost/tree/diagnostic/54-ckboost-issue-54",
-          pushed_at: report.updated_at,
-          finalized_at: report.updated_at,
-          reuse_policy: "diagnostic_snapshot_only",
-        },
-      },
-    });
-
-    const narrative = renderIssueBody(finalized);
-    expect(narrative).toContain("Diagnostic Snapshot");
-    expect(narrative).toContain("Do not continue implementation");
-    expect(narrative).toContain("separate implementation worktree/branch");
-  });
-
-  it("increments the single workpad revision on resume", async () => {
+  it("appends same-producer history in the verified comment without rewriting prior bytes", async () => {
     const report = await loadReport();
     const first = prepareIssueWorkpadMutation(
-      issue,
+      issue(),
       report,
       "2026-07-15T10:01:00Z",
+      rootGh,
+    );
+    const firstComment = managedComment(
+      "comment-1",
+      first.workpad_comment_body,
+      "101",
     );
     const resumedIssue = {
-      ...issue,
+      ...issue([firstComment]),
       updated_at: "2026-07-15T10:02:00Z",
-      comments: [
-        {
-          id: "IC_workpad_54",
-          body: first.workpad_comment_body,
-          updated_at: "2026-07-15T10:01:00Z",
-        },
-      ],
     };
     const second = prepareIssueWorkpadMutation(
       resumedIssue,
       first.report,
       "2026-07-15T10:03:00Z",
+      rootGh,
     );
 
-    expect(findExistingWorkpad(resumedIssue)?.revision).toBe(0);
-    expect(findExistingWorkpad(resumedIssue)?.report.id).toBe(report.id);
-    expect(second.mode).toBe("update");
-    expect(second.expected_workpad_revision).toBe(0);
+    expect(second.mode).toBe("append");
+    expect(second.target_comment_ref).toBe("comment-1");
+    expect(second.workpad_comment_body.startsWith(firstComment.body)).toBe(
+      true,
+    );
     expect(
-      parseFailureReportWorkpad(second.workpad_comment_body).revision,
-    ).toBe(1);
+      parseFailureReportWorkpad(second.workpad_comment_body).entries.map(
+        (entry) => entry.revision,
+      ),
+    ).toEqual([0, 1]);
+    expect(findExistingWorkpad(resumedIssue, rootGh)?.revision).toBe(0);
   });
 
-  it("repairs only a legacy active session missing its durable branch slug", async () => {
+  it("creates a linked successor comment for a different explicitly configured producer", async () => {
     const report = await loadReport();
-    const active = failureReportSchema.parse({
-      ...report,
-      diagnostic_session: {
-        lifecycle: "active",
-        domain_extensions: ["ckb"],
-        backend_id: "codex_app_server",
-        worktree: {
-          path: "/tmp/failure-report/issue-54",
-          identity: "diagnostic-issue-54",
-          base_revision: report.target.revision,
-          head_revision: report.target.revision,
-        },
-        diagnostic_branch_slug: "old-title",
-      },
-    });
-    const legacy = JSON.parse(JSON.stringify(active)) as {
-      diagnostic_session: { diagnostic_branch_slug?: string };
-    };
-    delete legacy.diagnostic_session.diagnostic_branch_slug;
-    const legacyWorkpad = [
-      workpadMarker,
-      '<!-- failure-report/v1 report-id="' + active.id + '" revision="9" -->',
-      "~~~json",
-      JSON.stringify({ failure_report: legacy }, null, 2),
-      "~~~",
-      "",
-    ].join("\n");
-    const legacyIssue = {
-      ...issue,
-      title: "Fix: CKB #54 — Node RPC",
-      comments: [
-        {
-          id: "IC_workpad_54",
-          body: legacyWorkpad,
-          updated_at: "2026-07-15T10:01:00Z",
-        },
-      ],
-    };
-
-    expect(() => parseFailureReportWorkpad(legacyWorkpad)).toThrow(
-      "diagnostic_branch_slug",
-    );
-
-    const existing = findExistingWorkpad(legacyIssue);
-    expect(existing?.diagnostic_branch_slug_migrated).toBe(true);
-    expect(existing?.report.diagnostic_session?.diagnostic_branch_slug).toBe(
-      "fix-ckb-54-node-rpc",
-    );
-  });
-
-  it("rejects a stale report before it overwrites newer shared context", async () => {
-    const report = await loadReport();
-    const existing = prepareIssueWorkpadMutation(
-      issue,
+    const first = prepareIssueWorkpadMutation(
+      issue(),
       report,
       "2026-07-15T10:01:00Z",
+      rootGh,
     );
-    const later = prepareIssueWorkpadMutation(
-      {
-        ...issue,
-        comments: [
-          {
-            id: "IC_workpad_54",
-            body: existing.workpad_comment_body,
-            updated_at: "2026-07-15T10:01:00Z",
-          },
-        ],
-      },
-      existing.report,
+    const predecessor = managedComment(
+      "comment-1",
+      first.workpad_comment_body,
+      "101",
+    );
+    const continued = prepareIssueWorkpadMutation(
+      issue([predecessor]),
+      first.report,
       "2026-07-15T10:02:00Z",
+      rootApp,
     );
-    const issueAtRevisionOne = {
-      ...issue,
-      comments: [
-        {
-          id: "IC_workpad_54",
-          body: later.workpad_comment_body,
-          updated_at: "2026-07-15T10:02:00Z",
-        },
-      ],
-    };
+    const successor = managedComment(
+      "comment-2",
+      continued.workpad_comment_body,
+      "202",
+    );
 
+    expect(continued.mode).toBe("continue");
+    expect(continued.target_comment_ref).toBeUndefined();
+    expect(continued.predecessor_comment_ref).toBe("comment-1");
+    expect(continued.workpad_comment_body).not.toContain(predecessor.body);
+    expect(
+      findExistingWorkpad(issue([predecessor, successor]), rootApp),
+    ).toMatchObject({
+      revision: 1,
+      logical_session_id: expect.any(String),
+      predecessor_comment_ref: "comment-1",
+    });
+  });
+
+  it("returns needs_input for a copied marker, a legacy v1 payload, an unknown producer, and author mismatch", async () => {
+    const report = await loadReport();
+    const copiedMarker = managedComment(
+      "copied",
+      workpadMarker + "\nHuman copied this marker.",
+      "999",
+    );
+    const legacy = managedComment(
+      "legacy",
+      workpadMarker +
+        '\n<!-- failure-report/v1 report-id="old" revision="0" -->',
+      "101",
+    );
+    const valid = prepareIssueWorkpadMutation(
+      issue(),
+      report,
+      "2026-07-15T10:01:00Z",
+      rootGh,
+    );
+    const unknownProducer = managedComment(
+      "unknown",
+      valid.workpad_comment_body.replace(/root-gh/g, "unregistered"),
+      "101",
+    );
+    const authorMismatch = managedComment(
+      "author-mismatch",
+      valid.workpad_comment_body,
+      "999",
+    );
+
+    for (const target of [
+      issue([copiedMarker]),
+      issue([legacy]),
+      issue([unknownProducer]),
+      issue([authorMismatch]),
+    ]) {
+      expect(() => findExistingWorkpad(target, rootGh)).toThrow(
+        WorkpadNeedsInputError,
+      );
+    }
+  });
+
+  it("returns needs_input for multiple roots and concurrent lineage forks", async () => {
+    const report = await loadReport();
+    const root = prepareIssueWorkpadMutation(
+      issue(),
+      report,
+      "2026-07-15T10:01:00Z",
+      rootGh,
+    );
+    const rootA = managedComment("root-a", root.workpad_comment_body, "101");
+    const rootB = managedComment("root-b", root.workpad_comment_body, "101");
+    expect(() => findExistingWorkpad(issue([rootA, rootB]), rootGh)).toThrow(
+      "exactly one root",
+    );
+
+    const continuation = prepareIssueWorkpadMutation(
+      issue([rootA]),
+      root.report,
+      "2026-07-15T10:02:00Z",
+      rootApp,
+    );
+    const forkA = managedComment(
+      "fork-a",
+      continuation.workpad_comment_body,
+      "202",
+    );
+    const forkB = managedComment(
+      "fork-b",
+      continuation.workpad_comment_body,
+      "202",
+    );
     expect(() =>
-      prepareIssueWorkpadMutation(
-        issueAtRevisionOne,
-        existing.report,
-        "2026-07-15T10:03:00Z",
-      ),
-    ).toThrow("revision conflict");
+      findExistingWorkpad(issue([rootA, forkA, forkB]), rootGh),
+    ).toThrow("fork");
   });
 });

@@ -94,7 +94,7 @@ type DiagnosticSession = {
 
 `target` contains only the repository identity and a full immutable Git SHA; it has no local checkout path or selector. Root derives the canonical remote from the Root-published GitHub Issue context and creates or verifies a persistent source cache under `.eve/sandbox-cache/sources/`. The source cache path is an internal implementation detail, while the persisted worktree path is Root-generated and must be revalidated before use. Root validates canonical origin, path containment, deterministic worktree path, detached state, base revision, and HEAD before resume. External HEAD mutation becomes `needs_input`, never an implicit fallback to an arbitrary checkout. After finalization of a clean session, Root creates and pushes `diagnostic/<target-issue-number>-<issue-title-slug>` at the final HEAD without checking it out or force-moving a ref. The workpad persists its `origin` ref and URL. That ref is a diagnostic-only snapshot: a future coding agent must use a separate implementation worktree/branch and must not create a PR from this snapshot.
 
-GitHub's Issue body and marked workpad remain shared collaboration context; the workpad additionally persists diagnostic session state. The worker never gains GitHub write capability.
+GitHub's Issue body and comments remain shared collaboration context. Root never modifies the Issue body or a foreign comment. It accepts a managed workpad comment only when a versioned entry envelope, configured producer registry, and the live immutable GitHub comment author all agree. Same-producer revisions append immutable entries; a different configured producer creates a successor comment linked to its predecessor. Copied markers, legacy payloads, malformed entries, unknown producers, and forks fail closed with `needs_input`. The worker never gains GitHub write capability.
 
 ## Codex Native Skill and Worker
 
@@ -109,11 +109,13 @@ approvalMode: on-request
 sandboxMode: workspace-write
 ```
 
-Codex runs directly in the user's existing host environment, retaining `~/.codex`, plugins, native skills, MCP configuration, authentication, Git credentials, model settings, and persistent thread storage. `workspace-write` permits focused tests, caches, debugging artifacts, and bounded commits whose message and content clearly identify them as diagnostic-only. It does not authorize implementation or PR workflow. After every turn, Root records the current HEAD, timestamp, and provider thread id so the same Codex thread can resume later.
+Before every new or resumed diagnostic delegation, Root runs a bounded host-runtime preflight after workpad preparation has validated the managed worktree. It starts only the configured App Server executable with that worktree as `cwd`, inherits the ambient Codex runtime without setting or copying `CODEX_HOME`, sends `initialize`, sends `initialized`, then checks `skills/list` for every Root-selected repository skill before terminating the child. It never creates a thread, sends a model request, invokes a native tool, or modifies global Codex configuration, credentials, permissions, or state files directly. A transient startup, handshake, transport, or timeout failure is cleaned up and retried once with a fresh child after Root revalidates the same managed workspace; permanent executable, state-access, credential, containment, or skill-discovery failures return sanitized `needs_input` instead of a delegation.
+
+Codex runs directly in the user's existing host environment, retaining `~/.codex`, plugins, native skills, MCP configuration, authentication, Git credentials, model settings, and persistent thread storage. `workspace-write` permits focused tests, caches, debugging artifacts, and bounded commits whose message and content clearly identifies them as diagnostic-only. It does not authorize implementation or PR workflow. After every turn, Root records the current HEAD, timestamp, and provider thread id so the same Codex thread can resume later.
 
 ## Verification Scope
 
-Tests cover direct protocol renames and legacy-field rejection; allocation and resume; external-HEAD rejection; workpad/thread persistence; native-skill link creation, repair, and fail-closed conflicts; and the CKB extension's pure-capability shape. An optional local App Server smoke test can query `skills/list` in a temporary Git worktree without starting a model turn.
+Tests cover direct protocol renames and legacy-field rejection; allocation and resume; external-HEAD rejection; workpad/thread persistence; native-skill link creation, repair, and fail-closed conflicts; bounded App Server initialization/skill discovery, failure classification, cleanup, and one fresh-process retry; and the CKB extension's pure-capability shape. An optional local App Server smoke test uses the ambient host runtime in a temporary Git worktree without starting a model turn.
 
 ## References
 

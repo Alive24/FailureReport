@@ -357,12 +357,11 @@ export class DiagnosticSessionWorkpad {
     current: {
       report: FailureReport;
       revision: number;
-      diagnostic_branch_slug_migrated: boolean;
     },
     diagnosticSession: VerifiedDiagnosticWorktree,
     worktreeRehomed: boolean,
   ): Promise<LoadedDiagnosticSession> {
-    if (!current.diagnostic_branch_slug_migrated && !worktreeRehomed) {
+    if (!worktreeRehomed) {
       return {
         report: current.report,
         workpad_revision: current.revision,
@@ -404,14 +403,16 @@ export class DiagnosticSessionWorkpad {
     report: FailureReport;
     revision: number;
     issue: Awaited<ReturnType<DiagnosticSessionIssueGateway["readIssue"]>>;
-    diagnostic_branch_slug_migrated: boolean;
   }> {
     const gateway = await this.gateway;
     const issue = await gateway.readIssue(
       envelope.repository,
       envelope.issue_number,
     );
-    const workpad = findExistingWorkpad(issue);
+    const workpad = findExistingWorkpad(
+      issue,
+      gateway.getWorkpadProducerConfiguration(),
+    );
     if (!workpad) {
       throw new Error(
         "Diagnosis requires a Root-published FailureReport workpad before allocation.",
@@ -437,7 +438,6 @@ export class DiagnosticSessionWorkpad {
       report: workpad.report,
       revision: workpad.revision,
       issue,
-      diagnostic_branch_slug_migrated: workpad.diagnostic_branch_slug_migrated,
     };
   }
 }

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import {
+  appendFailureReportWorkpadEntry,
   diagnosticBranchSlugSchema,
   failureReportSchema,
   parseFailureReportWorkpad,
@@ -10,15 +11,58 @@ import {
   rootRequestSchema,
   rootResultSchema,
   workpadMarker,
+  type FailureReport,
+  type FailureReportWorkpadEntry,
 } from "../src/index.js";
 
-/** Loads a raw fixture as unknown so each test exercises the production schema. */
+/** Loads a raw fixture as unknown so every test exercises the production schema. */
 async function loadFixture(name: string): Promise<unknown> {
   const file = new URL("./fixtures/" + name, import.meta.url);
   return JSON.parse(await readFile(file, "utf8"));
 }
 
-/** Covers durable-report parsing and workpad serialization invariants. */
+/** Builds a v2 entry whose report context agrees with its immutable envelope. */
+function entryFor(
+  report: FailureReport,
+  revision: number,
+  options: { predecessor_comment_ref?: string } = {},
+): FailureReportWorkpadEntry {
+  const logicalSessionId = "github-issue/Alive24/CKBoost/54/" + report.id;
+  const entryId = logicalSessionId + "/revision-" + String(revision);
+  const contextualReport = failureReportSchema.parse({
+    ...report,
+    shared_context: {
+      provider: "github_issue",
+      repository: "Alive24/CKBoost",
+      issue_number: 54,
+      issue_url: "https://github.com/Alive24/CKBoost/issues/54",
+      workpad_marker: workpadMarker,
+      workpad_revision: revision,
+      workpad_logical_session_id: logicalSessionId,
+      workpad_entry_id: entryId,
+      workpad_producer_id: "root-gh",
+      ...(options.predecessor_comment_ref
+        ? {
+            workpad_predecessor_comment_ref: options.predecessor_comment_ref,
+          }
+        : {}),
+      synced_at: report.updated_at,
+    },
+  });
+  return {
+    schema_version: "failure-report-workpad-entry/v2",
+    producer: { id: "root-gh", github_actor_id: "101" },
+    logical_session_id: logicalSessionId,
+    entry_id: entryId,
+    revision,
+    ...(options.predecessor_comment_ref
+      ? { predecessor_comment_ref: options.predecessor_comment_ref }
+      : {}),
+    report: contextualReport,
+  };
+}
+
+/** Covers durable-report parsing and v2 workpad serialization invariants. */
 describe("FailureReport protocol", () => {
   it.each(["issue-54.json", "contract-recipe-identifier.json"])(
     "accepts the historical CKBoost fixture %s",
@@ -32,30 +76,43 @@ describe("FailureReport protocol", () => {
     },
   );
 
-  it("round-trips an Issue workpad without changing the report", async () => {
+  it("round-trips a versioned managed entry with a human summary before details", async () => {
     const report = failureReportSchema.parse(
       await loadFixture("issue-54.json"),
     );
-    const markdown = renderFailureReportWorkpad(report, 7);
+    const entry = entryFor(report, 7);
+    const markdown = renderFailureReportWorkpad(entry);
     const parsed = parseFailureReportWorkpad(markdown);
 
-    expect(markdown).toContain(workpadMarker);
-    expect(parsed.revision).toBe(7);
-    expect(parsed.report).toEqual(report);
+    expect(markdown.indexOf("### FailureReport update")).toBeLessThan(
+      markdown.indexOf("<details>"),
+    );
+    expect(markdown).toContain("Canonical FailureReport snapshot");
+    expect(parsed.entries).toEqual([entry]);
   });
 
-  it("rejects a workpad header for a different report", async () => {
+  it("appends a new entry while preserving every byte of the prior logical history", async () => {
     const report = failureReportSchema.parse(
       await loadFixture("issue-54.json"),
     );
-    const markdown = renderFailureReportWorkpad(report, 1).replace(
-      'report-id="' + report.id + '"',
-      'report-id="another-report"',
+    const first = renderFailureReportWorkpad(entryFor(report, 0));
+    const appended = appendFailureReportWorkpadEntry(
+      first,
+      entryFor(report, 1),
     );
+    const parsed = parseFailureReportWorkpad(appended);
 
-    expect(() => parseFailureReportWorkpad(markdown)).toThrow(
-      "header does not match report id",
-    );
+    expect(appended.startsWith(first)).toBe(true);
+    expect(parsed.entries.map((entry) => entry.revision)).toEqual([0, 1]);
+    expect(parsed.entries[0]?.report).toEqual(entryFor(report, 0).report);
+  });
+
+  it("rejects legacy marker-only workpads rather than silently migrating them", () => {
+    expect(() =>
+      parseFailureReportWorkpad(
+        '<!-- failure-report-workpad -->\n<!-- failure-report/v1 report-id="old" revision="0" -->',
+      ),
+    ).toThrow("legacy v1");
   });
 
   it("validates GitHub Issue shared context", async () => {
@@ -111,9 +168,7 @@ describe("FailureReport protocol", () => {
   });
 
   it("keeps Unicode diagnostic slugs runtime-validated without emitting an unsupported JSON Schema pattern", () => {
-    expect(diagnosticBranchSlugSchema.parse("\u8bca\u65ad-54")).toBe(
-      "\u8bca\u65ad-54",
-    );
+    expect(diagnosticBranchSlugSchema.parse("诊断-54")).toBe("诊断-54");
     expect(() => diagnosticBranchSlugSchema.parse("-diagnostic")).toThrow();
     expect(() => diagnosticBranchSlugSchema.parse("diagnostic_slug")).toThrow();
 
@@ -122,7 +177,31 @@ describe("FailureReport protocol", () => {
     expect(jsonSchema).not.toContain("\\p{");
   });
 
-  it("rejects legacy execution fields rather than silently migrating a workpad", async () => {
+  it("rejects credential-like text and prohibited host paths before public rendering", async () => {
+    const report = failureReportSchema.parse(
+      await loadFixture("issue-54.json"),
+    );
+    const credentialBearing = failureReportSchema.parse({
+      ...report,
+      symptom: {
+        ...report.symptom,
+        raw_error_summary: "token=ghp_not-a-real-token",
+      },
+    });
+    const hostPathBearing = failureReportSchema.parse({
+      ...report,
+      origin: { ...report.origin, reporter: "/Users/example/private-evidence" },
+    });
+
+    expect(() =>
+      renderFailureReportWorkpad(entryFor(credentialBearing, 0)),
+    ).toThrow("credential-like");
+    expect(() =>
+      renderFailureReportWorkpad(entryFor(hostPathBearing, 0)),
+    ).toThrow("prohibited host path");
+  });
+
+  it("rejects legacy execution fields rather than silently accepting them", async () => {
     const report = failureReportSchema.parse(
       await loadFixture("issue-54.json"),
     );
@@ -149,18 +228,13 @@ describe("FailureReport protocol", () => {
     expect(() =>
       failureReportSchema.parse({
         ...report,
-        execution_state: {
-          domain_id: "ckb",
-        },
+        execution_state: { domain_id: "ckb" },
       }),
     ).toThrow();
     expect(() =>
       failureReportSchema.parse({
         ...report,
-        target: {
-          ...report.target,
-          source_checkout_path: "/host/checkout",
-        },
+        target: { ...report.target, source_checkout_path: "/host/checkout" },
       }),
     ).toThrow();
   });
@@ -173,30 +247,17 @@ describe("FailureReport protocol", () => {
     expect(() =>
       failureReportSchema.parse({
         ...report,
-        target: {
-          ...report.target,
-          revision: undefined,
-        },
+        target: { ...report.target, revision: undefined },
       }),
     ).toThrow();
-    expect(() =>
-      failureReportSchema.parse({
-        ...report,
-        target: {
-          ...report.target,
-          revision: "HEAD",
-        },
-      }),
-    ).toThrow("full immutable Git SHA");
-    expect(() =>
-      failureReportSchema.parse({
-        ...report,
-        target: {
-          ...report.target,
-          revision: "main",
-        },
-      }),
-    ).toThrow("full immutable Git SHA");
+    for (const revision of ["HEAD", "main"]) {
+      expect(() =>
+        failureReportSchema.parse({
+          ...report,
+          target: { ...report.target, revision },
+        }),
+      ).toThrow("full immutable Git SHA");
+    }
 
     for (const [field, value] of Object.entries({
       source_checkout_path: "/Volumes/Bohemialive/GitHub/CKBoost",
@@ -208,16 +269,13 @@ describe("FailureReport protocol", () => {
       expect(() =>
         failureReportSchema.parse({
           ...report,
-          target: {
-            ...report.target,
-            [field]: value,
-          },
+          target: { ...report.target, [field]: value },
         }),
       ).toThrow();
     }
   });
 
-  it("requires canonical extension sets and a branch for finalized diagnostics", async () => {
+  it("requires canonical extension sets and complete remote metadata for finalized diagnostics", async () => {
     const report = failureReportSchema.parse(
       await loadFixture("issue-54.json"),
     );

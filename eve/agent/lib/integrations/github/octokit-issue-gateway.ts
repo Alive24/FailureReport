@@ -1,6 +1,10 @@
 import type { Octokit } from "octokit";
 
-import type { GithubIssueSnapshot } from "./issue-workpad.js";
+import type {
+  GithubActorIdentity,
+  GithubIssueSnapshot,
+  WorkpadProducerConfiguration,
+} from "./issue-workpad.js";
 import { IssueWorkpadGateway } from "./issue-gateway.js";
 
 /**
@@ -15,8 +19,11 @@ import { IssueWorkpadGateway } from "./issue-gateway.js";
  * the SDK; the caller decides how the Octokit client is authenticated.
  */
 export class OctokitIssueGateway extends IssueWorkpadGateway {
-  constructor(private readonly octokit: Octokit) {
-    super();
+  constructor(
+    private readonly octokit: Octokit,
+    producers?: WorkpadProducerConfiguration,
+  ) {
+    super(producers);
   }
 
   /** Reads the Issue body and paginates all comments before constructing a snapshot. */
@@ -51,23 +58,21 @@ export class OctokitIssueGateway extends IssueWorkpadGateway {
         id: String(comment.id),
         body: comment.body ?? "",
         updated_at: comment.updated_at,
+        author: githubActorIdentity(comment.user),
       })),
     };
   }
 
-  /** Updates the human-readable narrative block in the Issue body. */
-  protected async updateIssueBody(
-    repository: string,
-    issueNumber: number,
-    body: string,
-  ): Promise<void> {
-    const { owner, repo } = splitRepository(repository);
-    await this.octokit.rest.issues.update({
-      owner,
-      repo,
-      issue_number: issueNumber,
-      body,
-    });
+  /** Reads the active credential's immutable GitHub account identifier. */
+  protected async readAuthenticatedActor(): Promise<GithubActorIdentity> {
+    const authenticated = await this.octokit.rest.users.getAuthenticated();
+    const actor = githubActorIdentity(authenticated.data);
+    if (!actor) {
+      throw new Error(
+        "GitHub authenticated actor response has no immutable id.",
+      );
+    }
+    return actor;
   }
 
   /** Creates the one marked workpad comment for an Issue's first publication. */
@@ -101,6 +106,27 @@ export class OctokitIssueGateway extends IssueWorkpadGateway {
     });
     return String(updated.data.id);
   }
+}
+
+/** Maps GitHub's live user/App object without treating its login as identity. */
+function githubActorIdentity(
+  user:
+    | {
+        id?: number | string | null;
+        login?: string | null;
+        type?: string | null;
+      }
+    | null
+    | undefined,
+): GithubActorIdentity | null {
+  if (user?.id === null || user?.id === undefined) {
+    return null;
+  }
+  return {
+    id: String(user.id),
+    ...(user.login ? { login: user.login } : {}),
+    ...(user.type ? { type: user.type } : {}),
+  };
 }
 
 /** Splits and validates the `owner/repository` identifier required by Octokit. */

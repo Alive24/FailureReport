@@ -1,6 +1,10 @@
 import { spawn } from "node:child_process";
 
-import type { GithubIssueSnapshot } from "./issue-workpad.js";
+import type {
+  GithubActorIdentity,
+  GithubIssueSnapshot,
+  WorkpadProducerConfiguration,
+} from "./issue-workpad.js";
 import { IssueWorkpadGateway } from "./issue-gateway.js";
 
 /**
@@ -19,9 +23,16 @@ type GithubIssueResponse = {
 };
 
 type GithubIssueCommentResponse = {
-  body: string;
+  body: string | null;
   id: number;
   updated_at: string;
+  user?: GithubActorResponse | null;
+};
+
+type GithubActorResponse = {
+  id: number | string;
+  login?: string | null;
+  type?: string | null;
 };
 
 /**
@@ -31,8 +42,11 @@ type GithubIssueCommentResponse = {
  * parent class so the CLI and Octokit transports cannot drift semantically.
  */
 export class GithubCliIssueGateway extends IssueWorkpadGateway {
-  constructor(private readonly executable = "gh") {
-    super();
+  constructor(
+    private readonly executable = "gh",
+    producers?: WorkpadProducerConfiguration,
+  ) {
+    super(producers);
   }
 
   /** Reads an Issue and all comments needed to locate its single workpad. */
@@ -63,29 +77,22 @@ export class GithubCliIssueGateway extends IssueWorkpadGateway {
       updated_at: issue.updated_at,
       comments: comments.map((comment) => ({
         id: String(comment.id),
-        body: comment.body,
+        body: comment.body ?? "",
         updated_at: comment.updated_at,
+        author: githubActorIdentity(comment.user),
       })),
     };
   }
 
-  /** Updates only the Issue body through GitHub's REST endpoint. */
-  protected async updateIssueBody(
-    repository: string,
-    issueNumber: number,
-    body: string,
-  ): Promise<void> {
-    await this.run(
-      [
-        "api",
-        "--method",
-        "PATCH",
-        "repos/" + repository + "/issues/" + String(issueNumber),
-        "--input",
-        "-",
-      ],
-      JSON.stringify({ body }),
+  /** Reads the active gh credential's immutable GitHub account identity. */
+  protected async readAuthenticatedActor(): Promise<GithubActorIdentity> {
+    const actor = githubActorIdentity(
+      await this.apiJson<GithubActorResponse>(["api", "user"]),
     );
+    if (!actor) {
+      throw new Error("gh authenticated actor response has no immutable id.");
+    }
+    return actor;
   }
 
   /** Creates the one structured workpad comment when an Issue has none yet. */
@@ -181,4 +188,18 @@ export class GithubCliIssueGateway extends IssueWorkpadGateway {
       child.stdin.end(input);
     });
   }
+}
+
+/** Maps an API user/App object without treating a mutable login as provenance. */
+function githubActorIdentity(
+  user: GithubActorResponse | null | undefined,
+): GithubActorIdentity | null {
+  if (user?.id === null || user?.id === undefined) {
+    return null;
+  }
+  return {
+    id: String(user.id),
+    ...(user.login ? { login: user.login } : {}),
+    ...(user.type ? { type: user.type } : {}),
+  };
 }

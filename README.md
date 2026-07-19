@@ -13,7 +13,7 @@ flowchart TD
   H --> E["Eve Root Supervisor"]
   E --> R["Tool-capable Root model provider"]
   E --> X["CKB mounted Eve extension"]
-  E --> I["GitHub Issue narrative + workpad"]
+  E --> I["GitHub Issue managed-comment workpad"]
   E --> D["Root prepare / finalize diagnostic session"]
   E --> B["Eve just-bash orchestration sandbox"]
   D --> W["Host-managed .eve/sandbox-cache source + detached worktree"]
@@ -26,9 +26,9 @@ flowchart TD
 - CKB is the first mounted Eve extension, never a public API target. It provides CKB instructions, the `failure-report-ckb-debugging` native skill, and deterministic `ckb__recommend_log`; it does not own a worktree, sandbox, or subagent.
 - `prepare_diagnostic_session` accepts a report bound to a repository and full immutable Git SHA, resolves a Root-selected non-empty `domain_extensions` set, and manages the source cache plus detached diagnostic worktree only under the repository's `.eve/sandbox-cache/`. It places every selected native skill under `.agents/skills/` and persists worktree/HEAD/Codex-thread state before delegating to the one `codex` worker. Codex decides how to use the loaded skills; extensions never select a backend. Reachable deployment credentials and network policy, rather than a Root approval loop, control access to external systems.
 - `finalize_diagnostic_session` creates and pushes `diagnostic/<target-issue-number>-<issue-title-slug>` only after the diagnostic worktree is clean. It does not check the branch out or force-move an existing ref. The workpad labels it a diagnostic-only snapshot: future coding must use a separate implementation worktree/branch and must not open a PR directly from the snapshot.
-- A target-repository GitHub Issue is the shared context: existing human body is preserved, FailureReport adds a stable narrative block, and exactly one marked comment holds the full structured snapshot.
+- A target-repository GitHub Issue is shared context: FailureReport never edits its body or a foreign comment. A managed comment is trusted only when its marker, v2 entry envelope, configured producer identity, and live immutable GitHub author identity agree.
 - Root owns GitHub as an internal integration. Octokit is the default API transport; by default it reuses the active local `gh auth login` identity once per process, then performs Issue and comment calls through the SDK.
-- The workpad `revision` and Issue `updated_at` make stale writes explicit. The MVP lifecycle state is `FailureReport.status`; a host may project it to labels or Project V2 without changing the protocol.
+- The workpad records an append-only logical lineage. The same verified producer appends a new immutable entry to its comment; a different configured producer creates a linked successor comment without modifying the predecessor. Any copied marker, malformed entry, unknown producer, conflicting lineage, or fork becomes `needs_input`.
 - Codex App Server's `threadId`, assigned worktree identity, Git revision, and optional finalized diagnostic snapshot are durable `diagnostic_session` state, distinct from GitHub shared context.
 - MCP and Temporal are outer packages that wrap the default Eve Channel for their own ecosystems; they do not create a second agent entry inside `eve/`.
 
@@ -60,7 +60,7 @@ pnpm check
 pnpm test
 ```
 
-To verify native Codex skill discovery locally without starting a model turn, run the opt-in App Server smoke test. It creates a temporary Git worktree, links the CKB skill beneath `.agents/skills`, and calls `skills/list` only:
+To verify native Codex skill discovery locally without starting a model turn, run the opt-in App Server smoke test. It creates a temporary Git worktree, links the CKB skill beneath `.agents/skills`, and performs the same bounded `initialize` plus `skills/list` exchange that Root uses:
 
 ```bash
 FAILURE_REPORT_RUN_CODEX_APP_SERVER_SMOKE=1 pnpm --filter @Alive24/FailureReport test -- codex-native-skill.smoke.test.ts
@@ -86,6 +86,14 @@ For a local diagnosis, Root accepts only a repository identity and a full immuta
 
 The actual `git clone`, `git fetch`, `git worktree`, test, and package-manager commands run in the host runtime. Eve is pinned to `just-bash` for Root orchestration; its virtual shell is not a replacement Git runtime. Root's host-side diagnostics adapters inspect the controlled workspace and Codex App Server runs directly on the host with the validated worktree as `cwd`, retaining the user's existing `~/.codex`, plugins, skills, MCP settings, authentication, Git credentials, model configuration, and thread persistence. No path-setting environment variable is supported for this boundary.
 
+### Codex diagnostic runtime preflight
+
+Before every new or resumed diagnostic delegation, Root first creates or restores the managed worktree and selected native-skill links. It then starts the configured `codex app-server` with that worktree as `cwd`, inheriting the ambient host runtime unchanged, performs only `initialize` and `skills/list`, verifies every Root-selected repository skill, and terminates the child. This gate never creates a Codex thread, sends a model request, invokes a native tool, creates a diagnostic branch, or changes target-repository business files.
+
+For normal-host startup, run Root from a terminal or service context where the existing Codex runtime can already start `codex app-server` and access its normal sign-in and persistent state. Root does not set, copy, or repair `CODEX_HOME`, credentials, permissions, or global Codex configuration.
+
+If Root runs inside a restrictive desktop-process context, the readiness check cleans up its child. Only a transient startup, handshake, transport, or timeout failure receives one fresh-process retry; state-access and credential failures return sanitized `needs_input` immediately. No failure can start a diagnostic turn. Move the Root host to a normal terminal or service context that already has the required Codex runtime access, resolve any sign-in or operating-system permission issue outside FailureReport, and retry; do not copy state or loosen permissions from within FailureReport.
+
 ## GitHub Runtime Authentication
 
 Octokit is the GitHub API client; it does not require users to create or install a GitHub App. The default runtime path expects `gh` to be installed and logged in on the machine that runs Eve Root:
@@ -106,8 +114,14 @@ Runtime configuration is optional for that common path. These alternatives are a
 | `FAILURE_REPORT_GITHUB_AUTH=app` + `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_INSTALLATION_ID` | Use a GitHub App installation through Octokit. This is the preferred credential model for centrally operated multi-user or self-hosted deployments, but is never required for ordinary users. |
 | `FAILURE_REPORT_GITHUB_GATEWAY=gh-cli` | Explicit legacy `gh api` fallback for local diagnostics or fixture capture; it is not the default transport. |
 | `FAILURE_REPORT_GITHUB_HOST`, `FAILURE_REPORT_GITHUB_API_URL` | Select a `gh` host and/or GitHub Enterprise API base URL. |
+| `FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ID` + `FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ACTOR_ID` | Required together to identify Root's current managed-comment producer with GitHub's immutable numeric actor ID. |
+| `FAILURE_REPORT_GITHUB_WORKPAD_PRODUCERS` | Optional JSON object mapping every approved producer ID to its immutable GitHub actor ID, for example `{"root-gh":"101","root-app":"202"}`. |
 
-All credentials belong in runtime environment/secret management only. FailureReport does not put tokens, App private keys, or credential output into the protocol, workpad, prompts, logs, or fixtures.
+All credentials belong in runtime environment/secret management only. FailureReport does not put tokens, App private keys, credential output, host-local paths, or raw private evidence into the public workpad, prompts, logs, or fixtures. Non-public evidence must be retained outside GitHub and referenced only through an opaque handle.
+
+## Managed GitHub Workpads
+
+Every public workpad entry carries a versioned envelope with its immutable producer, logical session, entry identity, revision, and any predecessor-comment reference. The concise status summary appears before a folded, schema-validated JSON snapshot. Root rehydrates only one valid linear lineage; it never migrates a legacy marker-only comment or guesses between candidates.
 
 ## Extend
 

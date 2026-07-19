@@ -31,6 +31,7 @@ import {
 import {
   prepareIssueWorkpadMutation,
   type GithubIssueSnapshot,
+  type WorkpadProducerConfiguration,
 } from "../agent/lib/integrations/github/issue-workpad.js";
 import sandbox from "../agent/sandbox.js";
 
@@ -48,6 +49,10 @@ const evmSkillRoot = "/extensions/evm-domain-pack";
 const evmSkillSource =
   evmSkillRoot + "/extension/skills/failure-report-evm-debugging";
 const evmSkillName = "failure-report-evm-debugging";
+const workpadProducers: WorkpadProducerConfiguration = {
+  current: { id: "root-gh", github_actor_id: "101" },
+  producers: [{ id: "root-gh", github_actor_id: "101" }],
+};
 
 const backend: CodexAppServerBackendConfig = {
   schema_version: "failure-report/codex-app-server/v1",
@@ -68,7 +73,7 @@ type Harness = {
   paths: FakePathOperations;
   currentReport(): FailureReport;
   currentBranch(): string;
-  removeDiagnosticBranchSlug(): void;
+  replaceWithLegacyV1Workpad(): void;
   setIssueTitle(value: string): void;
   setHead(value: string): void;
   setPorcelain(value: string): void;
@@ -215,28 +220,14 @@ describe("Codex diagnostic session", () => {
     );
   });
 
-  it("persists a recovered legacy active-session slug before another reentry", async () => {
+  it("refuses a legacy v1 workpad rather than silently recovering an unproven session", async () => {
     const harness = await createHarness();
-    const first = await harness.workpad.prepare(preparationFor(harness));
-    harness.removeDiagnosticBranchSlug();
-    harness.setIssueTitle("Legacy CKBoost #54");
+    await harness.workpad.prepare(preparationFor(harness));
+    harness.replaceWithLegacyV1Workpad();
 
-    const recovered = await harness.workpad.prepare(preparationFor(harness));
-    expect(recovered.workpad_revision).toBe(first.workpad_revision + 1);
-    expect(recovered.diagnostic_session.state.diagnostic_branch_slug).toBe(
-      "legacy-ckboost-54",
-    );
-    expect(
-      harness.currentReport().diagnostic_session?.diagnostic_branch_slug,
-    ).toBe("legacy-ckboost-54");
-
-    harness.setIssueTitle(
-      "A later Issue title must not replace the persisted slug",
-    );
-    const resumed = await harness.workpad.prepare(preparationFor(harness));
-    expect(resumed.diagnostic_session.state.diagnostic_branch_slug).toBe(
-      "legacy-ckboost-54",
-    );
+    await expect(
+      harness.workpad.prepare(preparationFor(harness)),
+    ).rejects.toThrow("not a valid v2 entry envelope");
   });
 
   it("rehomes an unchanged legacy runtime worktree before exposing the session", async () => {
@@ -759,7 +750,7 @@ async function createHarness(
     paths,
     currentReport: gateway.currentReport,
     currentBranch: () => currentBranch,
-    removeDiagnosticBranchSlug: gateway.removeDiagnosticBranchSlug,
+    replaceWithLegacyV1Workpad: gateway.replaceWithLegacyV1Workpad,
     setIssueTitle(value) {
       gateway.setTitle(value);
     },
@@ -854,7 +845,7 @@ function createIssueGateway(
   report: FailureReport,
 ): DiagnosticSessionIssueGateway & {
   currentReport(): FailureReport;
-  removeDiagnosticBranchSlug(): void;
+  replaceWithLegacyV1Workpad(): void;
   setTitle(value: string): void;
 } {
   const initialIssue: GithubIssueSnapshot = {
@@ -870,6 +861,7 @@ function createIssueGateway(
     initialIssue,
     report,
     "2026-07-15T10:00:01Z",
+    workpadProducers,
   );
   let issue: GithubIssueSnapshot = {
     ...initialIssue,
@@ -879,11 +871,15 @@ function createIssueGateway(
         id: "workpad-comment",
         body: initial.workpad_comment_body,
         updated_at: "2026-07-15T10:00:01Z",
+        author: { id: "101" },
       },
     ],
   };
 
   return {
+    getWorkpadProducerConfiguration() {
+      return workpadProducers;
+    },
     async readIssue() {
       return issue;
     },
@@ -893,8 +889,13 @@ function createIssueGateway(
       nextReport,
       syncedAt,
     ) {
-      const mutation = prepareIssueWorkpadMutation(issue, nextReport, syncedAt);
-      const commentRef = mutation.workpad_comment_ref ?? "workpad-comment";
+      const mutation = prepareIssueWorkpadMutation(
+        issue,
+        nextReport,
+        syncedAt,
+        workpadProducers,
+      );
+      const commentRef = mutation.target_comment_ref ?? "workpad-comment";
       issue = {
         ...issue,
         updated_at: syncedAt,
@@ -920,15 +921,24 @@ function createIssueGateway(
       if (!comment) {
         throw new Error("Missing test workpad.");
       }
-      return parseFailureReportWorkpad(comment.body).report;
+      const entries = parseFailureReportWorkpad(comment.body).entries;
+      const latest = entries.at(-1);
+      if (!latest) {
+        throw new Error("Missing test workpad entry.");
+      }
+      return latest.report;
     },
-    removeDiagnosticBranchSlug() {
+    replaceWithLegacyV1Workpad() {
       const comment = issue.comments[0];
       if (!comment) {
         throw new Error("Missing test workpad.");
       }
       const parsed = parseFailureReportWorkpad(comment.body);
-      const legacy = JSON.parse(JSON.stringify(parsed.report)) as {
+      const latest = parsed.entries.at(-1);
+      if (!latest) {
+        throw new Error("Missing test workpad entry.");
+      }
+      const legacy = JSON.parse(JSON.stringify(latest.report)) as {
         diagnostic_session?: Record<string, unknown>;
       };
       if (!legacy.diagnostic_session) {
@@ -944,9 +954,9 @@ function createIssueGateway(
                 body: [
                   workpadMarker,
                   '<!-- failure-report/v1 report-id="' +
-                    parsed.report.id +
+                    latest.report.id +
                     '" revision="' +
-                    String(parsed.revision) +
+                    String(latest.revision) +
                     '" -->',
                   "~~~json",
                   JSON.stringify({ failure_report: legacy }, null, 2),
