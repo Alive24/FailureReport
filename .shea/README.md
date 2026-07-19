@@ -1,0 +1,27 @@
+# FailureReport Shea runtime
+
+This directory is the committed Shea Symphony configuration for FailureReport. It is intentionally created by hand; this repository does not use .shea-example or a Target Runtime Init flow.
+
+Tracked configuration:
+
+- app-profile.json selects the shared workflow.
+- workflows/shea-symphony.md contains the GitHub Project #10 and lane runtime configuration.
+- prompts/ contains the separate Main, Review, and Merge lane contracts.
+
+Machine-local files are ignored by the repository root .gitignore:
+
+- logs/, artifacts/, and worktrees/ are runtime output.
+- any file whose name contains .local. under .shea/ is a machine-specific override, for example workflows/shea-symphony.local.md or app-profile.local.json.
+
+The 2606 MVP workflow loader does not merge a base workflow with a .local workflow automatically. A local workflow must therefore be a complete valid workflow, and a local profile must explicitly select it. For example, create the ignored .shea/app-profile.local.json with:
+
+    {
+      "workflow_path": ".shea/workflows/shea-symphony.local.md"
+    }
+
+Run the Tauri app from an independent Shea Symphony 2606 MVP checkout's app directory, selecting this target profile explicitly:
+
+    SHEA_SYMPHONY_APP_PROFILE_PATH="/absolute/path/to/FailureReport/.shea/app-profile.json" \
+      npm run tauri -- dev
+
+The shared profile intentionally omits cli_path so the Tauri app uses its 2606 engine bridge rather than assuming a target-local Shea binary. Do not use the browser-only npm run dev command to orchestrate FailureReport.
