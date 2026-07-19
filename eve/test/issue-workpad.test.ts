@@ -10,6 +10,7 @@ import {
 import {
   failureReportSchema,
   parseFailureReportWorkpad,
+  workpadMarker,
 } from "@failure-report/protocol";
 
 /** Loads a schema-validated report fixture instead of exposing raw JSON to tests. */
@@ -129,6 +130,58 @@ describe("GitHub Issue workpad", () => {
     expect(
       parseFailureReportWorkpad(second.workpad_comment_body).revision,
     ).toBe(1);
+  });
+
+  it("repairs only a legacy active session missing its durable branch slug", async () => {
+    const report = await loadReport();
+    const active = failureReportSchema.parse({
+      ...report,
+      diagnostic_session: {
+        lifecycle: "active",
+        domain_extensions: ["ckb"],
+        backend_id: "codex_app_server",
+        worktree: {
+          path: "/tmp/failure-report/issue-54",
+          identity: "diagnostic-issue-54",
+          base_revision: report.target.revision,
+          head_revision: report.target.revision,
+        },
+        diagnostic_branch_slug: "old-title",
+      },
+    });
+    const legacy = JSON.parse(JSON.stringify(active)) as {
+      diagnostic_session: { diagnostic_branch_slug?: string };
+    };
+    delete legacy.diagnostic_session.diagnostic_branch_slug;
+    const legacyWorkpad = [
+      workpadMarker,
+      '<!-- failure-report/v1 report-id="' + active.id + '" revision="9" -->',
+      "~~~json",
+      JSON.stringify({ failure_report: legacy }, null, 2),
+      "~~~",
+      "",
+    ].join("\n");
+    const legacyIssue = {
+      ...issue,
+      title: "Fix: CKB #54 — Node RPC",
+      comments: [
+        {
+          id: "IC_workpad_54",
+          body: legacyWorkpad,
+          updated_at: "2026-07-15T10:01:00Z",
+        },
+      ],
+    };
+
+    expect(() => parseFailureReportWorkpad(legacyWorkpad)).toThrow(
+      "diagnostic_branch_slug",
+    );
+
+    const existing = findExistingWorkpad(legacyIssue);
+    expect(existing?.diagnostic_branch_slug_migrated).toBe(true);
+    expect(existing?.report.diagnostic_session?.diagnostic_branch_slug).toBe(
+      "fix-ckb-54-node-rpc",
+    );
   });
 
   it("rejects a stale report before it overwrites newer shared context", async () => {

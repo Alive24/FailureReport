@@ -1,8 +1,11 @@
 import {
+  diagnosticBranchSlugFor,
   failureReportSchema,
   type DiagnosticSession,
   type FailureReport,
 } from "@failure-report/protocol";
+
+export { diagnosticBranchSlugFor };
 
 import { getDefaultGithubIssueGateway } from "../integrations/github/gateway-factory.js";
 import type { GithubIssueGateway } from "../integrations/github/issue-gateway.js";
@@ -102,6 +105,13 @@ export class DiagnosticSessionWorkpad {
         report,
         report.diagnostic_session,
       );
+      const persisted = await this.persistLegacyDiagnosticBranchSlug(
+        current,
+        diagnosticSession,
+      );
+      report = persisted.report;
+      workpadRevision = persisted.workpad_revision;
+      diagnosticSession = persisted.diagnostic_session;
     } else {
       diagnosticSession = await this.worktrees.allocate(
         report,
@@ -164,11 +174,7 @@ export class DiagnosticSessionWorkpad {
       current.report,
       state,
     );
-    return {
-      report: current.report,
-      workpad_revision: current.revision,
-      diagnostic_session: diagnosticSession,
-    };
+    return this.persistLegacyDiagnosticBranchSlug(current, diagnosticSession);
   }
 
   /** Records a Codex App Server thread id once Root observes it. */
@@ -297,6 +303,50 @@ export class DiagnosticSessionWorkpad {
     };
   }
 
+  /**
+   * Makes a narrowly recovered legacy slug durable before Root exposes the
+   * active session again. A failed restore never causes this repair to write.
+   */
+  private async persistLegacyDiagnosticBranchSlug(
+    current: {
+      report: FailureReport;
+      revision: number;
+      diagnostic_branch_slug_migrated: boolean;
+    },
+    diagnosticSession: VerifiedDiagnosticWorktree,
+  ): Promise<LoadedDiagnosticSession> {
+    if (!current.diagnostic_branch_slug_migrated) {
+      return {
+        report: current.report,
+        workpad_revision: current.revision,
+        diagnostic_session: diagnosticSession,
+      };
+    }
+
+    const published = await this.publishDiagnosticSession(
+      {
+        report: current.report,
+        workpad_revision: current.revision,
+        diagnostic_session: diagnosticSession,
+      },
+      diagnosticSession.state,
+    );
+    const state = published.report.diagnostic_session;
+    if (!state) {
+      throw new Error(
+        "Legacy diagnostic-session migration did not persist session state.",
+      );
+    }
+    return {
+      report: published.report,
+      workpad_revision: published.workpad_revision,
+      diagnostic_session: {
+        ...diagnosticSession,
+        state,
+      },
+    };
+  }
+
   /** Reads and cross-checks the one durable workpad against a session identity. */
   private async readWorkpad(
     envelope: Pick<
@@ -307,6 +357,7 @@ export class DiagnosticSessionWorkpad {
     report: FailureReport;
     revision: number;
     issue: Awaited<ReturnType<DiagnosticSessionIssueGateway["readIssue"]>>;
+    diagnostic_branch_slug_migrated: boolean;
   }> {
     const gateway = await this.gateway;
     const issue = await gateway.readIssue(
@@ -335,20 +386,11 @@ export class DiagnosticSessionWorkpad {
         "The durable FailureReport workpad is not consistently bound to the requested GitHub Issue.",
       );
     }
-    return { report: workpad.report, revision: workpad.revision, issue };
+    return {
+      report: workpad.report,
+      revision: workpad.revision,
+      issue,
+      diagnostic_branch_slug_migrated: workpad.diagnostic_branch_slug_migrated,
+    };
   }
-}
-
-/** Derives the stable, human-readable title portion of a diagnostic branch. */
-export function diagnosticBranchSlugFor(issueTitle: string): string {
-  const normalized = issueTitle
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "-")
-    .replace(/^-+|-+$/g, "");
-  const bounded = Array.from(normalized)
-    .slice(0, 80)
-    .join("")
-    .replace(/-+$/g, "");
-  return bounded || "diagnostic";
 }

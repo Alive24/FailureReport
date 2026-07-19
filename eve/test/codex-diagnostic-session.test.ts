@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   failureReportSchema,
   parseFailureReportWorkpad,
+  workpadMarker,
   type FailureReport,
 } from "@failure-report/protocol";
 
@@ -66,6 +67,7 @@ type Harness = {
   paths: FakePathOperations;
   currentReport(): FailureReport;
   currentBranch(): string;
+  removeDiagnosticBranchSlug(): void;
   setIssueTitle(value: string): void;
   setHead(value: string): void;
   setPorcelain(value: string): void;
@@ -209,6 +211,30 @@ describe("Codex diagnostic session", () => {
     );
     expect(resumed.diagnostic_session.state.diagnostic_branch_slug).toBe(
       "ckboost-issue-54",
+    );
+  });
+
+  it("persists a recovered legacy active-session slug before another reentry", async () => {
+    const harness = await createHarness();
+    const first = await harness.workpad.prepare(preparationFor(harness));
+    harness.removeDiagnosticBranchSlug();
+    harness.setIssueTitle("Legacy CKBoost #54");
+
+    const recovered = await harness.workpad.prepare(preparationFor(harness));
+    expect(recovered.workpad_revision).toBe(first.workpad_revision + 1);
+    expect(recovered.diagnostic_session.state.diagnostic_branch_slug).toBe(
+      "legacy-ckboost-54",
+    );
+    expect(
+      harness.currentReport().diagnostic_session?.diagnostic_branch_slug,
+    ).toBe("legacy-ckboost-54");
+
+    harness.setIssueTitle(
+      "A later Issue title must not replace the persisted slug",
+    );
+    const resumed = await harness.workpad.prepare(preparationFor(harness));
+    expect(resumed.diagnostic_session.state.diagnostic_branch_slug).toBe(
+      "legacy-ckboost-54",
     );
   });
 
@@ -638,6 +664,7 @@ async function createHarness(
     paths,
     currentReport: gateway.currentReport,
     currentBranch: () => currentBranch,
+    removeDiagnosticBranchSlug: gateway.removeDiagnosticBranchSlug,
     setIssueTitle(value) {
       gateway.setTitle(value);
     },
@@ -709,6 +736,7 @@ function createIssueGateway(
   report: FailureReport,
 ): DiagnosticSessionIssueGateway & {
   currentReport(): FailureReport;
+  removeDiagnosticBranchSlug(): void;
   setTitle(value: string): void;
 } {
   const initialIssue: GithubIssueSnapshot = {
@@ -775,6 +803,42 @@ function createIssueGateway(
         throw new Error("Missing test workpad.");
       }
       return parseFailureReportWorkpad(comment.body).report;
+    },
+    removeDiagnosticBranchSlug() {
+      const comment = issue.comments[0];
+      if (!comment) {
+        throw new Error("Missing test workpad.");
+      }
+      const parsed = parseFailureReportWorkpad(comment.body);
+      const legacy = JSON.parse(JSON.stringify(parsed.report)) as {
+        diagnostic_session?: Record<string, unknown>;
+      };
+      if (!legacy.diagnostic_session) {
+        throw new Error("Test workpad has no diagnostic session.");
+      }
+      delete legacy.diagnostic_session.diagnostic_branch_slug;
+      issue = {
+        ...issue,
+        comments: issue.comments.map((current) =>
+          current.id === comment.id
+            ? {
+                ...current,
+                body: [
+                  workpadMarker,
+                  '<!-- failure-report/v1 report-id="' +
+                    parsed.report.id +
+                    '" revision="' +
+                    String(parsed.revision) +
+                    '" -->',
+                  "~~~json",
+                  JSON.stringify({ failure_report: legacy }, null, 2),
+                  "~~~",
+                  "",
+                ].join("\n"),
+              }
+            : current,
+        ),
+      };
     },
     setTitle(value) {
       issue = { ...issue, title: value };

@@ -1,4 +1,5 @@
 import {
+  diagnosticBranchSlugFor,
   failureReportSchema,
   githubIssueContextSchema,
   parseFailureReportWorkpad,
@@ -55,6 +56,8 @@ export type ExistingWorkpad = {
   comment: GithubIssueComment;
   report: FailureReport;
   revision: number;
+  /** True when a legacy active session was repaired only in memory. */
+  diagnostic_branch_slug_migrated: boolean;
 };
 
 /** Renders the concise human-facing Issue narrative for a structured report. */
@@ -148,12 +151,64 @@ export function findExistingWorkpad(
     return undefined;
   }
 
-  const workpad = parseFailureReportWorkpad(comment.body);
+  let diagnosticBranchSlugMigrated = false;
+  const workpad = parseFailureReportWorkpad(comment.body, {
+    normalize_payload(payload) {
+      const migrated = migrateLegacyDiagnosticBranchSlug(payload, issue.title);
+      diagnosticBranchSlugMigrated = migrated.did_migrate;
+      return migrated.payload;
+    },
+  });
   return {
     comment,
     report: workpad.report,
     revision: workpad.revision,
+    diagnostic_branch_slug_migrated: diagnosticBranchSlugMigrated,
   };
+}
+
+/**
+ * Repairs exactly one historical shape: an active diagnostic session created
+ * before `diagnostic_branch_slug` became a durable field. All other malformed
+ * state remains subject to the protocol's strict schema validation.
+ */
+function migrateLegacyDiagnosticBranchSlug(
+  payload: unknown,
+  issueTitle: string,
+): { payload: unknown; did_migrate: boolean } {
+  if (!isRecord(payload)) {
+    return { payload, did_migrate: false };
+  }
+  const report = payload.failure_report;
+  if (!isRecord(report)) {
+    return { payload, did_migrate: false };
+  }
+  const session = report.diagnostic_session;
+  if (
+    !isRecord(session) ||
+    session.lifecycle !== "active" ||
+    Object.prototype.hasOwnProperty.call(session, "diagnostic_branch_slug")
+  ) {
+    return { payload, did_migrate: false };
+  }
+
+  return {
+    payload: {
+      ...payload,
+      failure_report: {
+        ...report,
+        diagnostic_session: {
+          ...session,
+          diagnostic_branch_slug: diagnosticBranchSlugFor(issueTitle),
+        },
+      },
+    },
+    did_migrate: true,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**

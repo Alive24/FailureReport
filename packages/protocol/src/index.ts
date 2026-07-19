@@ -137,6 +137,28 @@ export const diagnosticBranchSlugSchema = z
     message: "diagnostic branch slug must be a non-empty safe Issue-title slug",
   });
 
+/**
+ * Derives the persisted, human-readable title portion of a diagnostic branch.
+ *
+ * Keeping this alongside the slug contract ensures new sessions and narrowly
+ * supported legacy-session repair use exactly the same deterministic rule.
+ */
+export function diagnosticBranchSlugFor(issueTitle: string): string {
+  const normalized = issueTitle
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "");
+  let bounded = "";
+  for (const character of normalized) {
+    if (bounded.length + character.length > 80) {
+      break;
+    }
+    bounded += character;
+  }
+  return bounded.replace(/-+$/g, "") || "diagnostic";
+}
+
 /** A finalized, diagnostic-only Git snapshot. */
 export const diagnosticBranchSchema = z
   .object({
@@ -529,8 +551,17 @@ export function renderFailureReportWorkpad(
  * Parsing the marker, header, JSON fence, and schema separately makes corruption
  * failures explicit instead of leaking a partially trusted object downstream.
  */
+export type FailureReportWorkpadParseOptions = {
+  /**
+   * An explicitly opted-in, transport-owned normalization applied to decoded
+   * JSON before the normal strict workpad contract is validated.
+   */
+  normalize_payload?: (payload: unknown) => unknown;
+};
+
 export function parseFailureReportWorkpad(
   markdown: string,
+  options: FailureReportWorkpadParseOptions = {},
 ): FailureReportWorkpad {
   if (!markdown.includes(workpadMarker)) {
     throw new Error("Missing FailureReport workpad marker.");
@@ -558,10 +589,13 @@ export function parseFailureReportWorkpad(
   }
 
   const decoded: unknown = JSON.parse(jsonPayload);
+  const normalized = options.normalize_payload
+    ? options.normalize_payload(decoded)
+    : decoded;
   const parsed = z
     .object({ failure_report: failureReportSchema })
     .strict()
-    .parse(decoded);
+    .parse(normalized);
 
   if (parsed.failure_report.id !== reportId) {
     throw new Error("FailureReport workpad header does not match report id.");
