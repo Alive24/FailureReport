@@ -12,12 +12,15 @@ import {
 export {
   buildRootInvocationMessage,
   createMcpRootInvoker,
+  defaultRootSessionStorePath,
   EveChannelRootInvoker,
   EveChannelRootTransport,
+  FileRootSessionStore,
   InMemoryRootSessionStore,
   rootSessionKey,
   type EveChannelRootTransportOptions,
   type EveChannelRootTurn,
+  type EveChannelRootPendingTurnConsumer,
   type McpRootCompositionOptions,
   type RootSessionStore,
 } from "./eve-channel-root-invoker.js";
