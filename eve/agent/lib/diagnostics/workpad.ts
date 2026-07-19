@@ -5,8 +5,6 @@ import {
   type FailureReport,
 } from "@failure-report/protocol";
 
-export { diagnosticBranchSlugFor };
-
 import { getDefaultGithubIssueGateway } from "../integrations/github/gateway-factory.js";
 import type { GithubIssueGateway } from "../integrations/github/issue-gateway.js";
 import { findExistingWorkpad } from "../integrations/github/issue-workpad.js";
@@ -20,6 +18,8 @@ import {
   DiagnosticWorktreeManager,
   type VerifiedDiagnosticWorktree,
 } from "./worktree.js";
+
+export { diagnosticBranchSlugFor };
 
 /**
  * Durable diagnostic-session journal backed by the report's GitHub Issue workpad.
@@ -101,13 +101,15 @@ export class DiagnosticSessionWorkpad {
           "Diagnostic session is finalized; prepare a separate future workflow instead of resuming its diagnostic worktree.",
         );
       }
-      diagnosticSession = await this.worktrees.restore(
+      const restored = await this.restoreOrRehydrateDiagnosticSession(
         report,
         report.diagnostic_session,
       );
-      const persisted = await this.persistLegacyDiagnosticBranchSlug(
+      diagnosticSession = restored.diagnostic_session;
+      const persisted = await this.persistRecoveredDiagnosticSession(
         current,
         diagnosticSession,
+        restored.worktree_rehomed,
       );
       report = persisted.report;
       workpadRevision = persisted.workpad_revision;
@@ -170,11 +172,15 @@ export class DiagnosticSessionWorkpad {
         "Diagnosis is blocked because no diagnostic worktree was durably prepared.",
       );
     }
-    const diagnosticSession = await this.worktrees.restore(
+    const restored = await this.restoreOrRehydrateDiagnosticSession(
       current.report,
       state,
     );
-    return this.persistLegacyDiagnosticBranchSlug(current, diagnosticSession);
+    return this.persistRecoveredDiagnosticSession(
+      current,
+      restored.diagnostic_session,
+      restored.worktree_rehomed,
+    );
   }
 
   /** Records a Codex App Server thread id once Root observes it. */
@@ -249,15 +255,24 @@ export class DiagnosticSessionWorkpad {
       };
     }
 
-    const diagnosticSession = await this.worktrees.finalize(
+    const restored = await this.restoreOrRehydrateDiagnosticSession(
       current.report,
       state,
+    );
+    const recovered = await this.persistRecoveredDiagnosticSession(
+      current,
+      restored.diagnostic_session,
+      restored.worktree_rehomed,
+    );
+    const diagnosticSession = await this.worktrees.finalize(
+      recovered.report,
+      recovered.diagnostic_session.state,
       this.now(),
     );
     const published = await this.publishDiagnosticSession(
       {
-        report: current.report,
-        workpad_revision: current.revision,
+        report: recovered.report,
+        workpad_revision: recovered.workpad_revision,
         diagnostic_session: diagnosticSession,
       },
       diagnosticSession.state,
@@ -304,18 +319,50 @@ export class DiagnosticSessionWorkpad {
   }
 
   /**
-   * Makes a narrowly recovered legacy slug durable before Root exposes the
-   * active session again. A failed restore never causes this repair to write.
+   * Rehydrates an old Root-runtime worktree only after normal restoration has
+   * failed its safety checks. The manager permits only an unchanged immutable
+   * target revision and never reuses the former runtime's directory.
    */
-  private async persistLegacyDiagnosticBranchSlug(
+  private async restoreOrRehydrateDiagnosticSession(
+    report: FailureReport,
+    state: DiagnosticSession,
+  ): Promise<{
+    diagnostic_session: VerifiedDiagnosticWorktree;
+    worktree_rehomed: boolean;
+  }> {
+    try {
+      return {
+        diagnostic_session: await this.worktrees.restore(report, state),
+        worktree_rehomed: false,
+      };
+    } catch (error) {
+      if (!(error instanceof DiagnosticSafetyError)) {
+        throw error;
+      }
+      return {
+        diagnostic_session: await this.worktrees.rehydrateLegacyRuntimeWorktree(
+          report,
+          state,
+        ),
+        worktree_rehomed: true,
+      };
+    }
+  }
+
+  /**
+   * Persists all narrow legacy recovery before Root exposes the active session
+   * or attempts finalization. A failed ordinary restore never reaches this write.
+   */
+  private async persistRecoveredDiagnosticSession(
     current: {
       report: FailureReport;
       revision: number;
       diagnostic_branch_slug_migrated: boolean;
     },
     diagnosticSession: VerifiedDiagnosticWorktree,
+    worktreeRehomed: boolean,
   ): Promise<LoadedDiagnosticSession> {
-    if (!current.diagnostic_branch_slug_migrated) {
+    if (!current.diagnostic_branch_slug_migrated && !worktreeRehomed) {
       return {
         report: current.report,
         workpad_revision: current.revision,
@@ -334,7 +381,7 @@ export class DiagnosticSessionWorkpad {
     const state = published.report.diagnostic_session;
     if (!state) {
       throw new Error(
-        "Legacy diagnostic-session migration did not persist session state.",
+        "Legacy diagnostic-session recovery did not persist session state.",
       );
     }
     return {

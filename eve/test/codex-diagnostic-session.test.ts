@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -236,6 +237,68 @@ describe("Codex diagnostic session", () => {
     expect(resumed.diagnostic_session.state.diagnostic_branch_slug).toBe(
       "legacy-ckboost-54",
     );
+  });
+
+  it("rehomes an unchanged legacy runtime worktree before exposing the session", async () => {
+    const harness = await createHarness({ legacyRuntimeWorktree: true });
+
+    const prepared = await harness.workpad.prepare(preparationFor(harness));
+    const rehomed = prepared.diagnostic_session.state;
+    expect(prepared.workpad_revision).toBe(1);
+    expect(rehomed.worktree.path).toBe(
+      join(worktreeRoot, rehomed.worktree.identity),
+    );
+    expect(rehomed.codex_thread_id).toBeUndefined();
+    expect(harness.currentReport().diagnostic_session?.worktree.path).toBe(
+      rehomed.worktree.path,
+    );
+    expect(
+      harness.calls.some((call) => call.cwd.startsWith("/former-root/")),
+    ).toBe(false);
+
+    const resumed = await harness.workpad.prepare(preparationFor(harness));
+    expect(resumed.workpad_revision).toBe(prepared.workpad_revision);
+    expect(resumed.diagnostic_session.state.worktree.path).toBe(
+      rehomed.worktree.path,
+    );
+  });
+
+  it("rehomes a legacy runtime worktree before finalizing its snapshot", async () => {
+    const harness = await createHarness({ legacyRuntimeWorktree: true });
+
+    const finalized = await harness.workpad.finalize(
+      finalizationInput(harness),
+    );
+    expect(finalized.workpad_revision).toBe(2);
+    expect(finalized.diagnostic_session.codex_thread_id).toBeUndefined();
+    expect(finalized.diagnostic_session).toMatchObject({
+      lifecycle: "finalized",
+      worktree: {
+        path: join(
+          worktreeRoot,
+          finalized.diagnostic_session.worktree.identity,
+        ),
+      },
+      diagnostic_branch: {
+        name: "diagnostic/54-ckboost-issue-54",
+      },
+    });
+  });
+
+  it("refuses to rehome a legacy runtime worktree with a divergent recorded HEAD", async () => {
+    const harness = await createHarness({
+      legacyRuntimeWorktree: true,
+      legacyRuntimeHeadDiverged: true,
+    });
+
+    await expect(
+      harness.workpad.prepare(preparationFor(harness)),
+    ).rejects.toThrow("requires an unchanged recorded target revision");
+    expect(
+      harness.calls.some(
+        (call) => call.args[0] === "worktree" && call.args[1] === "add",
+      ),
+    ).toBe(false);
   });
 
   it("rebuilds only a missing native skill symlink and rejects unsafe replacements", async () => {
@@ -525,7 +588,11 @@ describe("Codex diagnostic session", () => {
 });
 
 async function createHarness(
-  options: { domainExtensions?: readonly DomainExtension[] } = {},
+  options: {
+    domainExtensions?: readonly DomainExtension[];
+    legacyRuntimeWorktree?: boolean;
+    legacyRuntimeHeadDiverged?: boolean;
+  } = {},
 ): Promise<Harness> {
   const fixture = new URL(
     "../../packages/protocol/test/fixtures/issue-54.json",
@@ -534,7 +601,36 @@ async function createHarness(
   const loaded = failureReportSchema.parse(
     JSON.parse(await readFile(fixture, "utf8")),
   );
-  const report = loaded;
+  const domainExtensions = options.domainExtensions ?? [createCkbExtension()];
+  let report = loaded;
+  if (options.legacyRuntimeWorktree) {
+    const identity = diagnosticWorktreeIdentity(report, domainExtensions);
+    report = failureReportSchema.parse({
+      ...report,
+      diagnostic_session: {
+        lifecycle: "active",
+        domain_extensions: domainExtensions.map((extension) => extension.id),
+        backend_id: "codex_app_server",
+        codex_thread_id: "legacy-thread",
+        worktree: {
+          path: join(
+            "/former-root/FailureReport",
+            ".eve",
+            "sandbox-cache",
+            "worktrees",
+            identity,
+          ),
+          identity,
+          base_revision: report.target.revision,
+          head_revision: options.legacyRuntimeHeadDiverged
+            ? "b".repeat(40)
+            : report.target.revision,
+        },
+        diagnostic_branch_slug: "ckboost-issue-54",
+        last_diagnosed_at: report.updated_at,
+      },
+    });
+  }
   const calls: Array<{ cwd: string; args: string[] }> = [];
   const snapshotBranches = new Map<string, string>();
   const remoteSnapshotBranches = new Map<string, string>();
@@ -623,7 +719,6 @@ async function createHarness(
     }
     throw new Error("Unexpected git command: " + input.cwd + " git " + command);
   };
-  const domainExtensions = options.domainExtensions ?? [createCkbExtension()];
   const sourceCache: DiagnosticSourceResolver = {
     async acquire() {
       return {
@@ -695,6 +790,29 @@ function createCkbExtension(sourceDirectory = ckbSkillSource): DomainExtension {
       },
     ],
   };
+}
+
+function diagnosticWorktreeIdentity(
+  report: FailureReport,
+  domainExtensions: readonly DomainExtension[],
+): string {
+  const slug = report.id
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  const digest = createHash("sha256")
+    .update(
+      report.target.repository +
+        "\u0000" +
+        report.target.revision +
+        "\u0000" +
+        report.id +
+        "\u0000" +
+        domainExtensions.map((extension) => extension.id).join("\u0000"),
+    )
+    .digest("hex")
+    .slice(0, 12);
+  return "diagnostic-" + (slug || "report") + "-" + digest;
 }
 
 function createEvmExtension(): DomainExtension {
