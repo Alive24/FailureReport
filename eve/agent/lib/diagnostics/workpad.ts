@@ -306,7 +306,10 @@ export class DiagnosticSessionWorkpad {
       envelope.repository,
       envelope.issue_number,
     );
-    const workpad = findExistingWorkpad(issue);
+    const workpad = findExistingWorkpad(
+      issue,
+      gateway.getWorkpadProducerConfiguration(),
+    );
     if (!workpad) {
       throw new Error(
         "Diagnosis requires a Root-published FailureReport workpad before allocation.",

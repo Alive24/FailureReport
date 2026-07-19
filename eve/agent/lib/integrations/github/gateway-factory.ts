@@ -9,6 +9,12 @@ import {
 } from "./github-auth.js";
 import { GithubCliIssueGateway } from "./github-cli.js";
 import type { GithubIssueGateway } from "./issue-gateway.js";
+import {
+  type WorkpadProducer,
+  type WorkpadProducerConfiguration,
+  WorkpadNeedsInputError,
+  validateProducerConfiguration,
+} from "./issue-workpad.js";
 import { OctokitIssueGateway } from "./octokit-issue-gateway.js";
 
 /** Runtime composition for the Root-owned GitHub Issue gateway. */
@@ -18,6 +24,7 @@ export type GithubGatewayRuntimeConfig = {
   transport: "octokit" | "gh-cli";
   auth: GithubAuthConfig;
   ghCliExecutable: string;
+  workpadProducers?: WorkpadProducerConfiguration;
 };
 
 /** Injectable factory seams for authentication and gateway composition tests. */
@@ -54,6 +61,7 @@ export function readGithubGatewayRuntimeConfig(
         ? readGithubAuthConfig(environment)
         : { kind: "gh-cli", executable: ghCliExecutable },
     ghCliExecutable,
+    workpadProducers: readWorkpadProducerConfiguration(environment),
   };
 }
 
@@ -69,15 +77,90 @@ export async function createGithubIssueGateway(
   if (config.transport === "gh-cli") {
     return (
       dependencies.createGithubCliGateway ??
-      ((executable) => new GithubCliIssueGateway(executable))
+      ((executable) =>
+        new GithubCliIssueGateway(executable, config.workpadProducers))
     )(config.ghCliExecutable);
   }
 
   const octokit = await createAuthenticatedOctokit(config.auth, dependencies);
   return (
     dependencies.createOctokitGateway ??
-    ((client) => new OctokitIssueGateway(client))
+    ((client) => new OctokitIssueGateway(client, config.workpadProducers))
   )(octokit);
+}
+
+/**
+ * Reads the explicit producer registry used to authenticate managed comments.
+ * Omitting all producer variables leaves the runtime readable but makes reentry
+ * and publication fail closed with `needs_input`; a partial configuration fails
+ * immediately so a mutable identity can never be inferred from a login name.
+ */
+export function readWorkpadProducerConfiguration(
+  environment: GithubEnvironment = process.env,
+): WorkpadProducerConfiguration | undefined {
+  const currentId = optionalEnvironment(
+    environment,
+    "FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ID",
+  );
+  const currentActorId = optionalEnvironment(
+    environment,
+    "FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ACTOR_ID",
+  );
+  const serializedRegistry = optionalEnvironment(
+    environment,
+    "FAILURE_REPORT_GITHUB_WORKPAD_PRODUCERS",
+  );
+  if (!currentId && !currentActorId && !serializedRegistry) {
+    return undefined;
+  }
+  if (!currentId || !currentActorId) {
+    throw new WorkpadNeedsInputError(
+      "FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ID and FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ACTOR_ID must be configured together.",
+    );
+  }
+
+  const producers: WorkpadProducer[] = serializedRegistry
+    ? parseWorkpadProducerRegistry(serializedRegistry)
+    : [];
+  if (!producers.some((producer) => producer.id === currentId)) {
+    producers.push({ id: currentId, github_actor_id: currentActorId });
+  }
+  return validateProducerConfiguration({
+    current: { id: currentId, github_actor_id: currentActorId },
+    producers,
+  });
+}
+
+function parseWorkpadProducerRegistry(value: string): WorkpadProducer[] {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(value);
+  } catch {
+    throw new WorkpadNeedsInputError(
+      "FAILURE_REPORT_GITHUB_WORKPAD_PRODUCERS must be a JSON object mapping producer IDs to immutable GitHub actor IDs.",
+    );
+  }
+  if (!decoded || Array.isArray(decoded) || typeof decoded !== "object") {
+    throw new WorkpadNeedsInputError(
+      "FAILURE_REPORT_GITHUB_WORKPAD_PRODUCERS must be a JSON object mapping producer IDs to immutable GitHub actor IDs.",
+    );
+  }
+  return Object.entries(decoded).map(([id, actorId]) => {
+    if (typeof actorId !== "string") {
+      throw new WorkpadNeedsInputError(
+        "FAILURE_REPORT_GITHUB_WORKPAD_PRODUCERS values must be immutable GitHub actor ID strings.",
+      );
+    }
+    return { id, github_actor_id: actorId };
+  });
+}
+
+function optionalEnvironment(
+  environment: GithubEnvironment,
+  key: string,
+): string | undefined {
+  const value = environment[key]?.trim();
+  return value || undefined;
 }
 
 let defaultGatewayPromise: Promise<GithubIssueGateway> | undefined;
