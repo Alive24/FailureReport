@@ -42,6 +42,14 @@ prompts:
   main_agent: ../prompts/main-agent.md
   review_agent: ../prompts/review-agent.md
   merge_agent: ../prompts/merge-agent.md
+workpad_templates:
+  agent_review_run: ../template/workpad/agent-review.md
+  doctor_triage: ../template/workpad/doctor-triage.md
+  human_review_repair: ../template/workpad/doctor-triage.md
+  merge_run: ../template/workpad/merge-run.md
+  merge_repair: ../template/workpad/merge-run.md
+  forge_rework_run: ../template/workpad/rework-run.md
+  forge_rework_blocked: ../template/workpad/rework-run.md
 
 polling:
   interval_ms: 5000
@@ -101,9 +109,7 @@ observability:
 
 # FailureReport Shea Symphony workflow
 
-This is the committed Shea Symphony runtime definition for the FailureReport
-repository and GitHub Project v2 #10. Lane behavior lives in the adjacent
-prompt contracts so implementation, review, and merge authority stay separate.
+This is the committed Shea Symphony runtime definition for the FailureReport repository and GitHub Project v2 #10. Lane behavior lives in the adjacent prompt contracts so implementation, review, and merge authority stay separate.
 
 The runtime state directories are deliberately relative to this workflow:
 
