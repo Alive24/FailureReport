@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 
 import {
   Client,
+  type ClientSession,
   type ClientAuth,
   type HeadersValue,
   type SessionState,
@@ -136,6 +137,21 @@ export interface EveChannelRootTransport {
   }): Promise<EveChannelRootTurn>;
 }
 
+/** Optional capability for transports that can drain an already-delivered turn. */
+export interface EveChannelRootPendingTurnConsumer {
+  /**
+   * Consumes the next already-delivered turn without sending another message.
+   *
+   * A caller timeout can leave a completed turn unread while a later retry has
+   * already been delivered to the same Eve session. This operation advances
+   * that cursor so the invoker can recover the retry's own result without
+   * duplicating the Root request.
+   */
+  consumePendingTurn(input: {
+    sessionState: SessionState;
+  }): Promise<EveChannelRootTurn>;
+}
+
 /** Connection options for the default Eve HTTP Channel transport. */
 export type EveChannelRootTransportOptions = {
   host: string;
@@ -148,7 +164,9 @@ export type EveChannelRootTransportOptions = {
  * `preserveCompletedSessions` keeps a completed Root session resumable by a later
  * MCP request that maps to the same logical Issue or report key.
  */
-export class EveChannelRootTransport implements EveChannelRootTransport {
+export class EveChannelRootTransport
+  implements EveChannelRootTransport, EveChannelRootPendingTurnConsumer
+{
   private readonly client: Client;
 
   constructor(options: EveChannelRootTransportOptions) {
@@ -179,6 +197,19 @@ export class EveChannelRootTransport implements EveChannelRootTransport {
       sessionState: session.state,
     };
   }
+
+  /** Reads the next delivered turn after a replayed prior result. */
+  async consumePendingTurn(input: {
+    sessionState: SessionState;
+  }): Promise<EveChannelRootTurn> {
+    const session = this.client.session(input.sessionState);
+    const turn = await readNextEveChannelTurn(session);
+
+    return {
+      ...turn,
+      sessionState: session.state,
+    };
+  }
 }
 
 /**
@@ -198,46 +229,81 @@ export class EveChannelRootInvoker implements RootInvoker {
     const parsedRequest = rootRequestSchema.parse(request);
     const sessionKey = rootSessionKey(parsedRequest);
     const sessionState = await this.sessionStore?.read(sessionKey);
-    const turn = await this.transport.run({
+    let turn = await this.transport.run({
       message: buildRootInvocationMessage(parsedRequest),
       sessionState,
     });
-    if (this.sessionStore) {
-      // Preserve the continuation even if Root returned invalid data; a repaired
-      // follow-up should resume the same agent context rather than start over.
-      await this.sessionStore.write(sessionKey, turn.sessionState);
-    }
+    await this.persistSessionState(sessionKey, turn.sessionState);
 
-    const parsedResult = rootResultSchema.safeParse(turn.data);
-    if (!parsedResult.success) {
-      return {
-        request_id: parsedRequest.request_id,
-        status: "failed",
-        summary:
-          "Eve Root did not return a valid structured result; turn status was " +
-          turn.status +
-          ".",
-      };
+    for (let replayCount = 0; ; replayCount += 1) {
+      const parsedResult = rootResultSchema.safeParse(turn.data);
+      if (!parsedResult.success) {
+        return {
+          request_id: parsedRequest.request_id,
+          status: "failed",
+          summary:
+            "Eve Root did not return a valid structured result; turn status was " +
+            turn.status +
+            ".",
+        };
+      }
+      if (parsedResult.data.request_id !== parsedRequest.request_id) {
+        if (
+          replayCount >= maxStaleRootTurnsToDrain ||
+          turn.status === "failed" ||
+          !turn.sessionState.sessionId ||
+          !isPendingTurnConsumer(this.transport)
+        ) {
+          return {
+            request_id: parsedRequest.request_id,
+            status: "failed",
+            summary: "Eve Root returned a result for a different request id.",
+          };
+        }
+
+        try {
+          // `run()` has already delivered this request. A stale result means
+          // its stream began before a prior turn's terminal event, so only
+          // advance the cursor instead of submitting the request a second time.
+          turn = await this.transport.consumePendingTurn({
+            sessionState: turn.sessionState,
+          });
+          await this.persistSessionState(sessionKey, turn.sessionState);
+          continue;
+        } catch {
+          return {
+            request_id: parsedRequest.request_id,
+            status: "failed",
+            summary:
+              "Eve Root replayed an earlier result, but the pending request " +
+              "could not be recovered.",
+          };
+        }
+      }
+      const selectorResultFailure = validateSelectorRehydration(
+        parsedRequest,
+        parsedResult.data,
+      );
+      if (selectorResultFailure) {
+        return {
+          request_id: parsedRequest.request_id,
+          status: "failed",
+          summary: selectorResultFailure,
+        };
+      }
+      return parsedResult.data;
     }
-    if (parsedResult.data.request_id !== parsedRequest.request_id) {
-      return {
-        request_id: parsedRequest.request_id,
-        status: "failed",
-        summary: "Eve Root returned a result for a different request id.",
-      };
+  }
+
+  private async persistSessionState(
+    sessionKey: string,
+    sessionState: SessionState,
+  ): Promise<void> {
+    if (this.sessionStore) {
+      // Preserve the continuation even if Root returned invalid or replayed
+      // data; a repaired follow-up must resume the same agent context.
+      await this.sessionStore.write(sessionKey, sessionState);
     }
-    const selectorResultFailure = validateSelectorRehydration(
-      parsedRequest,
-      parsedResult.data,
-    );
-    if (selectorResultFailure) {
-      return {
-        request_id: parsedRequest.request_id,
-        status: "failed",
-        summary: selectorResultFailure,
-      };
-    }
-    return parsedResult.data;
   }
 }
 
@@ -289,7 +355,8 @@ export function buildRootInvocationMessage(request: RootRequest): string {
     "and return a result conforming exactly to the requested output schema.",
     "Keep request_id unchanged. Do not expose internal subagent identities to the caller.",
     "If request data contains issue_selector, call read_shared_context first. A null workpad is valid;",
-    "return its shared_context as result.issue and never ask the caller to invent workpad fields.",
+    "return needs_input when it reports needs_input; otherwise return its shared_context as result.issue",
+    "and never ask the caller to invent workpad fields.",
     "",
     "ROOT_REQUEST_DATA",
     JSON.stringify(request, null, 2),
@@ -336,6 +403,47 @@ function validateSelectorRehydration(
     return "Eve Root returned a rehydrated Issue context for a different Issue.";
   }
   return undefined;
+}
+
+/** Maximum completed stale turns to drain before reporting a correlation failure. */
+const maxStaleRootTurnsToDrain = 8;
+
+function isPendingTurnConsumer(
+  transport: EveChannelRootTransport,
+): transport is EveChannelRootTransport & EveChannelRootPendingTurnConsumer {
+  return (
+    "consumePendingTurn" in transport &&
+    typeof transport.consumePendingTurn === "function"
+  );
+}
+
+/** Reads exactly one terminal turn from an existing Eve session without posting input. */
+async function readNextEveChannelTurn(
+  session: ClientSession,
+): Promise<Omit<EveChannelRootTurn, "sessionState">> {
+  let data: unknown;
+  let status: EveChannelRootTurn["status"] = "failed";
+
+  for await (const event of session.stream()) {
+    if (event.type === "result.completed") {
+      data = event.data.result;
+      continue;
+    }
+    if (event.type === "session.completed") {
+      status = "completed";
+      break;
+    }
+    if (event.type === "session.waiting") {
+      status = "waiting";
+      break;
+    }
+    if (event.type === "session.failed") {
+      status = "failed";
+      break;
+    }
+  }
+
+  return { data, status };
 }
 
 /** Parses the private file format before a serialized cursor reaches Eve. */

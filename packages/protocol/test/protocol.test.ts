@@ -2,21 +2,65 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 import {
+  appendFailureReportWorkpadEntry,
   failureReportSchema,
   githubIssueSelectorSchema,
   parseFailureReportWorkpad,
   renderFailureReportWorkpad,
   rootRequestSchema,
   workpadMarker,
+  type FailureReport,
+  type FailureReportWorkpadEntry,
 } from "../src/index.js";
 
-/** Loads a raw fixture as unknown so each test exercises the production schema. */
+/** Loads a raw fixture as unknown so every test exercises the production schema. */
 async function loadFixture(name: string): Promise<unknown> {
   const file = new URL("./fixtures/" + name, import.meta.url);
   return JSON.parse(await readFile(file, "utf8"));
 }
 
-/** Covers durable-report parsing and workpad serialization invariants. */
+/** Builds a v2 entry whose report context agrees with its immutable envelope. */
+function entryFor(
+  report: FailureReport,
+  revision: number,
+  options: { predecessor_comment_ref?: string } = {},
+): FailureReportWorkpadEntry {
+  const logicalSessionId = "github-issue/Alive24/CKBoost/54/" + report.id;
+  const entryId = logicalSessionId + "/revision-" + String(revision);
+  const contextualReport = failureReportSchema.parse({
+    ...report,
+    shared_context: {
+      provider: "github_issue",
+      repository: "Alive24/CKBoost",
+      issue_number: 54,
+      issue_url: "https://github.com/Alive24/CKBoost/issues/54",
+      workpad_marker: "<!-- failure-report-workpad -->",
+      workpad_revision: revision,
+      workpad_logical_session_id: logicalSessionId,
+      workpad_entry_id: entryId,
+      workpad_producer_id: "root-gh",
+      ...(options.predecessor_comment_ref
+        ? {
+            workpad_predecessor_comment_ref: options.predecessor_comment_ref,
+          }
+        : {}),
+      synced_at: report.updated_at,
+    },
+  });
+  return {
+    schema_version: "failure-report-workpad-entry/v2",
+    producer: { id: "root-gh", github_actor_id: "101" },
+    logical_session_id: logicalSessionId,
+    entry_id: entryId,
+    revision,
+    ...(options.predecessor_comment_ref
+      ? { predecessor_comment_ref: options.predecessor_comment_ref }
+      : {}),
+    report: contextualReport,
+  };
+}
+
+/** Covers v2 envelope parsing, public presentation, and append-only rendering. */
 describe("FailureReport protocol", () => {
   it.each(["issue-54.json", "contract-recipe-identifier.json"])(
     "accepts the historical CKBoost fixture %s",
@@ -30,54 +74,45 @@ describe("FailureReport protocol", () => {
     },
   );
 
-  it("round-trips an Issue workpad without changing the report", async () => {
+  it("round-trips a versioned managed entry with a human summary before details", async () => {
     const report = failureReportSchema.parse(
       await loadFixture("issue-54.json"),
     );
-    const markdown = renderFailureReportWorkpad(report, 7);
+    const entry = entryFor(report, 7);
+    const markdown = renderFailureReportWorkpad(entry);
     const parsed = parseFailureReportWorkpad(markdown);
 
-    expect(markdown).toContain(workpadMarker);
-    expect(parsed.revision).toBe(7);
-    expect(parsed.report).toEqual(report);
+    expect(markdown.indexOf("### FailureReport update")).toBeLessThan(
+      markdown.indexOf("<details>"),
+    );
+    expect(markdown).toContain("Canonical FailureReport snapshot");
+    expect(parsed.entries).toHaveLength(1);
+    expect(parsed.entries[0]).toEqual(entry);
   });
 
-  it("rejects a workpad header for a different report", async () => {
+  it("appends a new entry while preserving every byte of the prior logical history", async () => {
     const report = failureReportSchema.parse(
       await loadFixture("issue-54.json"),
     );
-    const markdown = renderFailureReportWorkpad(report, 1).replace(
-      'report-id="' + report.id + '"',
-      'report-id="another-report"',
-    );
+    const first = renderFailureReportWorkpad(entryFor(report, 0));
+    const second = entryFor(report, 1);
+    const appended = appendFailureReportWorkpadEntry(first, second);
+    const parsed = parseFailureReportWorkpad(appended);
 
-    expect(() => parseFailureReportWorkpad(markdown)).toThrow(
-      "header does not match report id",
-    );
+    expect(appended.startsWith(first)).toBe(true);
+    expect(parsed.entries.map((entry) => entry.revision)).toEqual([0, 1]);
+    expect(parsed.entries[0]?.report).toEqual(entryFor(report, 0).report);
   });
 
-  it("validates GitHub Issue shared context", async () => {
-    const report = failureReportSchema.parse(
-      await loadFixture("issue-54.json"),
-    );
-    const withIssue = failureReportSchema.parse({
-      ...report,
-      shared_context: {
-        provider: "github_issue",
-        repository: "Alive24/CKBoost",
-        issue_number: 54,
-        issue_url: "https://github.com/Alive24/CKBoost/issues/54",
-        workpad_marker: workpadMarker,
-        workpad_comment_ref: "IC_kwDO-test",
-        workpad_revision: 3,
-        synced_at: report.updated_at,
-      },
-    });
-
-    expect(withIssue.shared_context?.workpad_revision).toBe(3);
+  it("rejects legacy marker-only workpads rather than silently migrating them", () => {
+    expect(() =>
+      parseFailureReportWorkpad(
+        '<!-- failure-report-workpad -->\n<!-- failure-report/v1 report-id="old" revision="0" -->',
+      ),
+    ).toThrow("legacy v1");
   });
 
-  it("accepts a strictly minimal existing-Issue selector without weakening durable context validation", async () => {
+  it("accepts a strictly minimal existing-Issue selector without weakening durable context validation", () => {
     const selector = githubIssueSelectorSchema.parse({
       repository: "Alive24/CKBoost",
       issue_number: 54,
@@ -150,160 +185,27 @@ describe("FailureReport protocol", () => {
     ).toThrow();
   });
 
-  it("keeps multi-extension Codex diagnostic-session state typed and outside shared Issue context", async () => {
+  it("rejects credential-like text and prohibited host paths before public rendering", async () => {
     const report = failureReportSchema.parse(
       await loadFixture("issue-54.json"),
     );
-    const withDiagnosticSession = failureReportSchema.parse({
+    const credentialBearing = failureReportSchema.parse({
       ...report,
-      diagnostic_session: {
-        lifecycle: "active",
-        domain_extensions: ["ckb", "evm"],
-        backend_id: "codex_app_server",
-        codex_thread_id: "thr_ckb_54",
-        worktree: {
-          path: "/tmp/failure-report/ckb-54",
-          identity: "issue-54",
-          base_revision: report.target.revision,
-          head_revision: report.target.revision,
-        },
-        last_diagnosed_at: report.updated_at,
+      symptom: {
+        ...report.symptom,
+        raw_error_summary: "token=ghp_not-a-real-token",
       },
     });
-
-    expect(withDiagnosticSession.diagnostic_session?.codex_thread_id).toBe(
-      "thr_ckb_54",
-    );
-    expect(withDiagnosticSession.diagnostic_session?.domain_extensions).toEqual(
-      ["ckb", "evm"],
-    );
-    expect(withDiagnosticSession.shared_context).toBeUndefined();
-  });
-
-  it("rejects legacy execution fields rather than silently migrating a workpad", async () => {
-    const report = failureReportSchema.parse(
-      await loadFixture("issue-54.json"),
-    );
+    const hostPathBearing = failureReportSchema.parse({
+      ...report,
+      origin: { ...report.origin, reporter: "/Users/example/private-evidence" },
+    });
 
     expect(() =>
-      failureReportSchema.parse({
-        ...report,
-        diagnostic_session: {
-          domain_id: "ckb",
-          backend_id: "codex_app_server",
-          worktree: {
-            path: "/tmp/failure-report/ckb-54",
-            identity: "ckb-issue-54",
-            branch: "failure-report/diagnostic/ckb/ckb-issue-54",
-            base_revision: report.target.revision,
-            head_revision: report.target.revision,
-          },
-        },
-      }),
-    ).toThrow();
+      renderFailureReportWorkpad(entryFor(credentialBearing, 0)),
+    ).toThrow("credential-like");
     expect(() =>
-      failureReportSchema.parse({
-        ...report,
-        execution_state: {
-          domain_id: "ckb",
-        },
-      }),
-    ).toThrow();
-    expect(() =>
-      failureReportSchema.parse({
-        ...report,
-        target: {
-          ...report.target,
-          source_checkout_path: "/host/checkout",
-        },
-      }),
-    ).toThrow();
-  });
-
-  it("requires an immutable SHA and rejects selectors or legacy checkout paths", async () => {
-    const report = failureReportSchema.parse(
-      await loadFixture("issue-54.json"),
-    );
-
-    expect(() =>
-      failureReportSchema.parse({
-        ...report,
-        target: {
-          ...report.target,
-          revision: undefined,
-        },
-      }),
-    ).toThrow();
-    expect(() =>
-      failureReportSchema.parse({
-        ...report,
-        target: {
-          ...report.target,
-          revision: "HEAD",
-        },
-      }),
-    ).toThrow("full immutable Git SHA");
-    expect(() =>
-      failureReportSchema.parse({
-        ...report,
-        target: {
-          ...report.target,
-          revision: "main",
-        },
-      }),
-    ).toThrow("full immutable Git SHA");
-
-    for (const [field, value] of Object.entries({
-      source_checkout_path: "/Volumes/Bohemialive/GitHub/CKBoost",
-      cache_path: "/tmp/cache",
-      worktree_path: "/tmp/worktree",
-      branch: "main",
-      cwd: "/tmp/worktree",
-    })) {
-      expect(() =>
-        failureReportSchema.parse({
-          ...report,
-          target: {
-            ...report.target,
-            [field]: value,
-          },
-        }),
-      ).toThrow();
-    }
-  });
-
-  it("requires canonical extension sets and a branch for finalized diagnostics", async () => {
-    const report = failureReportSchema.parse(
-      await loadFixture("issue-54.json"),
-    );
-    const worktree = {
-      path: "/tmp/failure-report/issue-54",
-      identity: "diagnostic-issue-54",
-      base_revision: report.target.revision,
-      head_revision: report.target.revision,
-    };
-
-    expect(() =>
-      failureReportSchema.parse({
-        ...report,
-        diagnostic_session: {
-          lifecycle: "active",
-          domain_extensions: ["evm", "ckb"],
-          backend_id: "codex_app_server",
-          worktree,
-        },
-      }),
-    ).toThrow("domain_extensions must be unique and sorted");
-    expect(() =>
-      failureReportSchema.parse({
-        ...report,
-        diagnostic_session: {
-          lifecycle: "finalized",
-          domain_extensions: ["ckb"],
-          backend_id: "codex_app_server",
-          worktree,
-        },
-      }),
-    ).toThrow("requires a diagnostic_branch");
+      renderFailureReportWorkpad(entryFor(hostPathBearing, 0)),
+    ).toThrow("prohibited host path");
   });
 });

@@ -28,6 +28,7 @@ import {
 import {
   prepareIssueWorkpadMutation,
   type GithubIssueSnapshot,
+  type WorkpadProducerConfiguration,
 } from "../agent/lib/integrations/github/issue-workpad.js";
 import sandbox from "../agent/sandbox.js";
 
@@ -45,6 +46,10 @@ const evmSkillRoot = "/extensions/evm-domain-pack";
 const evmSkillSource =
   evmSkillRoot + "/extension/skills/failure-report-evm-debugging";
 const evmSkillName = "failure-report-evm-debugging";
+const workpadProducers: WorkpadProducerConfiguration = {
+  current: { id: "root-gh", github_actor_id: "101" },
+  producers: [{ id: "root-gh", github_actor_id: "101" }],
+};
 
 const backend: CodexAppServerBackendConfig = {
   schema_version: "failure-report/codex-app-server/v1",
@@ -635,6 +640,7 @@ function createIssueGateway(
     initialIssue,
     report,
     "2026-07-15T10:00:01Z",
+    workpadProducers,
   );
   let issue: GithubIssueSnapshot = {
     ...initialIssue,
@@ -644,11 +650,15 @@ function createIssueGateway(
         id: "workpad-comment",
         body: initial.workpad_comment_body,
         updated_at: "2026-07-15T10:00:01Z",
+        author: { id: "101" },
       },
     ],
   };
 
   return {
+    getWorkpadProducerConfiguration() {
+      return workpadProducers;
+    },
     async readIssue() {
       return issue;
     },
@@ -658,8 +668,13 @@ function createIssueGateway(
       nextReport,
       syncedAt,
     ) {
-      const mutation = prepareIssueWorkpadMutation(issue, nextReport, syncedAt);
-      const commentRef = mutation.workpad_comment_ref ?? "workpad-comment";
+      const mutation = prepareIssueWorkpadMutation(
+        issue,
+        nextReport,
+        syncedAt,
+        workpadProducers,
+      );
+      const commentRef = mutation.target_comment_ref ?? "workpad-comment";
       issue = {
         ...issue,
         updated_at: syncedAt,
@@ -685,7 +700,12 @@ function createIssueGateway(
       if (!comment) {
         throw new Error("Missing test workpad.");
       }
-      return parseFailureReportWorkpad(comment.body).report;
+      const entries = parseFailureReportWorkpad(comment.body).entries;
+      const latest = entries.at(-1);
+      if (!latest) {
+        throw new Error("Missing test workpad entry.");
+      }
+      return latest.report;
     },
   };
 }

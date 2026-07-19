@@ -8,6 +8,7 @@ import {
   EveChannelRootInvoker,
   InMemoryRootSessionStore,
   rootSessionKey,
+  type EveChannelRootPendingTurnConsumer,
   type EveChannelRootTransport,
 } from "../src/index.js";
 
@@ -15,12 +16,13 @@ import {
 describe("Eve Channel Root invoker", () => {
   it("uses the shared Issue as the session key and validates structured output", async () => {
     const seen: Array<{ sessionState?: unknown; message: string }> = [];
+    const responseIds = ["root-issue-54", "root-issue-54-followup"];
     const transport: EveChannelRootTransport = {
       async run(input) {
         seen.push(input);
         return {
           data: {
-            request_id: "root-issue-54",
+            request_id: responseIds[seen.length - 1],
             status: "completed",
             summary: "Root rehydrated the Issue workpad.",
           },
@@ -88,6 +90,7 @@ describe("Eve Channel Root invoker", () => {
     );
     const sessionStorePath = join(temporaryRoot, "state", "sessions.json");
     const seen: Array<{ sessionState?: unknown; message: string }> = [];
+    const recoveredSessionStates: unknown[] = [];
     const rehydratedIssue = {
       provider: "github_issue" as const,
       repository: "Alive24/CKBoost",
@@ -125,15 +128,48 @@ describe("Eve Channel Root invoker", () => {
 
       // A new store instance models an MCP adapter process that was restarted.
       const retry = createMcpRootInvoker({
-        transport: transportForSelectorTurn(
-          "existing-issue-retry",
-          rehydratedIssue,
-          seen,
-          "eve:issue-56:two",
-        ),
+        transport: {
+          async run(input) {
+            seen.push(input);
+            // A timed-out prior adapter invocation completed after its caller
+            // disconnected. The retry has already been delivered, but Eve's
+            // first stream cursor still ends at this older result.
+            return {
+              data: {
+                request_id: "existing-issue-interrupted",
+                status: "completed",
+                issue: rehydratedIssue,
+                summary: "Root completed the interrupted Issue intake.",
+              },
+              status: "waiting",
+              sessionState: {
+                continuationToken: "eve:issue-56:stale",
+                sessionId: "session-existing-issue-interrupted",
+                streamIndex: 2,
+              },
+            };
+          },
+          async consumePendingTurn(input) {
+            recoveredSessionStates.push(input.sessionState);
+            return {
+              data: {
+                request_id: "existing-issue-retry",
+                status: "completed",
+                issue: rehydratedIssue,
+                summary: "Root rehydrated the retried existing Issue.",
+              },
+              status: "waiting",
+              sessionState: {
+                continuationToken: "eve:issue-56:two",
+                sessionId: "session-existing-issue-retry",
+                streamIndex: 4,
+              },
+            };
+          },
+        } satisfies EveChannelRootTransport & EveChannelRootPendingTurnConsumer,
         session_store_path: sessionStorePath,
       });
-      await retry.invoke({
+      const retryResult = await retry.invoke({
         request_id: "existing-issue-retry",
         operation: "resume",
         issue_selector: {
@@ -160,6 +196,11 @@ describe("Eve Channel Root invoker", () => {
       });
 
       expect(firstResult.issue).toEqual(rehydratedIssue);
+      expect(retryResult).toMatchObject({
+        request_id: "existing-issue-retry",
+        status: "completed",
+        issue: rehydratedIssue,
+      });
       expect(
         rootSessionKey({
           request_id: "session-key-selector",
@@ -181,9 +222,14 @@ describe("Eve Channel Root invoker", () => {
       expect(seen[1]?.sessionState).toMatchObject({
         continuationToken: "eve:issue-56:one",
       });
+      expect(recoveredSessionStates[0]).toMatchObject({
+        continuationToken: "eve:issue-56:stale",
+      });
       expect(seen[2]?.sessionState).toMatchObject({
         continuationToken: "eve:issue-56:two",
       });
+      // Draining the already-delivered retry must not submit a duplicate turn.
+      expect(seen).toHaveLength(3);
     } finally {
       await rm(temporaryRoot, { recursive: true, force: true });
     }
@@ -216,6 +262,38 @@ describe("Eve Channel Root invoker", () => {
 
     expect(result.status).toBe("failed");
     expect(result.summary).toContain("rehydrated Issue context");
+  });
+
+  it("does not treat an unmatched result as current when no pending turn can be consumed", async () => {
+    const transport: EveChannelRootTransport = {
+      async run() {
+        return {
+          data: {
+            request_id: "unrelated-root-request",
+            status: "completed",
+            summary: "A result for another request.",
+          },
+          status: "completed",
+          sessionState: {
+            continuationToken: "eve:unrelated",
+            sessionId: "session-unrelated",
+            streamIndex: 3,
+          },
+        };
+      },
+    };
+
+    const result = await new EveChannelRootInvoker(transport).invoke({
+      request_id: "current-root-request",
+      operation: "inspect",
+      message: "Inspect the current report.",
+    });
+
+    expect(result).toMatchObject({
+      request_id: "current-root-request",
+      status: "failed",
+    });
+    expect(result.summary).toContain("different request id");
   });
 });
 

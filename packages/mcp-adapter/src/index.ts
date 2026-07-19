@@ -20,6 +20,7 @@ export {
   rootSessionKey,
   type EveChannelRootTransportOptions,
   type EveChannelRootTurn,
+  type EveChannelRootPendingTurnConsumer,
   type McpRootCompositionOptions,
   type RootSessionStore,
 } from "./eve-channel-root-invoker.js";

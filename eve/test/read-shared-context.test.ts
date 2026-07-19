@@ -1,10 +1,21 @@
 import { readFile } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { failureReportSchema } from "@failure-report/protocol";
 
-import { prepareIssueWorkpadMutation } from "../agent/lib/integrations/github/issue-workpad.js";
-import { rehydrateSharedContext } from "../agent/tools/read_shared_context.js";
+import {
+  prepareIssueWorkpadMutation,
+  type WorkpadProducerConfiguration,
+} from "../agent/lib/integrations/github/issue-workpad.js";
+import {
+  findVerifiedWorkpadForRead,
+  rehydrateSharedContext,
+} from "../agent/tools/read_shared_context.js";
+
+const rootGh: WorkpadProducerConfiguration = {
+  current: { id: "root-gh", github_actor_id: "101" },
+  producers: [{ id: "root-gh", github_actor_id: "101" }],
+};
 
 /** Exercises the read-only Root rehydration path used by an initial selector. */
 describe("read_shared_context", () => {
@@ -19,8 +30,13 @@ describe("read_shared_context", () => {
     };
     const before = structuredClone(issue);
 
-    const result = rehydrateSharedContext(issue);
+    const getProducerConfiguration = vi.fn(() => rootGh);
+    const result = rehydrateSharedContext(
+      issue,
+      findVerifiedWorkpadForRead(issue, getProducerConfiguration),
+    );
 
+    expect(result.status).toBe("ok");
     expect(result.shared_context).toEqual({
       provider: "github_issue",
       repository: "Alive24/CKBoost",
@@ -33,6 +49,7 @@ describe("read_shared_context", () => {
     expect(result.workpad).toBeNull();
     expect(result.workpad_comment_ref).toBeNull();
     expect(result.workpad_revision).toBeNull();
+    expect(getProducerConfiguration).not.toHaveBeenCalled();
     // The transformation only reads the snapshot. It cannot publish or alter
     // an Issue, comments, diagnostic state, or any caller filesystem state.
     expect(issue).toEqual(before);
@@ -58,24 +75,34 @@ describe("read_shared_context", () => {
       issue,
       report,
       "2026-07-18T20:01:00Z",
+      rootGh,
     );
 
-    const result = rehydrateSharedContext({
+    const persistedIssue = {
       ...issue,
       comments: [
         {
           id: "IC_workpad_54",
           body: mutation.workpad_comment_body,
           updated_at: "2026-07-18T20:01:00Z",
+          author: { id: "101", login: "fixture-root-gh" },
         },
       ],
-    });
+    };
+    const result = rehydrateSharedContext(
+      persistedIssue,
+      findVerifiedWorkpadForRead(persistedIssue, () => rootGh),
+    );
 
     expect(result.shared_context).toMatchObject({
       repository: "Alive24/CKBoost",
       issue_number: 54,
       workpad_comment_ref: "IC_workpad_54",
       workpad_revision: 0,
+      workpad_logical_session_id:
+        mutation.report.shared_context?.workpad_logical_session_id,
+      workpad_entry_id: mutation.report.shared_context?.workpad_entry_id,
+      workpad_producer_id: "root-gh",
     });
     expect(result.workpad).toEqual({
       comment_ref: "IC_workpad_54",
