@@ -141,6 +141,45 @@ export function findExistingWorkpad(
 }
 
 /**
+ * Derives a complete, caller-safe Issue context from a freshly read snapshot.
+ *
+ * An Issue without a workpad is still a valid initial state. Its canonical
+ * context has revision zero and no comment reference, while the caller can use
+ * the separate workpad presence signal to distinguish it from a persisted
+ * revision-zero comment.
+ */
+export function rehydrateGithubIssueContext(
+  issue: GithubIssueSnapshot,
+  workpad: ExistingWorkpad | undefined,
+): GithubIssueContext {
+  return githubIssueContextSchema.parse({
+    provider: "github_issue",
+    repository: issue.repository,
+    issue_number: issue.issue_number,
+    issue_url: issue.issue_url,
+    workpad_marker: workpadMarker,
+    ...(workpad
+      ? {
+          workpad_comment_ref: workpad.comment.id,
+          workpad_logical_session_id: workpad.logical_session_id,
+          workpad_entry_id: workpad.entry.entry_id,
+          workpad_producer_id: workpad.producer.id,
+          ...(workpad.predecessor_comment_ref
+            ? {
+                workpad_predecessor_comment_ref:
+                  workpad.predecessor_comment_ref,
+              }
+            : {}),
+        }
+      : {}),
+    workpad_revision: workpad?.revision ?? 0,
+    ...(workpad?.report.shared_context?.synced_at
+      ? { synced_at: workpad.report.shared_context.synced_at }
+      : {}),
+  });
+}
+
+/**
  * Prepares a first entry, an immutable same-producer append, or a linked
  * successor comment for an explicitly configured producer change.
  */
