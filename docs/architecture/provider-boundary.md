@@ -104,11 +104,13 @@ approvalMode: on-request
 sandboxMode: workspace-write
 ```
 
+Before every new or resumed diagnostic delegation, Root runs a bounded host-runtime preflight after workpad preparation has validated the managed worktree. It starts only the configured App Server executable with that worktree as `cwd`, inherits the ambient Codex runtime without setting or copying `CODEX_HOME`, sends `initialize`, sends `initialized`, then checks `skills/list` for every Root-selected repository skill before terminating the child. It never creates a thread, sends a model request, invokes a native tool, or modifies global Codex configuration, credentials, permissions, or state files directly. A transient startup, handshake, transport, or timeout failure is cleaned up and retried once with a fresh child after Root revalidates the same managed workspace; permanent executable, state-access, credential, containment, or skill-discovery failures return sanitized `needs_input` instead of a delegation.
+
 Codex runs directly in the user's existing host environment, retaining `~/.codex`, plugins, native skills, MCP configuration, authentication, Git credentials, model settings, and persistent thread storage. `workspace-write` permits focused tests, caches, and debugging artifacts. It does not authorize a diagnostic worker to modify business code, commit, or turn the task into implementation unless Root explicitly grants that authority. After every turn, Root records the current HEAD, timestamp, and provider thread id so the same Codex thread can resume later.
 
 ## Verification Scope
 
-Tests cover direct protocol renames and legacy-field rejection; allocation and resume; external-HEAD rejection; workpad/thread persistence; native-skill link creation, repair, and fail-closed conflicts; and the CKB extension's pure-capability shape. An optional local App Server smoke test can query `skills/list` in a temporary Git worktree without starting a model turn.
+Tests cover direct protocol renames and legacy-field rejection; allocation and resume; external-HEAD rejection; workpad/thread persistence; native-skill link creation, repair, and fail-closed conflicts; bounded App Server initialization/skill discovery, failure classification, cleanup, and one fresh-process retry; and the CKB extension's pure-capability shape. An optional local App Server smoke test uses the ambient host runtime in a temporary Git worktree without starting a model turn.
 
 ## References
 
