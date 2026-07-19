@@ -18,6 +18,7 @@ import { OctokitIssueGateway } from "../agent/lib/integrations/github/octokit-is
 
 const repository = "Alive24/CKBoost";
 const issueNumber = 54;
+const issueTitle = "CKBoost Issue 54";
 const issueUrl = "https://github.com/Alive24/CKBoost/issues/54";
 
 const rootGh: WorkpadProducerConfiguration = {
@@ -53,6 +54,7 @@ describe("Octokit Issue gateway", () => {
               body: null,
               html_url: issueUrl,
               number: issueNumber,
+              title: issueTitle,
               updated_at: "2026-07-15T10:00:00Z",
             },
           }),
@@ -84,20 +86,28 @@ describe("Octokit Issue gateway", () => {
 
     const issue = await gateway.readIssue(repository, issueNumber);
 
-    expect(issue.comments).toEqual([
-      {
-        id: "10",
-        body: "Human context",
-        updated_at: "2026-07-15T10:00:01Z",
-        author: { id: "777", login: "human", type: "User" },
-      },
-      {
-        id: "11",
-        body: "",
-        updated_at: "2026-07-15T10:00:02Z",
-        author: null,
-      },
-    ]);
+    expect(issue).toEqual({
+      repository,
+      issue_number: issueNumber,
+      title: issueTitle,
+      issue_url: issueUrl,
+      body: "",
+      updated_at: "2026-07-15T10:00:00Z",
+      comments: [
+        {
+          id: "10",
+          body: "Human context",
+          updated_at: "2026-07-15T10:00:01Z",
+          author: { id: "777", login: "human", type: "User" },
+        },
+        {
+          id: "11",
+          body: "",
+          updated_at: "2026-07-15T10:00:02Z",
+          author: null,
+        },
+      ],
+    });
     expect(octokit.paginate).toHaveBeenCalledWith(listComments, {
       owner: "Alive24",
       repo: "CKBoost",
@@ -274,6 +284,7 @@ function snapshot(
   return {
     repository,
     issue_number: issueNumber,
+    title: issueTitle,
     issue_url: issueUrl,
     body: "# Existing human Issue body",
     updated_at: "2026-07-15T10:00:00Z",
@@ -311,6 +322,7 @@ function createMutableOctokit() {
             body,
             html_url: issueUrl,
             number: issueNumber,
+            title: issueTitle,
             updated_at: updatedAt,
           },
         })),
@@ -389,6 +401,7 @@ function createScriptedOctokit(snapshots: GithubIssueSnapshot[]) {
               body: current.body,
               html_url: current.issue_url,
               number: current.issue_number,
+              title: current.title,
               updated_at: current.updated_at,
             },
           };

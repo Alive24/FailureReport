@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, mkdir, realpath, symlink } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type {
   DiagnosticSession,
@@ -143,7 +143,11 @@ export class DiagnosticWorktreeManager {
    * Creates a fresh deterministic worktree and durable state before a Codex
    * session may start. Skill sources are validated before Git mutates anything.
    */
-  async allocate(report: FailureReport): Promise<VerifiedDiagnosticWorktree> {
+  async allocate(
+    report: FailureReport,
+    diagnosticBranchSlug: string,
+  ): Promise<VerifiedDiagnosticWorktree> {
+    this.assertDiagnosticBranchSlug(diagnosticBranchSlug);
     const source = await this.acquireCanonicalSource(report);
     const canonicalPath = source.canonical_path;
     const nativeSkills = await this.resolveNativeSkillSources();
@@ -210,6 +214,7 @@ export class DiagnosticWorktreeManager {
           base_revision: baseRevision,
           head_revision: headRevision,
         },
+        diagnostic_branch_slug: diagnosticBranchSlug,
       },
     };
   }
@@ -223,6 +228,73 @@ export class DiagnosticWorktreeManager {
     state: DiagnosticSession,
   ): Promise<VerifiedDiagnosticWorktree> {
     return this.inspect(report, state, true);
+  }
+
+  /**
+   * Rehomes one narrowly defined historical session whose old Root runtime no
+   * longer owns its persisted worktree path. The old directory is never read,
+   * reused, or removed: only an unchanged immutable target revision may be
+   * reconstructed under the current Root-owned worktree root.
+   */
+  async rehydrateLegacyRuntimeWorktree(
+    report: FailureReport,
+    state: DiagnosticSession,
+  ): Promise<VerifiedDiagnosticWorktree> {
+    if (state.lifecycle !== "active") {
+      throw new DiagnosticSafetyError(
+        "Only an active diagnostic session can be rehomed from a legacy Root runtime.",
+      );
+    }
+    if (!sameStrings(state.domain_extensions, this.domainExtensionIds())) {
+      throw new DiagnosticSafetyError(
+        "Legacy diagnostic session belongs to a different Root-owned domain extension set.",
+      );
+    }
+    if (state.backend_id !== this.backendId) {
+      throw new DiagnosticSafetyError(
+        "Legacy diagnostic session uses an unsupported backend: " +
+          state.backend_id,
+      );
+    }
+    const identity = this.identityFor(report);
+    if (state.worktree.identity !== identity) {
+      throw new DiagnosticSafetyError(
+        "Legacy diagnostic worktree identity does not belong to this FailureReport.",
+      );
+    }
+    if (
+      !sameRevision(state.worktree.base_revision, report.target.revision) ||
+      !sameRevision(state.worktree.head_revision, state.worktree.base_revision)
+    ) {
+      throw new DiagnosticSafetyError(
+        "Legacy diagnostic worktree rehydration requires an unchanged recorded target revision.",
+      );
+    }
+
+    const isolatedRoot = await this.resolveIsolatedWorktreeRoot();
+    const expectedPath = this.worktreePath(report, isolatedRoot);
+    const declaredPath = state.worktree.path;
+    if (
+      !isLegacyRuntimeWorktreePath(declaredPath, identity) ||
+      resolve(declaredPath) === expectedPath
+    ) {
+      throw new DiagnosticSafetyError(
+        "Diagnostic worktree is not an eligible legacy Root-runtime path for rehydration.",
+      );
+    }
+
+    const rehydrated = await this.allocate(
+      report,
+      state.diagnostic_branch_slug,
+    );
+    const { codex_thread_id: _legacyThread, ...durableState } = state;
+    return {
+      ...rehydrated,
+      state: {
+        ...durableState,
+        worktree: rehydrated.state.worktree,
+      },
+    };
   }
 
   /**
@@ -265,8 +337,15 @@ export class DiagnosticWorktreeManager {
       );
     }
 
-    const branch = this.branchFor(report);
+    const branch = this.branchFor(report, verified.state);
+    const remoteRef = "refs/heads/" + branch;
     const headRevision = verified.state.worktree.head_revision;
+    const remoteHead = await this.remoteBranchHead(worktreePath, remoteRef);
+    if (remoteHead && remoteHead !== headRevision) {
+      throw new DiagnosticSafetyError(
+        "The remote diagnostic snapshot branch already points at a different revision; explicit operator input is required.",
+      );
+    }
     const existingHead = await optionalGit(this.git, worktreePath, [
       "rev-parse",
       "--verify",
@@ -284,6 +363,23 @@ export class DiagnosticWorktreeManager {
         args: ["branch", branch, headRevision],
       });
     }
+    try {
+      await this.git({
+        cwd: worktreePath,
+        args: ["push", "origin", remoteRef + ":" + remoteRef],
+      });
+    } catch (error) {
+      throw new DiagnosticSafetyError(
+        "Unable to push the diagnostic snapshot branch without force: " +
+          errorMessage(error),
+      );
+    }
+    const pushedHead = await this.remoteBranchHead(worktreePath, remoteRef);
+    if (pushedHead !== headRevision) {
+      throw new DiagnosticSafetyError(
+        "The remote diagnostic snapshot branch did not resolve to the finalized diagnostic HEAD.",
+      );
+    }
 
     return {
       ...verified,
@@ -293,6 +389,10 @@ export class DiagnosticWorktreeManager {
         diagnostic_branch: {
           name: branch,
           head_revision: headRevision,
+          remote_name: "origin",
+          remote_ref: remoteRef,
+          remote_url: this.branchUrlFor(report, branch),
+          pushed_at: finalizedAt,
           finalized_at: finalizedAt,
           reuse_policy: "diagnostic_snapshot_only",
         },
@@ -715,8 +815,76 @@ export class DiagnosticWorktreeManager {
     return "diagnostic-" + (slug || "report") + "-" + digest;
   }
 
-  private branchFor(report: FailureReport): string {
-    return "failure-report/diagnostic/" + this.identityFor(report);
+  private branchFor(report: FailureReport, state: DiagnosticSession): string {
+    const issueNumber = report.shared_context?.issue_number;
+    if (!issueNumber) {
+      throw new DiagnosticSafetyError(
+        "Diagnostic snapshot branching requires a Root-published GitHub Issue context.",
+      );
+    }
+    return (
+      "diagnostic/" + String(issueNumber) + "-" + state.diagnostic_branch_slug
+    );
+  }
+
+  private branchUrlFor(report: FailureReport, branch: string): string {
+    const issue = report.shared_context;
+    if (!issue) {
+      throw new DiagnosticSafetyError(
+        "Diagnostic snapshot publishing requires a Root-published GitHub Issue context.",
+      );
+    }
+    const issueSuffix = "/issues/" + String(issue.issue_number);
+    if (!issue.issue_url.endsWith(issueSuffix)) {
+      throw new DiagnosticSafetyError(
+        "Diagnostic snapshot publishing requires a canonical GitHub Issue URL.",
+      );
+    }
+    return (
+      issue.issue_url.slice(0, -issueSuffix.length) +
+      "/tree/" +
+      branch.split("/").map(encodeURIComponent).join("/")
+    );
+  }
+
+  private async remoteBranchHead(
+    worktreePath: string,
+    remoteRef: string,
+  ): Promise<string | undefined> {
+    let output: string;
+    try {
+      output = await this.git({
+        cwd: worktreePath,
+        args: ["ls-remote", "--heads", "origin", remoteRef],
+      });
+    } catch (error) {
+      throw new DiagnosticSafetyError(
+        "Unable to inspect the remote diagnostic snapshot branch: " +
+          errorMessage(error),
+      );
+    }
+    if (!output) {
+      return undefined;
+    }
+    const [revision, ref] = output.split(/\s+/, 2);
+    if (
+      !revision ||
+      ref !== remoteRef ||
+      !/^[0-9a-f]{40,64}$/i.test(revision)
+    ) {
+      throw new DiagnosticSafetyError(
+        "The remote diagnostic snapshot branch returned an invalid Git reference.",
+      );
+    }
+    return revision;
+  }
+
+  private assertDiagnosticBranchSlug(slug: string): void {
+    if (!/^[\p{L}\p{N}][\p{L}\p{N}-]{0,79}$/u.test(slug)) {
+      throw new DiagnosticSafetyError(
+        "Diagnostic branch slug must be a non-empty safe Issue-title slug.",
+      );
+    }
   }
 }
 
@@ -785,6 +953,20 @@ function sameStrings(
     left.length === right.length &&
     left.every((value, index) => value === right[index])
   );
+}
+
+/** Compares immutable Git object identities without treating case as meaningful. */
+function sameRevision(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
+/** Recognizes a former Root-owned worktree layout without trusting its contents. */
+function isLegacyRuntimeWorktreePath(path: string, identity: string): boolean {
+  if (!isAbsolute(path)) {
+    return false;
+  }
+  const expectedSuffix = join(".eve", "sandbox-cache", "worktrees", identity);
+  return resolve(path).endsWith(sep + expectedSuffix);
 }
 
 /** Narrows a filesystem error to the only expected absence case. */

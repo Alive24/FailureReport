@@ -1,13 +1,16 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
   appendFailureReportWorkpadEntry,
+  diagnosticBranchSlugSchema,
   failureReportSchema,
   githubIssueSelectorSchema,
   parseFailureReportWorkpad,
   renderFailureReportWorkpad,
   rootRequestSchema,
+  rootResultSchema,
   workpadMarker,
   type FailureReport,
   type FailureReportWorkpadEntry,
@@ -34,7 +37,7 @@ function entryFor(
       repository: "Alive24/CKBoost",
       issue_number: 54,
       issue_url: "https://github.com/Alive24/CKBoost/issues/54",
-      workpad_marker: "<!-- failure-report-workpad -->",
+      workpad_marker: workpadMarker,
       workpad_revision: revision,
       workpad_logical_session_id: logicalSessionId,
       workpad_entry_id: entryId,
@@ -60,7 +63,7 @@ function entryFor(
   };
 }
 
-/** Covers v2 envelope parsing, public presentation, and append-only rendering. */
+/** Covers durable-report parsing and v2 workpad serialization invariants. */
 describe("FailureReport protocol", () => {
   it.each(["issue-54.json", "contract-recipe-identifier.json"])(
     "accepts the historical CKBoost fixture %s",
@@ -86,8 +89,7 @@ describe("FailureReport protocol", () => {
       markdown.indexOf("<details>"),
     );
     expect(markdown).toContain("Canonical FailureReport snapshot");
-    expect(parsed.entries).toHaveLength(1);
-    expect(parsed.entries[0]).toEqual(entry);
+    expect(parsed.entries).toEqual([entry]);
   });
 
   it("appends a new entry while preserving every byte of the prior logical history", async () => {
@@ -95,8 +97,10 @@ describe("FailureReport protocol", () => {
       await loadFixture("issue-54.json"),
     );
     const first = renderFailureReportWorkpad(entryFor(report, 0));
-    const second = entryFor(report, 1);
-    const appended = appendFailureReportWorkpadEntry(first, second);
+    const appended = appendFailureReportWorkpadEntry(
+      first,
+      entryFor(report, 1),
+    );
     const parsed = parseFailureReportWorkpad(appended);
 
     expect(appended.startsWith(first)).toBe(true);
@@ -110,6 +114,68 @@ describe("FailureReport protocol", () => {
         '<!-- failure-report-workpad -->\n<!-- failure-report/v1 report-id="old" revision="0" -->',
       ),
     ).toThrow("legacy v1");
+  });
+
+  it("validates GitHub Issue shared context", async () => {
+    const report = failureReportSchema.parse(
+      await loadFixture("issue-54.json"),
+    );
+    const withIssue = failureReportSchema.parse({
+      ...report,
+      shared_context: {
+        provider: "github_issue",
+        repository: "Alive24/CKBoost",
+        issue_number: 54,
+        issue_url: "https://github.com/Alive24/CKBoost/issues/54",
+        workpad_marker: workpadMarker,
+        workpad_comment_ref: "IC_kwDO-test",
+        workpad_revision: 3,
+        synced_at: report.updated_at,
+      },
+    });
+
+    expect(withIssue.shared_context?.workpad_revision).toBe(3);
+  });
+
+  it("keeps multi-extension Codex diagnostic-session state typed and outside shared Issue context", async () => {
+    const report = failureReportSchema.parse(
+      await loadFixture("issue-54.json"),
+    );
+    const withDiagnosticSession = failureReportSchema.parse({
+      ...report,
+      diagnostic_session: {
+        lifecycle: "active",
+        domain_extensions: ["ckb", "evm"],
+        backend_id: "codex_app_server",
+        codex_thread_id: "thr_ckb_54",
+        worktree: {
+          path: "/tmp/failure-report/ckb-54",
+          identity: "issue-54",
+          base_revision: report.target.revision,
+          head_revision: report.target.revision,
+        },
+        diagnostic_branch_slug: "ckboost-issue-54",
+        last_diagnosed_at: report.updated_at,
+      },
+    });
+
+    expect(withDiagnosticSession.diagnostic_session?.codex_thread_id).toBe(
+      "thr_ckb_54",
+    );
+    expect(withDiagnosticSession.diagnostic_session?.domain_extensions).toEqual(
+      ["ckb", "evm"],
+    );
+    expect(withDiagnosticSession.shared_context).toBeUndefined();
+  });
+
+  it("keeps Unicode diagnostic slugs runtime-validated without emitting an unsupported JSON Schema pattern", () => {
+    expect(diagnosticBranchSlugSchema.parse("诊断-54")).toBe("诊断-54");
+    expect(() => diagnosticBranchSlugSchema.parse("-diagnostic")).toThrow();
+    expect(() => diagnosticBranchSlugSchema.parse("diagnostic_slug")).toThrow();
+
+    const jsonSchema = JSON.stringify(z.toJSONSchema(failureReportSchema));
+
+    expect(jsonSchema).not.toContain("\\p{");
   });
 
   it("accepts a strictly minimal existing-Issue selector without weakening durable context validation", () => {
@@ -207,5 +273,163 @@ describe("FailureReport protocol", () => {
     expect(() =>
       renderFailureReportWorkpad(entryFor(hostPathBearing, 0)),
     ).toThrow("prohibited host path");
+  });
+
+  it("rejects legacy execution fields rather than silently accepting them", async () => {
+    const report = failureReportSchema.parse(
+      await loadFixture("issue-54.json"),
+    );
+
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        diagnostic_session: {
+          lifecycle: "active",
+          domain_extensions: ["ckb"],
+          domain_id: "ckb",
+          backend_id: "codex_app_server",
+          worktree: {
+            path: "/tmp/failure-report/ckb-54",
+            identity: "ckb-issue-54",
+            branch: "failure-report/diagnostic/ckb/ckb-issue-54",
+            base_revision: report.target.revision,
+            head_revision: report.target.revision,
+          },
+          diagnostic_branch_slug: "ckboost-issue-54",
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        execution_state: { domain_id: "ckb" },
+      }),
+    ).toThrow();
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        target: { ...report.target, source_checkout_path: "/host/checkout" },
+      }),
+    ).toThrow();
+  });
+
+  it("requires an immutable SHA and rejects selectors or legacy checkout paths", async () => {
+    const report = failureReportSchema.parse(
+      await loadFixture("issue-54.json"),
+    );
+
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        target: { ...report.target, revision: undefined },
+      }),
+    ).toThrow();
+    for (const revision of ["HEAD", "main"]) {
+      expect(() =>
+        failureReportSchema.parse({
+          ...report,
+          target: { ...report.target, revision },
+        }),
+      ).toThrow("full immutable Git SHA");
+    }
+
+    for (const [field, value] of Object.entries({
+      source_checkout_path: "/Volumes/Bohemialive/GitHub/CKBoost",
+      cache_path: "/tmp/cache",
+      worktree_path: "/tmp/worktree",
+      branch: "main",
+      cwd: "/tmp/worktree",
+    })) {
+      expect(() =>
+        failureReportSchema.parse({
+          ...report,
+          target: { ...report.target, [field]: value },
+        }),
+      ).toThrow();
+    }
+  });
+
+  it("requires canonical extension sets and complete remote metadata for finalized diagnostics", async () => {
+    const report = failureReportSchema.parse(
+      await loadFixture("issue-54.json"),
+    );
+    const worktree = {
+      path: "/tmp/failure-report/issue-54",
+      identity: "diagnostic-issue-54",
+      base_revision: report.target.revision,
+      head_revision: report.target.revision,
+    };
+
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        diagnostic_session: {
+          lifecycle: "active",
+          domain_extensions: ["evm", "ckb"],
+          backend_id: "codex_app_server",
+          worktree,
+          diagnostic_branch_slug: "ckboost-issue-54",
+        },
+      }),
+    ).toThrow("domain_extensions must be unique and sorted");
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        diagnostic_session: {
+          lifecycle: "finalized",
+          domain_extensions: ["ckb"],
+          backend_id: "codex_app_server",
+          worktree,
+          diagnostic_branch_slug: "ckboost-issue-54",
+        },
+      }),
+    ).toThrow("requires a diagnostic_branch");
+
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        diagnostic_session: {
+          lifecycle: "finalized",
+          domain_extensions: ["ckb"],
+          backend_id: "codex_app_server",
+          worktree,
+          diagnostic_branch_slug: "ckboost-issue-54",
+          diagnostic_branch: {
+            name: "diagnostic/54-ckboost-issue-54",
+            head_revision: report.target.revision,
+            finalized_at: report.updated_at,
+            reuse_policy: "diagnostic_snapshot_only",
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects the retired Root approval operation and result state", () => {
+    const baseRequest = {
+      request_id: "root-request-54",
+      operation: "inspect",
+      message: "Inspect the shared diagnostic context.",
+    };
+
+    expect(() =>
+      rootRequestSchema.parse({
+        ...baseRequest,
+        operation: "submit_action_result",
+      }),
+    ).toThrow();
+    expect(() =>
+      rootRequestSchema.parse({
+        ...baseRequest,
+        action_result: { approved: true },
+      }),
+    ).toThrow();
+    expect(() =>
+      rootResultSchema.parse({
+        request_id: baseRequest.request_id,
+        status: "waiting_for_approval",
+        summary: "Awaiting approval.",
+      }),
+    ).toThrow();
   });
 });

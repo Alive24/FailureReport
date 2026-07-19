@@ -1,4 +1,5 @@
 import {
+  diagnosticBranchSlugFor,
   failureReportSchema,
   type DiagnosticSession,
   type FailureReport,
@@ -17,6 +18,8 @@ import {
   DiagnosticWorktreeManager,
   type VerifiedDiagnosticWorktree,
 } from "./worktree.js";
+
+export { diagnosticBranchSlugFor };
 
 /**
  * Durable diagnostic-session journal backed by the report's GitHub Issue workpad.
@@ -98,12 +101,24 @@ export class DiagnosticSessionWorkpad {
           "Diagnostic session is finalized; prepare a separate future workflow instead of resuming its diagnostic worktree.",
         );
       }
-      diagnosticSession = await this.worktrees.restore(
+      const restored = await this.restoreOrRehydrateDiagnosticSession(
         report,
         report.diagnostic_session,
       );
+      diagnosticSession = restored.diagnostic_session;
+      const persisted = await this.persistRecoveredDiagnosticSession(
+        current,
+        diagnosticSession,
+        restored.worktree_rehomed,
+      );
+      report = persisted.report;
+      workpadRevision = persisted.workpad_revision;
+      diagnosticSession = persisted.diagnostic_session;
     } else {
-      diagnosticSession = await this.worktrees.allocate(report);
+      diagnosticSession = await this.worktrees.allocate(
+        report,
+        diagnosticBranchSlugFor(current.issue.title),
+      );
       // Persist state before exposing a delegation. Codex must never start in a
       // worktree that Root cannot validate and recover on the next invocation.
       const nextReport = failureReportSchema.parse({
@@ -157,15 +172,15 @@ export class DiagnosticSessionWorkpad {
         "Diagnosis is blocked because no diagnostic worktree was durably prepared.",
       );
     }
-    const diagnosticSession = await this.worktrees.restore(
+    const restored = await this.restoreOrRehydrateDiagnosticSession(
       current.report,
       state,
     );
-    return {
-      report: current.report,
-      workpad_revision: current.revision,
-      diagnostic_session: diagnosticSession,
-    };
+    return this.persistRecoveredDiagnosticSession(
+      current,
+      restored.diagnostic_session,
+      restored.worktree_rehomed,
+    );
   }
 
   /** Records a Codex App Server thread id once Root observes it. */
@@ -240,15 +255,24 @@ export class DiagnosticSessionWorkpad {
       };
     }
 
-    const diagnosticSession = await this.worktrees.finalize(
+    const restored = await this.restoreOrRehydrateDiagnosticSession(
       current.report,
       state,
+    );
+    const recovered = await this.persistRecoveredDiagnosticSession(
+      current,
+      restored.diagnostic_session,
+      restored.worktree_rehomed,
+    );
+    const diagnosticSession = await this.worktrees.finalize(
+      recovered.report,
+      recovered.diagnostic_session.state,
       this.now(),
     );
     const published = await this.publishDiagnosticSession(
       {
-        report: current.report,
-        workpad_revision: current.revision,
+        report: recovered.report,
+        workpad_revision: recovered.workpad_revision,
         diagnostic_session: diagnosticSession,
       },
       diagnosticSession.state,
@@ -294,13 +318,92 @@ export class DiagnosticSessionWorkpad {
     };
   }
 
+  /**
+   * Rehydrates an old Root-runtime worktree only after normal restoration has
+   * failed its safety checks. The manager permits only an unchanged immutable
+   * target revision and never reuses the former runtime's directory.
+   */
+  private async restoreOrRehydrateDiagnosticSession(
+    report: FailureReport,
+    state: DiagnosticSession,
+  ): Promise<{
+    diagnostic_session: VerifiedDiagnosticWorktree;
+    worktree_rehomed: boolean;
+  }> {
+    try {
+      return {
+        diagnostic_session: await this.worktrees.restore(report, state),
+        worktree_rehomed: false,
+      };
+    } catch (error) {
+      if (!(error instanceof DiagnosticSafetyError)) {
+        throw error;
+      }
+      return {
+        diagnostic_session: await this.worktrees.rehydrateLegacyRuntimeWorktree(
+          report,
+          state,
+        ),
+        worktree_rehomed: true,
+      };
+    }
+  }
+
+  /**
+   * Persists all narrow legacy recovery before Root exposes the active session
+   * or attempts finalization. A failed ordinary restore never reaches this write.
+   */
+  private async persistRecoveredDiagnosticSession(
+    current: {
+      report: FailureReport;
+      revision: number;
+    },
+    diagnosticSession: VerifiedDiagnosticWorktree,
+    worktreeRehomed: boolean,
+  ): Promise<LoadedDiagnosticSession> {
+    if (!worktreeRehomed) {
+      return {
+        report: current.report,
+        workpad_revision: current.revision,
+        diagnostic_session: diagnosticSession,
+      };
+    }
+
+    const published = await this.publishDiagnosticSession(
+      {
+        report: current.report,
+        workpad_revision: current.revision,
+        diagnostic_session: diagnosticSession,
+      },
+      diagnosticSession.state,
+    );
+    const state = published.report.diagnostic_session;
+    if (!state) {
+      throw new Error(
+        "Legacy diagnostic-session recovery did not persist session state.",
+      );
+    }
+    return {
+      report: published.report,
+      workpad_revision: published.workpad_revision,
+      diagnostic_session: {
+        ...diagnosticSession,
+        state,
+      },
+    };
+  }
+
   /** Reads and cross-checks the one durable workpad against a session identity. */
   private async readWorkpad(
     envelope: Pick<
       DiagnosticSessionEnvelope,
       "repository" | "issue_number" | "report_id"
     >,
-  ): Promise<{ report: FailureReport; revision: number }> {
+  ): Promise<{
+    report: FailureReport;
+    revision: number;
+    issue: Awaited<ReturnType<DiagnosticSessionIssueGateway["readIssue"]>>;
+  }> {
     const gateway = await this.gateway;
     const issue = await gateway.readIssue(
       envelope.repository,
@@ -331,6 +434,10 @@ export class DiagnosticSessionWorkpad {
         "The durable FailureReport workpad is not consistently bound to the requested GitHub Issue.",
       );
     }
-    return { report: workpad.report, revision: workpad.revision };
+    return {
+      report: workpad.report,
+      revision: workpad.revision,
+      issue,
+    };
   }
 }

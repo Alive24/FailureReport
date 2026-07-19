@@ -37,6 +37,7 @@ export type GithubIssueComment = {
 export type GithubIssueSnapshot = {
   repository: string;
   issue_number: number;
+  title: string;
   issue_url: string;
   /** Human-owned Issue text. It is read only by this protocol. */
   body: string;

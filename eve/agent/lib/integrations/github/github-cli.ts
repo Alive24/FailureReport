@@ -18,6 +18,7 @@ type GithubIssueResponse = {
   body: string | null;
   html_url: string;
   number: number;
+  title: string;
   updated_at: string;
 };
 
@@ -70,6 +71,7 @@ export class GithubCliIssueGateway extends IssueWorkpadGateway {
     return {
       repository,
       issue_number: issue.number,
+      title: issue.title,
       issue_url: issue.html_url,
       body: issue.body ?? "",
       updated_at: issue.updated_at,

@@ -9,6 +9,6 @@ Use the configured `failure_report` MCP tool for an incomplete software failure 
 
 For a new report, send `operation: "start"` with a unique `request_id`, the available report context, and a concise message. To begin or retry intake for an existing GitHub Issue before a workpad exists, send only `issue_selector: { repository, issue_number }`; do not invent an Issue URL, workpad marker, comment reference, or revision. Root rehydrates and returns the canonical `issue` context. For a later turn, send `operation: "resume"` or `"inspect"` with that Issue-backed report context.
 
-Treat the target repository GitHub Issue as the shared source of truth. Its body is human-readable narrative and its uniquely marked workpad comment carries the structured FailureReport snapshot. Preserve evidence provenance, distinguish fact from inference, and ask for approval before actions that change an Issue or run a costly investigation.
+Treat the target repository GitHub Issue as the shared source of truth. Its body is human-readable narrative and its uniquely marked workpad comment carries the structured FailureReport snapshot. Preserve evidence provenance, distinguish fact from inference, and rely on the reachable deployment's network and credential boundary rather than inventing a Root-level approval step.
 
 When Root returns a Todo-ready handoff, use its scope, guardrails, and verification requirements rather than recreating an ungrounded implementation request.

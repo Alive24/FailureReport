@@ -106,7 +106,7 @@ describe("host-managed diagnostic workspace", () => {
       },
     });
 
-    const allocated = await worktrees.allocate(report);
+    const allocated = await worktrees.allocate(report, "host-runtime-fixture");
     const canonicalRoot = await realpath(root);
     const expectedCacheRoot = join(
       canonicalRoot,
@@ -143,6 +143,42 @@ describe("host-managed diagnostic workspace", () => {
           path: allocated.state.worktree.path,
           base_revision: revision,
         },
+      },
+    });
+
+    const branch = "diagnostic/56-host-runtime-fixture";
+    const finalized = await worktrees.finalize(
+      report,
+      allocated.state,
+      "2026-07-17T10:01:00Z",
+    );
+    expect(finalized.state).toMatchObject({
+      lifecycle: "finalized",
+      diagnostic_branch: {
+        name: branch,
+        head_revision: revision,
+        remote_name: "origin",
+        remote_ref: "refs/heads/" + branch,
+        remote_url:
+          "https://github.com/Alive24/CKBoost/tree/diagnostic/56-host-runtime-fixture",
+        reuse_policy: "diagnostic_snapshot_only",
+      },
+    });
+    expect(
+      await gitCommand(allocated.state.worktree.path, [
+        "branch",
+        "--show-current",
+      ]),
+    ).toBe("");
+    expect(
+      await gitCommand(remote, ["rev-parse", "refs/heads/" + branch]),
+    ).toBe(revision);
+    await expect(
+      worktrees.finalize(report, allocated.state, "2026-07-17T10:02:00Z"),
+    ).resolves.toMatchObject({
+      state: {
+        lifecycle: "finalized",
+        diagnostic_branch: { name: branch, head_revision: revision },
       },
     });
   });

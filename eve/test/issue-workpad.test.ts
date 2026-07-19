@@ -43,6 +43,7 @@ function issue(comments: GithubIssueComment[] = []): GithubIssueSnapshot {
   return {
     repository: "Alive24/CKBoost",
     issue_number: 54,
+    title: "CKBoost Issue 54",
     issue_url: "https://github.com/Alive24/CKBoost/issues/54",
     body: "# Human-authored Issue context\n\nDo not erase.",
     updated_at: "2026-07-15T10:00:00Z",
@@ -161,12 +162,18 @@ describe("GitHub Issue workpad", () => {
     });
   });
 
-  it("returns needs_input for a copied marker, an unknown producer, and author mismatch", async () => {
+  it("returns needs_input for a copied marker, a legacy v1 payload, an unknown producer, and author mismatch", async () => {
     const report = await loadReport();
     const copiedMarker = managedComment(
       "copied",
       workpadMarker + "\nHuman copied this marker.",
       "999",
+    );
+    const legacy = managedComment(
+      "legacy",
+      workpadMarker +
+        '\n<!-- failure-report/v1 report-id="old" revision="0" -->',
+      "101",
     );
     const valid = prepareIssueWorkpadMutation(
       issue(),
@@ -187,6 +194,7 @@ describe("GitHub Issue workpad", () => {
 
     for (const target of [
       issue([copiedMarker]),
+      issue([legacy]),
       issue([unknownProducer]),
       issue([authorMismatch]),
     ]) {

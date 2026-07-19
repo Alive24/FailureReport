@@ -17,6 +17,7 @@ const issueSnapshotSchema = z
   .object({
     repository: z.string().min(1),
     issue_number: z.number().int().positive(),
+    title: z.string().min(1),
     issue_url: z.string().min(1),
     body: z.string(),
     updated_at: z.string().min(1),

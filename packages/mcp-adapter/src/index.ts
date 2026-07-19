@@ -62,7 +62,7 @@ export function createFailureReportMcpServer(invoker: RootInvoker): McpServer {
     {
       title: "FailureReport Root",
       description:
-        "Invoke the public FailureReport Root for intake, resume, inspection, approval results, or handoff rendering.",
+        "Invoke the public FailureReport Root for intake, resume, inspection, or handoff rendering.",
       inputSchema: rootRequestSchema,
       outputSchema: rootResultSchema,
     },

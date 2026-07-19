@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -5,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   failureReportSchema,
   parseFailureReportWorkpad,
+  workpadMarker,
   type FailureReport,
 } from "@failure-report/protocol";
 
@@ -17,6 +19,7 @@ import { diagnosticSessionPreparationEnvelopeSchema } from "../agent/lib/diagnos
 import type { DomainExtension } from "../agent/lib/diagnostics/domain-extensions.js";
 import {
   DiagnosticSessionWorkpad,
+  diagnosticBranchSlugFor,
   type DiagnosticSessionIssueGateway,
 } from "../agent/lib/diagnostics/workpad.js";
 import type { DiagnosticSourceResolver } from "../agent/lib/diagnostics/source-cache.js";
@@ -70,9 +73,12 @@ type Harness = {
   paths: FakePathOperations;
   currentReport(): FailureReport;
   currentBranch(): string;
+  replaceWithLegacyV1Workpad(): void;
+  setIssueTitle(value: string): void;
   setHead(value: string): void;
   setPorcelain(value: string): void;
   setSnapshotBranch(name: string, head: string): void;
+  setRemoteSnapshotBranch(ref: string, head: string): void;
   calls: Array<{ cwd: string; args: string[] }>;
 };
 
@@ -97,7 +103,10 @@ describe("Codex diagnostic session", () => {
 
   it("allocates a detached Root-owned worktree and rejects an external HEAD change", async () => {
     const harness = await createHarness();
-    const allocated = await harness.manager.allocate(harness.report);
+    const allocated = await harness.manager.allocate(
+      harness.report,
+      "ckboost-issue-54",
+    );
     const skillLink = nativeSkillLink(
       allocated.state.worktree.path,
       ckbSkillName,
@@ -150,7 +159,9 @@ describe("Codex diagnostic session", () => {
     harness.paths.addDirectory("/outside/worktrees");
     harness.paths.setLink(worktreeRoot, "/outside/worktrees");
 
-    await expect(harness.manager.allocate(harness.report)).rejects.toThrow(
+    await expect(
+      harness.manager.allocate(harness.report, "ckboost-issue-54"),
+    ).rejects.toThrow(
       "`.eve/sandbox-cache/worktrees` directory cannot be resolved safely",
     );
     expect(
@@ -188,9 +199,105 @@ describe("Codex diagnostic session", () => {
     ]);
   });
 
+  it("derives a safe, stable diagnostic branch slug from the target Issue title", () => {
+    expect(diagnosticBranchSlugFor("Fix: CKB #54 — Node RPC")).toBe(
+      "fix-ckb-54-node-rpc",
+    );
+    expect(diagnosticBranchSlugFor("---")).toBe("diagnostic");
+  });
+
+  it("persists the initial Issue-title slug across diagnostic reentry", async () => {
+    const harness = await createHarness();
+    const first = await harness.workpad.prepare(preparationFor(harness));
+    harness.setIssueTitle("A renamed target Issue");
+
+    const resumed = await harness.workpad.prepare(preparationFor(harness));
+    expect(first.diagnostic_session.state.diagnostic_branch_slug).toBe(
+      "ckboost-issue-54",
+    );
+    expect(resumed.diagnostic_session.state.diagnostic_branch_slug).toBe(
+      "ckboost-issue-54",
+    );
+  });
+
+  it("refuses a legacy v1 workpad rather than silently recovering an unproven session", async () => {
+    const harness = await createHarness();
+    await harness.workpad.prepare(preparationFor(harness));
+    harness.replaceWithLegacyV1Workpad();
+
+    await expect(
+      harness.workpad.prepare(preparationFor(harness)),
+    ).rejects.toThrow("not a valid v2 entry envelope");
+  });
+
+  it("rehomes an unchanged legacy runtime worktree before exposing the session", async () => {
+    const harness = await createHarness({ legacyRuntimeWorktree: true });
+
+    const prepared = await harness.workpad.prepare(preparationFor(harness));
+    const rehomed = prepared.diagnostic_session.state;
+    expect(prepared.workpad_revision).toBe(1);
+    expect(rehomed.worktree.path).toBe(
+      join(worktreeRoot, rehomed.worktree.identity),
+    );
+    expect(rehomed.codex_thread_id).toBeUndefined();
+    expect(harness.currentReport().diagnostic_session?.worktree.path).toBe(
+      rehomed.worktree.path,
+    );
+    expect(
+      harness.calls.some((call) => call.cwd.startsWith("/former-root/")),
+    ).toBe(false);
+
+    const resumed = await harness.workpad.prepare(preparationFor(harness));
+    expect(resumed.workpad_revision).toBe(prepared.workpad_revision);
+    expect(resumed.diagnostic_session.state.worktree.path).toBe(
+      rehomed.worktree.path,
+    );
+  });
+
+  it("rehomes a legacy runtime worktree before finalizing its snapshot", async () => {
+    const harness = await createHarness({ legacyRuntimeWorktree: true });
+
+    const finalized = await harness.workpad.finalize(
+      finalizationInput(harness),
+    );
+    expect(finalized.workpad_revision).toBe(2);
+    expect(finalized.diagnostic_session.codex_thread_id).toBeUndefined();
+    expect(finalized.diagnostic_session).toMatchObject({
+      lifecycle: "finalized",
+      worktree: {
+        path: join(
+          worktreeRoot,
+          finalized.diagnostic_session.worktree.identity,
+        ),
+      },
+      diagnostic_branch: {
+        name: "diagnostic/54-ckboost-issue-54",
+      },
+    });
+  });
+
+  it("refuses to rehome a legacy runtime worktree with a divergent recorded HEAD", async () => {
+    const harness = await createHarness({
+      legacyRuntimeWorktree: true,
+      legacyRuntimeHeadDiverged: true,
+    });
+
+    await expect(
+      harness.workpad.prepare(preparationFor(harness)),
+    ).rejects.toThrow("requires an unchanged recorded target revision");
+    expect(
+      harness.calls.some(
+        (call) => call.args[0] === "worktree" && call.args[1] === "add",
+      ),
+    ).toBe(false);
+  });
+
   it("rebuilds only a missing native skill symlink and rejects unsafe replacements", async () => {
     const harness = await createHarness();
-    const allocated = await harness.manager.allocate(harness.report);
+    const allocated = await harness.manager.allocate(
+      harness.report,
+      "ckboost-issue-54",
+    );
     const skillLink = nativeSkillLink(
       allocated.state.worktree.path,
       ckbSkillName,
@@ -219,9 +326,9 @@ describe("Codex diagnostic session", () => {
     const missing = await createHarness({
       domainExtensions: [createCkbExtension("/missing/skill-source")],
     });
-    await expect(missing.manager.allocate(missing.report)).rejects.toThrow(
-      "native skill source is missing",
-    );
+    await expect(
+      missing.manager.allocate(missing.report, "ckboost-issue-54"),
+    ).rejects.toThrow("native skill source is missing");
     expect(
       missing.calls.some(
         (call) => call.args[0] === "worktree" && call.args[1] === "add",
@@ -233,9 +340,9 @@ describe("Codex diagnostic session", () => {
     });
     escaped.paths.addDirectory("/external/skill-source");
     escaped.paths.addFile("/external/skill-source/SKILL.md");
-    await expect(escaped.manager.allocate(escaped.report)).rejects.toThrow(
-      "resolves outside its extension package",
-    );
+    await expect(
+      escaped.manager.allocate(escaped.report, "ckboost-issue-54"),
+    ).rejects.toThrow("resolves outside its extension package");
 
     const duplicate = await createHarness({
       domainExtensions: [
@@ -252,9 +359,9 @@ describe("Codex diagnostic session", () => {
         },
       ],
     });
-    await expect(duplicate.manager.allocate(duplicate.report)).rejects.toThrow(
-      "invalid native skill name",
-    );
+    await expect(
+      duplicate.manager.allocate(duplicate.report, "ckboost-issue-54"),
+    ).rejects.toThrow("invalid native skill name");
   });
 
   it("rejects an envelope that tries to change the active extension set", async () => {
@@ -385,9 +492,8 @@ describe("Codex diagnostic session", () => {
     const harness = await createHarness();
     const prepared = await harness.workpad.prepare(preparationFor(harness));
     const input = finalizationInput(harness);
-    const expectedBranch =
-      "failure-report/diagnostic/" +
-      prepared.diagnostic_session.state.worktree.identity;
+    const expectedBranch = "diagnostic/54-ckboost-issue-54";
+    const expectedRemoteRef = "refs/heads/" + expectedBranch;
     harness.setPorcelain("?? .agents/skills/" + ckbSkillName);
 
     const finalized = await harness.workpad.finalize(input);
@@ -396,6 +502,10 @@ describe("Codex diagnostic session", () => {
       diagnostic_branch: {
         name: expectedBranch,
         head_revision: harness.report.target.revision,
+        remote_name: "origin",
+        remote_ref: expectedRemoteRef,
+        remote_url:
+          "https://github.com/Alive24/CKBoost/tree/diagnostic/54-ckboost-issue-54",
         reuse_policy: "diagnostic_snapshot_only",
       },
     });
@@ -410,6 +520,16 @@ describe("Codex diagnostic session", () => {
         args: ["branch", expectedBranch, harness.report.target.revision],
       }),
     );
+    expect(harness.calls).toContainEqual(
+      expect.objectContaining({
+        args: ["push", "origin", expectedRemoteRef + ":" + expectedRemoteRef],
+      }),
+    );
+    expect(
+      harness.calls.some(
+        (call) => call.args[0] === "push" && call.args.includes("--force"),
+      ),
+    ).toBe(false);
 
     const repeated = await harness.workpad.finalize(input);
     expect(repeated.workpad_revision).toBe(finalized.workpad_revision);
@@ -426,7 +546,7 @@ describe("Codex diagnostic session", () => {
     ).rejects.toThrow("finalized");
   });
 
-  it("refuses dirty worktrees and conflicting diagnostic snapshot refs", async () => {
+  it("refuses dirty worktrees and conflicting local or remote diagnostic snapshot refs", async () => {
     const dirty = await createHarness();
     await dirty.workpad.prepare(preparationFor(dirty));
     dirty.setPorcelain("?? diagnostic-output.txt");
@@ -439,18 +559,31 @@ describe("Codex diagnostic session", () => {
       preparationFor(conflicting),
     );
     conflicting.setSnapshotBranch(
-      "failure-report/diagnostic/" +
-        prepared.diagnostic_session.state.worktree.identity,
-      "some-other-revision",
+      "diagnostic/54-ckboost-issue-54",
+      "a".repeat(40),
     );
     await expect(
       conflicting.workpad.finalize(finalizationInput(conflicting)),
     ).rejects.toThrow("already points at a different revision");
+
+    const remoteConflict = await createHarness();
+    await remoteConflict.workpad.prepare(preparationFor(remoteConflict));
+    remoteConflict.setRemoteSnapshotBranch(
+      "refs/heads/diagnostic/54-ckboost-issue-54",
+      "b".repeat(40),
+    );
+    await expect(
+      remoteConflict.workpad.finalize(finalizationInput(remoteConflict)),
+    ).rejects.toThrow("remote diagnostic snapshot branch already points");
   });
 });
 
 async function createHarness(
-  options: { domainExtensions?: readonly DomainExtension[] } = {},
+  options: {
+    domainExtensions?: readonly DomainExtension[];
+    legacyRuntimeWorktree?: boolean;
+    legacyRuntimeHeadDiverged?: boolean;
+  } = {},
 ): Promise<Harness> {
   const fixture = new URL(
     "../../packages/protocol/test/fixtures/issue-54.json",
@@ -459,9 +592,39 @@ async function createHarness(
   const loaded = failureReportSchema.parse(
     JSON.parse(await readFile(fixture, "utf8")),
   );
-  const report = loaded;
+  const domainExtensions = options.domainExtensions ?? [createCkbExtension()];
+  let report = loaded;
+  if (options.legacyRuntimeWorktree) {
+    const identity = diagnosticWorktreeIdentity(report, domainExtensions);
+    report = failureReportSchema.parse({
+      ...report,
+      diagnostic_session: {
+        lifecycle: "active",
+        domain_extensions: domainExtensions.map((extension) => extension.id),
+        backend_id: "codex_app_server",
+        codex_thread_id: "legacy-thread",
+        worktree: {
+          path: join(
+            "/former-root/FailureReport",
+            ".eve",
+            "sandbox-cache",
+            "worktrees",
+            identity,
+          ),
+          identity,
+          base_revision: report.target.revision,
+          head_revision: options.legacyRuntimeHeadDiverged
+            ? "b".repeat(40)
+            : report.target.revision,
+        },
+        diagnostic_branch_slug: "ckboost-issue-54",
+        last_diagnosed_at: report.updated_at,
+      },
+    });
+  }
   const calls: Array<{ cwd: string; args: string[] }> = [];
   const snapshotBranches = new Map<string, string>();
+  const remoteSnapshotBranches = new Map<string, string>();
   let worktreePath: string | undefined;
   let currentBranch = "";
   let head = report.target.revision;
@@ -510,6 +673,32 @@ async function createHarness(
       snapshotBranches.set(input.args[1], input.args[2]);
       return "";
     }
+    if (
+      input.args[0] === "ls-remote" &&
+      input.args[1] === "--heads" &&
+      input.args[2] === "origin" &&
+      input.args[3]
+    ) {
+      const ref = input.args[3];
+      const remoteHead = remoteSnapshotBranches.get(ref);
+      return remoteHead ? remoteHead + "\t" + ref : "";
+    }
+    if (
+      input.args[0] === "push" &&
+      input.args[1] === "origin" &&
+      input.args[2]
+    ) {
+      const [sourceRef, destinationRef] = input.args[2].split(":");
+      const sourceName = sourceRef?.replace(/^refs\/heads\//, "");
+      const sourceHead = sourceName
+        ? snapshotBranches.get(sourceName)
+        : undefined;
+      if (!sourceHead || !destinationRef?.startsWith("refs/heads/")) {
+        throw new Error("Invalid diagnostic snapshot push.");
+      }
+      remoteSnapshotBranches.set(destinationRef, sourceHead);
+      return "";
+    }
     if (command === "status --porcelain --untracked-files=all") {
       return porcelain;
     }
@@ -521,7 +710,6 @@ async function createHarness(
     }
     throw new Error("Unexpected git command: " + input.cwd + " git " + command);
   };
-  const domainExtensions = options.domainExtensions ?? [createCkbExtension()];
   const sourceCache: DiagnosticSourceResolver = {
     async acquire() {
       return {
@@ -562,6 +750,10 @@ async function createHarness(
     paths,
     currentReport: gateway.currentReport,
     currentBranch: () => currentBranch,
+    replaceWithLegacyV1Workpad: gateway.replaceWithLegacyV1Workpad,
+    setIssueTitle(value) {
+      gateway.setTitle(value);
+    },
     setHead(value) {
       head = value;
     },
@@ -570,6 +762,9 @@ async function createHarness(
     },
     setSnapshotBranch(name, snapshotHead) {
       snapshotBranches.set(name, snapshotHead);
+    },
+    setRemoteSnapshotBranch(ref, snapshotHead) {
+      remoteSnapshotBranches.set(ref, snapshotHead);
     },
     calls,
   };
@@ -586,6 +781,29 @@ function createCkbExtension(sourceDirectory = ckbSkillSource): DomainExtension {
       },
     ],
   };
+}
+
+function diagnosticWorktreeIdentity(
+  report: FailureReport,
+  domainExtensions: readonly DomainExtension[],
+): string {
+  const slug = report.id
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  const digest = createHash("sha256")
+    .update(
+      report.target.repository +
+        "\u0000" +
+        report.target.revision +
+        "\u0000" +
+        report.id +
+        "\u0000" +
+        domainExtensions.map((extension) => extension.id).join("\u0000"),
+    )
+    .digest("hex")
+    .slice(0, 12);
+  return "diagnostic-" + (slug || "report") + "-" + digest;
 }
 
 function createEvmExtension(): DomainExtension {
@@ -627,10 +845,13 @@ function createIssueGateway(
   report: FailureReport,
 ): DiagnosticSessionIssueGateway & {
   currentReport(): FailureReport;
+  replaceWithLegacyV1Workpad(): void;
+  setTitle(value: string): void;
 } {
   const initialIssue: GithubIssueSnapshot = {
     repository: "Alive24/CKBoost",
     issue_number: 54,
+    title: "CKBoost Issue 54",
     issue_url: "https://github.com/Alive24/CKBoost/issues/54",
     body: "# Existing Issue",
     updated_at: "2026-07-15T10:00:00Z",
@@ -706,6 +927,49 @@ function createIssueGateway(
         throw new Error("Missing test workpad entry.");
       }
       return latest.report;
+    },
+    replaceWithLegacyV1Workpad() {
+      const comment = issue.comments[0];
+      if (!comment) {
+        throw new Error("Missing test workpad.");
+      }
+      const parsed = parseFailureReportWorkpad(comment.body);
+      const latest = parsed.entries.at(-1);
+      if (!latest) {
+        throw new Error("Missing test workpad entry.");
+      }
+      const legacy = JSON.parse(JSON.stringify(latest.report)) as {
+        diagnostic_session?: Record<string, unknown>;
+      };
+      if (!legacy.diagnostic_session) {
+        throw new Error("Test workpad has no diagnostic session.");
+      }
+      delete legacy.diagnostic_session.diagnostic_branch_slug;
+      issue = {
+        ...issue,
+        comments: issue.comments.map((current) =>
+          current.id === comment.id
+            ? {
+                ...current,
+                body: [
+                  workpadMarker,
+                  '<!-- failure-report/v1 report-id="' +
+                    latest.report.id +
+                    '" revision="' +
+                    String(latest.revision) +
+                    '" -->',
+                  "~~~json",
+                  JSON.stringify({ failure_report: legacy }, null, 2),
+                  "~~~",
+                  "",
+                ].join("\n"),
+              }
+            : current,
+        ),
+      };
+    },
+    setTitle(value) {
+      issue = { ...issue, title: value };
     },
   };
 }
