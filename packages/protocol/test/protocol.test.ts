@@ -1,7 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
+  diagnosticBranchSlugSchema,
   failureReportSchema,
   parseFailureReportWorkpad,
   renderFailureReportWorkpad,
@@ -106,6 +108,18 @@ describe("FailureReport protocol", () => {
       ["ckb", "evm"],
     );
     expect(withDiagnosticSession.shared_context).toBeUndefined();
+  });
+
+  it("keeps Unicode diagnostic slugs runtime-validated without emitting an unsupported JSON Schema pattern", () => {
+    expect(diagnosticBranchSlugSchema.parse("\u8bca\u65ad-54")).toBe(
+      "\u8bca\u65ad-54",
+    );
+    expect(() => diagnosticBranchSlugSchema.parse("-diagnostic")).toThrow();
+    expect(() => diagnosticBranchSlugSchema.parse("diagnostic_slug")).toThrow();
+
+    const jsonSchema = JSON.stringify(z.toJSONSchema(failureReportSchema));
+
+    expect(jsonSchema).not.toContain("\\p{");
   });
 
   it("rejects legacy execution fields rather than silently migrating a workpad", async () => {

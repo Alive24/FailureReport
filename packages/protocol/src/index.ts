@@ -124,11 +124,18 @@ export const diagnosticWorktreeSchema = z
   .strict();
 
 /** A human-readable, persisted portion of a diagnostic snapshot branch name. */
+const diagnosticBranchSlugPattern = /^[\p{L}\p{N}][\p{L}\p{N}-]*$/u;
+
 export const diagnosticBranchSlugSchema = z
   .string()
   .min(1)
   .max(80)
-  .regex(/^[\p{L}\p{N}][\p{L}\p{N}-]*$/u);
+  // Keep this runtime-only: OpenAI rejects JSON Schema `pattern` values using
+  // Unicode property escapes, while persisted Unicode Issue-title slugs remain
+  // valid Git ref components.
+  .refine((slug) => diagnosticBranchSlugPattern.test(slug), {
+    message: "diagnostic branch slug must be a non-empty safe Issue-title slug",
+  });
 
 /** A finalized, diagnostic-only Git snapshot. */
 export const diagnosticBranchSchema = z
