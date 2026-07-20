@@ -11,12 +11,12 @@ export const codexAppServerBackendConfigSchema = z
     kind: z.literal("codex_app_server"),
     codex_path: z.string().min(1),
     model: z.string().min(1),
-    approval_mode: z.enum(["untrusted", "on-request", "never"]),
-    sandbox_mode: z.enum([
-      "read-only",
-      "workspace-write",
-      "danger-full-access",
-    ]),
+    // Diagnostic sessions are intentionally interactive at the Codex boundary:
+    // native auto-review decides escalation requests without expanding Root's
+    // authority or creating an Eve approval tool.
+    approval_mode: z.literal("on-request").default("on-request"),
+    approvals_reviewer: z.literal("auto_review").default("auto_review"),
+    sandbox_mode: z.literal("workspace-write").default("workspace-write"),
     reasoning_effort: z.enum(["low", "medium", "high"]),
     model_context_window_tokens: modelContextWindowTokens,
   })

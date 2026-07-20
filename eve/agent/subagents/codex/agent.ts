@@ -11,7 +11,7 @@ import {
 /**
  * Internal consumer-owned Eve declaration.
  * Its dynamic model is intentionally resolved from a Root-prepared envelope so
- * the Codex provider cannot run from an arbitrary message or checkout.
+ * the direct Codex host transport cannot run from an arbitrary message or checkout.
  */
 const backend = parseCodexAppServerBackendConfig(backendJson);
 const resolveModel = createCodexAppServerModelResolver(backend);

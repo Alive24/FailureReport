@@ -17,7 +17,6 @@
     "@failure-report/ckb-domain-pack": "workspace:*",
     "@failure-report/protocol": "workspace:*",
     "ai": "^7.0.26",
-    "ai-sdk-provider-codex-app-server": "1.1.7",
     "eve": "^0.24.4",
     "just-bash": "^3.0.0",
     "octokit": "^5.0.5",

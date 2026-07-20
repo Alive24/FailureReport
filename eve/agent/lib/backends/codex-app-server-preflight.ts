@@ -1,10 +1,21 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { isAbsolute } from "node:path";
+
+import {
+  CodexAppServerProtocolError,
+  CodexAppServerTransportError,
+  nodeCodexAppServerHostRuntime,
+  type CodexAppServerHostRuntime,
+  type CodexAppServerProcess,
+} from "./codex-app-server-transport.js";
 
 /** Bounded readiness timeout for one short-lived App Server preflight. */
 const defaultPreflightTimeoutMs = 10_000;
-const childCleanupTimeoutMs = 1_000;
 const maximumCapturedDiagnosticChars = 4_096;
+
+export type {
+  CodexAppServerHostRuntime,
+  CodexAppServerProcess,
+} from "./codex-app-server-transport.js";
 
 /** Sanitized reason a Root caller can act on without receiving host state details. */
 export type CodexAppServerPreflightFailureCategory =
@@ -49,27 +60,6 @@ export type CodexAppServerPreflightInput = {
   revalidate_workspace?: () => Promise<CodexAppServerPreflightWorkspace>;
 };
 
-/** Minimal JSON-RPC process surface needed by the bounded readiness exchange. */
-export type CodexAppServerProcess = {
-  request(method: string, params: unknown): Promise<unknown>;
-  notify(method: string, params: unknown): void;
-  dispose(): Promise<void>;
-};
-
-/**
- * Host-runtime seam for process and ambient-environment behavior.
- *
- * Its deliberately narrow API has no environment map: the default implementation
- * relies on Node's normal child-process inheritance and cannot set, copy, or
- * replace `CODEX_HOME`.
- */
-export type CodexAppServerHostRuntime = {
-  startAppServer(input: {
-    executable: string;
-    cwd: string;
-  }): CodexAppServerProcess | Promise<CodexAppServerProcess>;
-};
-
 /** Injectable boundaries for deterministic preflight coverage. */
 export type CodexAppServerPreflightDependencies = {
   host_runtime?: CodexAppServerHostRuntime;
@@ -95,7 +85,8 @@ export function createCodexAppServerPreflight(
 ): (
   input: CodexAppServerPreflightInput,
 ) => Promise<CodexAppServerPreflightResult> {
-  const hostRuntime = dependencies.host_runtime ?? nodeHostRuntime;
+  const hostRuntime =
+    dependencies.host_runtime ?? nodeCodexAppServerHostRuntime;
   const timeoutMs = dependencies.timeout_ms ?? defaultPreflightTimeoutMs;
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
     throw new Error("Codex App Server preflight timeout must be positive.");
@@ -165,7 +156,7 @@ async function runAttempt(input: {
     });
     if (attemptFinished) {
       await disposeSafely(started);
-      throw new PreflightTransportError(
+      throw new CodexAppServerTransportError(
         "App Server startup outlived preflight.",
       );
     }
@@ -212,7 +203,7 @@ function assertExpectedProjectSkills(
   workspace: CodexAppServerPreflightWorkspace,
 ): void {
   if (!isRecord(response) || !Array.isArray(response.data)) {
-    throw new PreflightProtocolError(
+    throw new CodexAppServerProtocolError(
       "skills/list returned an invalid response.",
     );
   }
@@ -228,7 +219,9 @@ function assertExpectedProjectSkills(
     );
   }
   if (!Array.isArray(entry.errors) || !Array.isArray(entry.skills)) {
-    throw new PreflightProtocolError("skills/list entry has an invalid shape.");
+    throw new CodexAppServerProtocolError(
+      "skills/list entry has an invalid shape.",
+    );
   }
   if (entry.errors.length > 0) {
     const detail = diagnosticText(entry.errors);
@@ -317,7 +310,7 @@ function classifyFailure(error: unknown, phase: AttemptPhase): AttemptFailure {
   ) {
     return { category: "workspace_invalid", retryable: false };
   }
-  if (error instanceof PreflightProtocolError) {
+  if (error instanceof CodexAppServerProtocolError) {
     return { category: "startup_failed", retryable: true };
   }
   return { category: "startup_failed", retryable: true };
@@ -379,194 +372,9 @@ async function withTimeout<T>(
   }
 }
 
-/** Uses Node's implicit environment inheritance; no `env` option is passed. */
-const nodeHostRuntime: CodexAppServerHostRuntime = {
-  startAppServer({ executable, cwd }) {
-    const child = spawn(executable, ["app-server"], {
-      cwd,
-      stdio: ["pipe", "pipe", "pipe"],
-    }) as ChildProcessWithoutNullStreams;
-    return new NodeCodexAppServerProcess(child);
-  },
-};
-
-/** JSONL transport for the only App Server methods the preflight may use. */
-class NodeCodexAppServerProcess implements CodexAppServerProcess {
-  private readonly pending = new Map<number, PendingRequest>();
-  private readonly closed: Promise<void>;
-  private resolveClosed: (() => void) | undefined;
-  private nextRequestId = 1;
-  private stdoutBuffer = "";
-  private stderr = "";
-  private isClosed = false;
-  private terminalFailure: PreflightTransportError | undefined;
-  private disposal: Promise<void> | undefined;
-
-  constructor(private readonly child: ChildProcessWithoutNullStreams) {
-    this.closed = new Promise<void>((resolvePromise) => {
-      this.resolveClosed = resolvePromise;
-    });
-    child.stdout.on("data", (chunk: Buffer) => {
-      this.handleStdout(chunk.toString("utf8"));
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      this.stderr = appendBounded(this.stderr, chunk.toString("utf8"));
-    });
-    child.once("error", (error) => {
-      this.terminalFailure = new PreflightTransportError(diagnosticText(error));
-      this.rejectPending(this.terminalFailure);
-    });
-    child.once("close", () => {
-      this.isClosed = true;
-      this.resolveClosed?.();
-      this.terminalFailure ??= new PreflightTransportError(
-        this.stderr || "Codex App Server exited before responding.",
-      );
-      this.rejectPending(this.terminalFailure);
-    });
-  }
-
-  request(method: string, params: unknown): Promise<unknown> {
-    if (this.terminalFailure || this.isClosed) {
-      return Promise.reject(
-        this.terminalFailure ??
-          new PreflightTransportError("Codex App Server is already closed."),
-      );
-    }
-    const id = this.nextRequestId++;
-    return new Promise<unknown>((resolvePromise, reject) => {
-      this.pending.set(id, { resolve: resolvePromise, reject: reject });
-      try {
-        this.child.stdin.write(
-          JSON.stringify({ id, method, params }) + "\n",
-          (error) => {
-            if (error) {
-              this.rejectRequest(
-                id,
-                new PreflightTransportError(diagnosticText(error)),
-              );
-            }
-          },
-        );
-      } catch (error) {
-        this.rejectRequest(
-          id,
-          new PreflightTransportError(diagnosticText(error)),
-        );
-      }
-    });
-  }
-
-  notify(method: string, params: unknown): void {
-    if (this.terminalFailure || this.isClosed) {
-      throw (
-        this.terminalFailure ??
-        new PreflightTransportError("Codex App Server is already closed.")
-      );
-    }
-    try {
-      this.child.stdin.write(JSON.stringify({ method, params }) + "\n");
-    } catch (error) {
-      throw new PreflightTransportError(diagnosticText(error));
-    }
-  }
-
-  async dispose(): Promise<void> {
-    if (!this.disposal) {
-      this.disposal = this.stop();
-    }
-    await this.disposal;
-  }
-
-  private handleStdout(chunk: string): void {
-    this.stdoutBuffer += chunk;
-    const lines = this.stdoutBuffer.split("\n");
-    this.stdoutBuffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
-      }
-      let response: unknown;
-      try {
-        response = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (!isRecord(response) || typeof response.id !== "number") {
-        continue;
-      }
-      const pending = this.pending.get(response.id);
-      if (!pending) {
-        continue;
-      }
-      this.pending.delete(response.id);
-      if ("error" in response) {
-        pending.reject(
-          new PreflightProtocolError(diagnosticText(response.error)),
-        );
-      } else {
-        pending.resolve(response.result);
-      }
-    }
-  }
-
-  private rejectRequest(id: number, error: Error): void {
-    const pending = this.pending.get(id);
-    if (!pending) {
-      return;
-    }
-    this.pending.delete(id);
-    pending.reject(error);
-  }
-
-  private rejectPending(error: Error): void {
-    for (const pending of this.pending.values()) {
-      pending.reject(error);
-    }
-    this.pending.clear();
-  }
-
-  private async stop(): Promise<void> {
-    if (this.isClosed || this.child.exitCode !== null) {
-      return;
-    }
-    try {
-      this.child.kill("SIGTERM");
-    } catch {
-      return;
-    }
-    if (await settlesWithin(this.closed, childCleanupTimeoutMs)) {
-      return;
-    }
-    try {
-      this.child.kill("SIGKILL");
-    } catch {
-      return;
-    }
-    await settlesWithin(this.closed, childCleanupTimeoutMs);
-  }
-}
-
-type PendingRequest = {
-  resolve(value: unknown): void;
-  reject(error: Error): void;
-};
-
 class PreflightTimeoutError extends Error {
   constructor() {
     super("Codex App Server readiness timed out.");
-  }
-}
-
-class PreflightProtocolError extends Error {
-  constructor(message: string) {
-    super(message);
-  }
-}
-
-class PreflightTransportError extends Error {
-  constructor(message: string) {
-    super(message);
   }
 }
 
@@ -590,29 +398,6 @@ async function disposeSafely(
   } catch {
     // Cleanup is best effort; the bounded result still must not leak raw errors.
   }
-}
-
-function settlesWithin(
-  operation: Promise<unknown>,
-  timeoutMs: number,
-): Promise<boolean> {
-  return new Promise<boolean>((resolvePromise) => {
-    const timer = setTimeout(() => resolvePromise(false), timeoutMs);
-    void operation.then(
-      () => {
-        clearTimeout(timer);
-        resolvePromise(true);
-      },
-      () => {
-        clearTimeout(timer);
-        resolvePromise(true);
-      },
-    );
-  });
-}
-
-function appendBounded(current: string, addition: string): string {
-  return (current + addition).slice(-maximumCapturedDiagnosticChars);
 }
 
 function diagnosticText(value: unknown): string {
