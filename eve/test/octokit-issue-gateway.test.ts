@@ -14,6 +14,10 @@ import {
   findExistingWorkpad,
   prepareIssueWorkpadMutation,
 } from "../agent/lib/integrations/github/issue-workpad.js";
+import {
+  WorkpadPostWriteReadbackError,
+  WorkpadPublicationRaceError,
+} from "../agent/lib/integrations/github/issue-gateway.js";
 import { OctokitIssueGateway } from "../agent/lib/integrations/github/octokit-issue-gateway.js";
 
 const repository = "Alive24/CKBoost";
@@ -273,8 +277,34 @@ describe("Octokit Issue gateway", () => {
         first.report,
         "2026-07-15T10:03:00Z",
       ),
-    ).rejects.toThrow("workpad changed");
+    ).rejects.toBeInstanceOf(WorkpadPublicationRaceError);
     expect(fake.rest.issues.updateComment).not.toHaveBeenCalled();
+  });
+
+  it("classifies a transient post-write logical readback failure for bounded reconciliation", async () => {
+    const report = await loadReport();
+    const fake = createMutableOctokit();
+    fake.failIssueReadAt(
+      3,
+      Object.assign(new Error("temporary outage"), { status: 503 }),
+    );
+    const gateway = new OctokitIssueGateway(
+      fake.octokit as unknown as Octokit,
+      rootGh,
+    );
+
+    await expect(
+      gateway.publishSharedContext(
+        repository,
+        issueNumber,
+        report,
+        "2026-07-15T10:01:00Z",
+      ),
+    ).rejects.toMatchObject({
+      name: "WorkpadPostWriteReadbackError",
+      retryable: true,
+    } satisfies Partial<WorkpadPostWriteReadbackError>);
+    expect(fake.octokit.rest.issues.createComment).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -298,6 +328,8 @@ function createMutableOctokit() {
   let updatedAt = "2026-07-15T10:00:00Z";
   let authenticatedActorId = "101";
   let nextCommentId = 101;
+  let issueReadCount = 0;
+  let issueReadFailure: { at: number; error: unknown } | undefined;
   const comments: Array<{
     id: number;
     body: string;
@@ -317,15 +349,21 @@ function createMutableOctokit() {
         })),
       },
       issues: {
-        get: vi.fn(async () => ({
-          data: {
-            body,
-            html_url: issueUrl,
-            number: issueNumber,
-            title: issueTitle,
-            updated_at: updatedAt,
-          },
-        })),
+        get: vi.fn(async () => {
+          issueReadCount += 1;
+          if (issueReadFailure?.at === issueReadCount) {
+            throw issueReadFailure.error;
+          }
+          return {
+            data: {
+              body,
+              html_url: issueUrl,
+              number: issueNumber,
+              title: issueTitle,
+              updated_at: updatedAt,
+            },
+          };
+        }),
         listComments: vi.fn(),
         update: vi.fn(),
         createComment: vi.fn(
@@ -374,6 +412,9 @@ function createMutableOctokit() {
     comments,
     setAuthenticatedActor(actorId: string) {
       authenticatedActorId = actorId;
+    },
+    failIssueReadAt(read: number, error: unknown) {
+      issueReadFailure = { at: read, error };
     },
   };
 }

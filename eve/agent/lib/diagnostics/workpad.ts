@@ -1,13 +1,28 @@
 import {
   diagnosticBranchSlugFor,
   failureReportSchema,
+  type DiagnosticCompletionRecord,
   type DiagnosticSession,
   type FailureReport,
 } from "@failure-report/protocol";
 
 import { getDefaultGithubIssueGateway } from "../integrations/github/gateway-factory.js";
-import type { GithubIssueGateway } from "../integrations/github/issue-gateway.js";
-import { findExistingWorkpad } from "../integrations/github/issue-workpad.js";
+import {
+  isRetryableWorkpadPublicationError,
+  type GithubIssueGateway,
+} from "../integrations/github/issue-gateway.js";
+import {
+  WorkpadNeedsInputError,
+  findExistingWorkpad,
+} from "../integrations/github/issue-workpad.js";
+import {
+  DiagnosticCompletionIntegrityError,
+  createDiagnosticCompletionRecord,
+  projectDiagnosticCompletion,
+  sameDiagnosticCompletion,
+  validateDiagnosticCompletionHistory,
+  type DiagnosticCompletionInput,
+} from "./completion.js";
 import {
   renderDiagnosticSessionEnvelope,
   type DiagnosticSessionEnvelope,
@@ -38,6 +53,8 @@ export type DiagnosticSessionWorkpadOptions = {
   gateway?:
     DiagnosticSessionIssueGateway | Promise<DiagnosticSessionIssueGateway>;
   now?: () => string;
+  /** Number of verified publication-race retries after the first attempt. */
+  completion_retry_limit?: number;
 };
 
 /** A workpad snapshot together with verified diagnostic worktree state. */
@@ -65,6 +82,34 @@ export type FinalizedDiagnosticSession = {
   diagnostic_session: DiagnosticSession;
 };
 
+/** Durable completion result Root can map directly to a recoverable outcome. */
+export type DiagnosticCompletionReconciliationResult =
+  | {
+      status: "completed";
+      report: FailureReport;
+      workpad_revision: number;
+      completion: DiagnosticCompletionRecord;
+      idempotent: boolean;
+      attempts: number;
+    }
+  | {
+      status: "needs_input";
+      report_id: string;
+      reason: string;
+      completion_id?: string;
+      attempts: number;
+    };
+
+/** Signals a legacy caller that Root could not durably reconcile a completion. */
+export class DiagnosticCompletionNeedsInputError extends DiagnosticSafetyError {
+  readonly outcome = "needs_input";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "DiagnosticCompletionNeedsInputError";
+  }
+}
+
 /**
  * Coordinates workpad revisions with Root-owned diagnostic-worktree lifecycle.
  * Codex may create a thread, but only this Root-side component journals it.
@@ -73,6 +118,7 @@ export class DiagnosticSessionWorkpad {
   private readonly gateway: Promise<DiagnosticSessionIssueGateway>;
   private readonly worktrees: DiagnosticWorktreeManager;
   private readonly now: () => string;
+  private readonly completionRetryLimit: number;
 
   constructor(options: DiagnosticSessionWorkpadOptions) {
     this.gateway = Promise.resolve(
@@ -80,6 +126,15 @@ export class DiagnosticSessionWorkpad {
     );
     this.worktrees = options.worktrees;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.completionRetryLimit = options.completion_retry_limit ?? 2;
+    if (
+      !Number.isInteger(this.completionRetryLimit) ||
+      this.completionRetryLimit < 0
+    ) {
+      throw new Error(
+        "Diagnostic completion retry limit must be a non-negative integer.",
+      );
+    }
   }
 
   /**
@@ -193,6 +248,11 @@ export class DiagnosticSessionWorkpad {
     if (state.codex_thread_id === threadId) {
       return current.report;
     }
+    if (state.codex_thread_id && state.codex_thread_id !== threadId) {
+      throw new DiagnosticSafetyError(
+        "Codex App Server attempted to replace the persisted diagnostic thread; explicit operator input is required.",
+      );
+    }
     const published = await this.publishDiagnosticSession(current, {
       ...state,
       codex_thread_id: threadId,
@@ -200,36 +260,276 @@ export class DiagnosticSessionWorkpad {
     return published.report;
   }
 
-  /** Captures the current HEAD and diagnostic timestamp after a Codex turn. */
+  /**
+   * Root-owned read-merge-write-readback transaction for one completed Codex
+   * turn. It captures one observed worktree HEAD, then reloads the logical
+   * workpad before every bounded publication attempt. Codex supplies only its
+   * thread and evidence outcome; it never receives a GitHub mutation path.
+   */
+  async reconcileCompletion(
+    envelope: DiagnosticSessionEnvelope,
+    completion: DiagnosticCompletionInput,
+  ): Promise<DiagnosticCompletionReconciliationResult> {
+    let captured:
+      | {
+          diagnostic_session: VerifiedDiagnosticWorktree;
+          target_revision: string;
+          diagnostic_session_identity: string;
+          observed_worktree_head: string;
+          completed_at: string;
+        }
+      | undefined;
+    let completionId: string | undefined;
+    const maxAttempts = this.completionRetryLimit + 1;
+
+    for (let attempts = 1; attempts <= maxAttempts; attempts += 1) {
+      try {
+        const current = await this.readWorkpad(envelope);
+        const currentSession = current.report.diagnostic_session;
+        if (!currentSession) {
+          return this.completionNeedsInput(
+            envelope.report_id,
+            "Cannot reconcile diagnostic completion without a prepared diagnostic session.",
+            attempts,
+          );
+        }
+        if (currentSession.lifecycle !== "active") {
+          return this.completionNeedsInput(
+            envelope.report_id,
+            "Cannot reconcile a completion into a finalized diagnostic session.",
+            attempts,
+          );
+        }
+        if (!completion.codex_thread_id) {
+          return this.completionNeedsInput(
+            envelope.report_id,
+            "Diagnostic completion requires the persisted Codex thread identity.",
+            attempts,
+          );
+        }
+
+        if (!captured) {
+          const observed = await this.worktrees.captureCurrent(
+            current.report,
+            currentSession,
+          );
+          captured = {
+            diagnostic_session: observed,
+            target_revision: current.report.target.revision,
+            diagnostic_session_identity: observed.state.worktree.identity,
+            observed_worktree_head: observed.state.worktree.head_revision,
+            completed_at: this.now(),
+          };
+        }
+
+        const stateProblem = validateCompletionReconciliationState({
+          report: current.report,
+          diagnostic_session: currentSession,
+          captured,
+          completion,
+        });
+        if (stateProblem) {
+          return this.completionNeedsInput(
+            envelope.report_id,
+            stateProblem,
+            attempts,
+            completionId,
+          );
+        }
+
+        const candidate = createDiagnosticCompletionRecord({
+          report: current.report,
+          diagnostic_session: captured.diagnostic_session.state,
+          observed_worktree_head: captured.observed_worktree_head,
+          completion,
+          completed_at: captured.completed_at,
+        });
+        completionId = candidate.completion_id;
+        const existing = current.report.diagnostic_completions?.find(
+          (record) => record.completion_id === candidate.completion_id,
+        );
+        if (existing) {
+          // The first successful write owns its timestamp. A provider replay
+          // must compare against that immutable record rather than mint a new
+          // completion just because the local clock advanced. A bare provider
+          // finish has no report payload, so Root uses the already durable
+          // outcome only when the replay omitted one; an explicit divergent
+          // payload still fails closed below.
+          const replayInput: DiagnosticCompletionInput = {
+            ...completion,
+            ...(completion.outcome === undefined
+              ? { outcome: existing.outcome }
+              : {}),
+            ...(completion.provider_finish_reason === undefined &&
+            existing.metadata.provider_finish_reason
+              ? {
+                  provider_finish_reason:
+                    existing.metadata.provider_finish_reason,
+                }
+              : {}),
+          };
+          const replay = createDiagnosticCompletionRecord({
+            report: current.report,
+            diagnostic_session: captured.diagnostic_session.state,
+            observed_worktree_head: captured.observed_worktree_head,
+            completion: replayInput,
+            completed_at: existing.metadata.completed_at,
+          });
+          if (!sameDiagnosticCompletion(existing, replay)) {
+            return this.completionNeedsInput(
+              envelope.report_id,
+              "A duplicate diagnostic completion identity carries incompatible content.",
+              attempts,
+              completionId,
+            );
+          }
+          return {
+            status: "completed",
+            report: current.report,
+            workpad_revision: current.revision,
+            completion: existing,
+            idempotent: true,
+            attempts,
+          };
+        }
+
+        if (
+          currentSession.worktree.head_revision !==
+            captured.observed_worktree_head &&
+          (currentSession.last_diagnosed_at ||
+            currentSession.worktree.head_revision !==
+              current.report.target.revision ||
+            (current.report.diagnostic_completions?.length ?? 0) > 0)
+        ) {
+          return this.completionNeedsInput(
+            envelope.report_id,
+            "A newer diagnostic completion has already advanced the persisted worktree HEAD; refusing to regress it.",
+            attempts,
+            completionId,
+          );
+        }
+
+        const nextSession: DiagnosticSession = {
+          ...currentSession,
+          worktree: {
+            ...currentSession.worktree,
+            head_revision: captured.observed_worktree_head,
+          },
+          last_diagnosed_at: candidate.metadata.completed_at,
+        };
+        const projected = projectDiagnosticCompletion({
+          report: current.report,
+          diagnostic_session: nextSession,
+          completion: candidate,
+        });
+        if (projected.status === "needs_input") {
+          return this.completionNeedsInput(
+            envelope.report_id,
+            projected.reason,
+            attempts,
+            completionId,
+          );
+        }
+
+        const issue = current.report.shared_context;
+        if (!issue) {
+          return this.completionNeedsInput(
+            envelope.report_id,
+            "Cannot reconcile diagnostic completion without a GitHub Issue shared context.",
+            attempts,
+            completionId,
+          );
+        }
+        const gateway = await this.gateway;
+        const published = await gateway.publishSharedContext(
+          issue.repository,
+          issue.issue_number,
+          projected.report,
+          this.now(),
+        );
+        const persistedProblem = validateDiagnosticCompletionHistory(
+          published.report,
+        );
+        if (persistedProblem) {
+          throw new DiagnosticCompletionIntegrityError(persistedProblem);
+        }
+        const persisted = published.report.diagnostic_completions?.find(
+          (record) => record.completion_id === candidate.completion_id,
+        );
+        if (!persisted || !sameDiagnosticCompletion(persisted, candidate)) {
+          throw new DiagnosticCompletionIntegrityError(
+            "Diagnostic completion post-write readback did not contain the expected immutable record.",
+          );
+        }
+        return {
+          status: "completed",
+          report: published.report,
+          workpad_revision: published.workpad_revision,
+          completion: persisted,
+          idempotent: false,
+          attempts,
+        };
+      } catch (error) {
+        if (
+          isRetryableWorkpadPublicationError(error) &&
+          attempts < maxAttempts
+        ) {
+          continue;
+        }
+        if (isRetryableWorkpadPublicationError(error)) {
+          return this.completionNeedsInput(
+            envelope.report_id,
+            "Diagnostic completion reconciliation exhausted its bounded publication-race retry budget: " +
+              error.message,
+            attempts,
+            completionId,
+          );
+        }
+        if (
+          error instanceof WorkpadNeedsInputError ||
+          error instanceof DiagnosticCompletionIntegrityError ||
+          error instanceof DiagnosticSafetyError
+        ) {
+          return this.completionNeedsInput(
+            envelope.report_id,
+            error.message,
+            attempts,
+            completionId,
+          );
+        }
+        throw error;
+      }
+    }
+
+    return this.completionNeedsInput(
+      envelope.report_id,
+      "Diagnostic completion reconciliation reached an unreachable retry state.",
+      maxAttempts,
+      completionId,
+    );
+  }
+
+  /**
+   * Compatibility wrapper for the provider adapter. New Root code should use
+   * `reconcileCompletion` so it can return a structured `needs_input` result.
+   */
   async recordCompletion(
     envelope: DiagnosticSessionEnvelope,
     threadId?: string,
+    outcome?: DiagnosticCompletionInput["outcome"],
+    providerFinishReason?: string,
   ): Promise<FailureReport> {
-    const current = await this.readWorkpad(envelope);
-    const state = current.report.diagnostic_session;
-    if (!state) {
-      throw new Error(
-        "Cannot record diagnostic completion without a prepared diagnostic session.",
-      );
+    const reconciled = await this.reconcileCompletion(envelope, {
+      codex_thread_id: threadId ?? "",
+      ...(outcome ? { outcome } : {}),
+      ...(providerFinishReason
+        ? { provider_finish_reason: providerFinishReason }
+        : {}),
+    });
+    if (reconciled.status === "needs_input") {
+      throw new DiagnosticCompletionNeedsInputError(reconciled.reason);
     }
-    const diagnosticSession = await this.worktrees.captureCurrent(
-      current.report,
-      state,
-    );
-    const nextState: DiagnosticSession = {
-      ...diagnosticSession.state,
-      ...(threadId ? { codex_thread_id: threadId } : {}),
-      last_diagnosed_at: this.now(),
-    };
-    const published = await this.publishDiagnosticSession(
-      {
-        report: current.report,
-        workpad_revision: current.revision,
-        diagnostic_session: diagnosticSession,
-      },
-      nextState,
-    );
-    return published.report;
+    return reconciled.report;
   }
 
   /**
@@ -315,6 +615,22 @@ export class DiagnosticSessionWorkpad {
     return {
       report: published.report,
       workpad_revision: published.workpad_revision,
+    };
+  }
+
+  /** Shapes all deterministic reconciliation conflicts for Root callers. */
+  private completionNeedsInput(
+    reportId: string,
+    reason: string,
+    attempts: number,
+    completionId?: string,
+  ): DiagnosticCompletionReconciliationResult {
+    return {
+      status: "needs_input",
+      report_id: reportId,
+      reason,
+      attempts,
+      ...(completionId ? { completion_id: completionId } : {}),
     };
   }
 
@@ -414,12 +730,12 @@ export class DiagnosticSessionWorkpad {
       gateway.getWorkpadProducerConfiguration(),
     );
     if (!workpad) {
-      throw new Error(
+      throw new DiagnosticSafetyError(
         "Diagnosis requires a Root-published FailureReport workpad before allocation.",
       );
     }
     if (workpad.report.id !== envelope.report_id) {
-      throw new Error(
+      throw new DiagnosticSafetyError(
         "Diagnostic-session envelope report id does not match the durable Issue workpad.",
       );
     }
@@ -430,7 +746,7 @@ export class DiagnosticSessionWorkpad {
       sharedContext.issue_number !== envelope.issue_number ||
       sharedContext.workpad_revision !== workpad.revision
     ) {
-      throw new Error(
+      throw new DiagnosticSafetyError(
         "The durable FailureReport workpad is not consistently bound to the requested GitHub Issue.",
       );
     }
@@ -440,4 +756,65 @@ export class DiagnosticSessionWorkpad {
       issue,
     };
   }
+}
+
+/**
+ * Verifies that a retry still refers to the one active session Root observed
+ * before the first write. A newer report is mergeable only when these immutable
+ * session, thread, and target bindings have not changed.
+ */
+function validateCompletionReconciliationState(input: {
+  report: FailureReport;
+  diagnostic_session: DiagnosticSession;
+  captured: {
+    diagnostic_session: VerifiedDiagnosticWorktree;
+    target_revision: string;
+    diagnostic_session_identity: string;
+    observed_worktree_head: string;
+    completed_at: string;
+  };
+  completion: DiagnosticCompletionInput;
+}): string | undefined {
+  const historyProblem = validateDiagnosticCompletionHistory(input.report);
+  if (historyProblem) {
+    return historyProblem;
+  }
+  if (input.report.target.revision !== input.captured.target_revision) {
+    return "The durable report target revision changed during completion reconciliation.";
+  }
+  if (
+    input.diagnostic_session.worktree.identity !==
+    input.captured.diagnostic_session_identity
+  ) {
+    return "The active diagnostic session changed during completion reconciliation.";
+  }
+  if (
+    input.diagnostic_session.worktree.base_revision !==
+    input.report.target.revision
+  ) {
+    return "The active diagnostic session is no longer bound to the report's immutable target revision.";
+  }
+  if (
+    input.diagnostic_session.backend_id !==
+      input.captured.diagnostic_session.state.backend_id ||
+    input.diagnostic_session.diagnostic_branch_slug !==
+      input.captured.diagnostic_session.state.diagnostic_branch_slug ||
+    input.diagnostic_session.domain_extensions.join("\u0000") !==
+      input.captured.diagnostic_session.state.domain_extensions.join("\u0000")
+  ) {
+    return "The active diagnostic session invariants changed during completion reconciliation.";
+  }
+  if (
+    input.diagnostic_session.codex_thread_id !==
+    input.completion.codex_thread_id
+  ) {
+    return "Diagnostic completion Codex thread does not match the persisted active session.";
+  }
+  if (
+    input.captured.diagnostic_session.state.codex_thread_id !==
+    input.completion.codex_thread_id
+  ) {
+    return "The observed diagnostic worktree is not bound to the persisted Codex thread.";
+  }
+  return undefined;
 }

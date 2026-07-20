@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   appendFailureReportWorkpadEntry,
   diagnosticBranchSlugSchema,
+  diagnosticCompletionRecordSchema,
   failureReportSchema,
   githubIssueSelectorSchema,
   parseFailureReportWorkpad,
@@ -76,6 +77,60 @@ describe("FailureReport protocol", () => {
       );
     },
   );
+
+  it("persists a typed Root-owned diagnostic completion with session bindings", async () => {
+    const report = failureReportSchema.parse(
+      await loadFixture("issue-54.json"),
+    );
+    const session = {
+      lifecycle: "active" as const,
+      domain_extensions: ["ckb"],
+      backend_id: "codex_app_server",
+      codex_thread_id: "thr-54",
+      worktree: {
+        path: "/root-owned-runtime/worktrees/diagnostic-54",
+        identity: "diagnostic-54",
+        base_revision: report.target.revision,
+        head_revision: report.target.revision,
+      },
+      diagnostic_branch_slug: "ckboost-issue-54",
+    };
+    const completion = diagnosticCompletionRecordSchema.parse({
+      schema_version: "failure-report/diagnostic-completion/v1",
+      completion_id: "diagnostic-completion/example",
+      report_id: report.id,
+      target_revision: report.target.revision,
+      diagnostic_session_identity: session.worktree.identity,
+      codex_thread_id: session.codex_thread_id,
+      observed_worktree_head: report.target.revision,
+      outcome: {
+        evidence: [],
+        operation_evidence: [],
+        hypotheses: [],
+        experiments: [],
+      },
+      metadata: {
+        completed_at: "2026-07-15T10:00:00Z",
+        owner: "root",
+        provider: "codex_app_server",
+      },
+    });
+
+    const persisted = failureReportSchema.parse({
+      ...report,
+      diagnostic_session: session,
+      diagnostic_completions: [completion],
+    });
+    expect(persisted.diagnostic_completions).toEqual([completion]);
+    expect(() =>
+      failureReportSchema.parse({
+        ...persisted,
+        diagnostic_completions: [
+          { ...completion, codex_thread_id: "thr-other" },
+        ],
+      }),
+    ).toThrow("persisted Codex thread");
+  });
 
   it("round-trips a versioned managed entry with a human summary before details", async () => {
     const report = failureReportSchema.parse(

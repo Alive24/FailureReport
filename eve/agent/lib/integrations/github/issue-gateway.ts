@@ -27,6 +27,41 @@ export type PublishedSharedContext = {
   workpad_revision: number;
 };
 
+/**
+ * A verified optimistic-concurrency race. Root may reload logical state and
+ * make one bounded retry; callers must never treat it as permission to replay a
+ * stale report snapshot.
+ */
+export class WorkpadPublicationRaceError extends WorkpadNeedsInputError {
+  readonly retryable = true;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkpadPublicationRaceError";
+  }
+}
+
+/** A failed post-write readback whose durable outcome could not be verified. */
+export class WorkpadPostWriteReadbackError extends WorkpadNeedsInputError {
+  readonly retryable: boolean;
+
+  constructor(message: string, retryable = false) {
+    super(message);
+    this.name = "WorkpadPostWriteReadbackError";
+    this.retryable = retryable;
+  }
+}
+
+/** Narrows the only publication errors a reconciliation transaction may retry. */
+export function isRetryableWorkpadPublicationError(
+  error: unknown,
+): error is WorkpadPublicationRaceError | WorkpadPostWriteReadbackError {
+  return (
+    error instanceof WorkpadPublicationRaceError ||
+    (error instanceof WorkpadPostWriteReadbackError && error.retryable)
+  );
+}
+
 /** Root's internal GitHub Issue port. */
 export interface GithubIssueGateway {
   readIssue(
@@ -96,10 +131,22 @@ export abstract class IssueWorkpadGateway implements GithubIssueGateway {
 
     // A post-write read validates the actual GitHub author before returning the
     // report as durable state. A credential mismatch can never become trusted.
-    const persistedIssue = await this.readIssue(repository, issueNumber);
-    const persisted = findExistingWorkpad(persistedIssue, producers);
+    let persistedIssue: GithubIssueSnapshot;
+    let persisted: ReturnType<typeof findExistingWorkpad>;
+    try {
+      persistedIssue = await this.readIssue(repository, issueNumber);
+      persisted = findExistingWorkpad(persistedIssue, producers);
+    } catch (error) {
+      if (error instanceof WorkpadNeedsInputError) {
+        throw error;
+      }
+      throw new WorkpadPostWriteReadbackError(
+        "FailureReport publication could not verify its post-write logical-state readback.",
+        isTransientPublicationFailure(error),
+      );
+    }
     if (!persisted || persisted.comment.id !== commentRef) {
-      throw new WorkpadNeedsInputError(
+      throw new WorkpadPublicationRaceError(
         "FailureReport publication did not produce the expected verified lineage head.",
       );
     }
@@ -107,7 +154,7 @@ export abstract class IssueWorkpadGateway implements GithubIssueGateway {
       persisted.entry.entry_id !== mutation.entry.entry_id ||
       persisted.revision !== mutation.entry.revision
     ) {
-      throw new WorkpadNeedsInputError(
+      throw new WorkpadPublicationRaceError(
         "FailureReport publication readback does not match the prepared entry.",
       );
     }
@@ -170,14 +217,14 @@ export function assertFreshWorkpadMutation(
   producers: WorkpadProducerConfiguration,
 ): void {
   if (issue.updated_at !== mutation.expected_issue_updated_at) {
-    throw new WorkpadNeedsInputError(
+    throw new WorkpadPublicationRaceError(
       "GitHub Issue changed while preparing the FailureReport workpad.",
     );
   }
   const current = findExistingWorkpad(issue, producers);
   const revision = current?.revision ?? null;
   if (revision !== mutation.expected_workpad_revision) {
-    throw new WorkpadNeedsInputError(
+    throw new WorkpadPublicationRaceError(
       "FailureReport workpad changed while preparing the update.",
     );
   }
@@ -185,12 +232,12 @@ export function assertFreshWorkpadMutation(
     current?.comment.id !== mutation.expected_workpad_comment_ref &&
     mutation.expected_workpad_comment_ref !== undefined
   ) {
-    throw new WorkpadNeedsInputError(
+    throw new WorkpadPublicationRaceError(
       "FailureReport workpad head changed while preparing the update.",
     );
   }
   if (mutation.mode === "create" && current) {
-    throw new WorkpadNeedsInputError(
+    throw new WorkpadPublicationRaceError(
       "A FailureReport workpad appeared before first publication.",
     );
   }
@@ -199,7 +246,7 @@ export function assertFreshWorkpadMutation(
     (!current ||
       current.producer.github_actor_id !== producers.current.github_actor_id)
   ) {
-    throw new WorkpadNeedsInputError(
+    throw new WorkpadPublicationRaceError(
       "Same-producer append no longer has a verified owned lineage head.",
     );
   }
@@ -207,8 +254,29 @@ export function assertFreshWorkpadMutation(
     mutation.mode === "continue" &&
     (!current || current.comment.id !== mutation.predecessor_comment_ref)
   ) {
-    throw new WorkpadNeedsInputError(
+    throw new WorkpadPublicationRaceError(
       "Producer continuation no longer has the verified predecessor comment.",
     );
   }
+}
+
+/** Only transport failures known to be transient may enter a bounded retry. */
+function isTransientPublicationFailure(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const candidate = error as { status?: unknown; code?: unknown };
+  if (typeof candidate.status === "number") {
+    return (
+      candidate.status === 408 ||
+      candidate.status === 409 ||
+      candidate.status === 429 ||
+      candidate.status >= 500
+    );
+  }
+  return (
+    candidate.code === "ECONNRESET" ||
+    candidate.code === "ETIMEDOUT" ||
+    candidate.code === "EAI_AGAIN"
+  );
 }

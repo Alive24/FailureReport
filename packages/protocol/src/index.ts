@@ -223,6 +223,132 @@ export const diagnosticDomainExtensionsSchema = z
     }
   });
 
+/** Evidence a Root-owned diagnostic completion may project into its report. */
+const diagnosticCompletionEvidenceSchema = z
+  .object({
+    id: identifierSchema,
+    kind: z.enum([
+      "reported_observation",
+      "tool_observation",
+      "repository_fact",
+      "derived_finding",
+      "human_decision",
+      "review_finding",
+      "uat_result",
+    ]),
+    observed_fact: z.string().min(1),
+    interpretation: z.string().optional(),
+    epistemic_status: z.enum(["reported", "observed", "derived", "verified"]),
+    provenance: provenanceSchema,
+    artifacts: z.array(artifactSchema),
+  })
+  .strict();
+
+/** A hypothesis a completed diagnostic may add without replacing newer state. */
+const diagnosticCompletionHypothesisSchema = z
+  .object({
+    id: identifierSchema,
+    statement: z.string().min(1),
+    status: z.enum(["open", "supported", "confirmed", "rejected"]),
+    supporting_evidence: z.array(identifierSchema),
+    contradicting_evidence: z.array(identifierSchema),
+    history: z
+      .array(
+        z
+          .object({
+            status: z.enum(["open", "supported", "confirmed", "rejected"]),
+            rationale: z.string().min(1),
+            provenance: provenanceSchema,
+          })
+          .strict(),
+      )
+      .min(1),
+  })
+  .strict();
+
+/** An experiment is the existing report representation for operation evidence. */
+const diagnosticCompletionExperimentSchema = z
+  .object({
+    id: identifierSchema,
+    question: z.string().min(1),
+    proposed_action: z.string().min(1),
+    approval: z
+      .object({
+        required: z.boolean(),
+        status: z.enum(["not_required", "pending", "approved", "rejected"]),
+        authority: z.string().min(1).optional(),
+      })
+      .strict(),
+    baseline_evidence: z.array(identifierSchema),
+    result_evidence: z.array(identifierSchema),
+    outcome: z.enum(["confirmed", "rejected", "inconclusive", "not_run"]),
+    interpretation: z.string(),
+  })
+  .strict();
+
+/** A conclusion projected by Root only after its completion record is validated. */
+const diagnosticCompletionConclusionSchema = z
+  .object({
+    diagnosis: z.string().min(1),
+    confidence: z
+      .object({
+        level: z.enum(["low", "medium", "high"]),
+        basis: z.string().min(1),
+      })
+      .strict(),
+    remaining_uncertainty: stringListSchema,
+    recommended_remediation: stringListSchema,
+  })
+  .strict();
+
+/**
+ * Explicit fields Root may carry from a validated Codex outcome. Operation
+ * evidence remains normal report evidence or experiments; no provider-specific
+ * execution transcript becomes public workpad state.
+ */
+export const diagnosticCompletionOutcomeSchema = z
+  .object({
+    report_status: z
+      .enum(["diagnosed", "needs_input", "inconclusive", "blocked"])
+      .optional(),
+    evidence: z.array(diagnosticCompletionEvidenceSchema),
+    operation_evidence: z.array(diagnosticCompletionEvidenceSchema),
+    hypotheses: z.array(diagnosticCompletionHypothesisSchema),
+    experiments: z.array(diagnosticCompletionExperimentSchema),
+    conclusion: diagnosticCompletionConclusionSchema.optional(),
+  })
+  .strict();
+
+/** Root-generated metadata for one immutable completed Codex diagnostic. */
+export const diagnosticCompletionMetadataSchema = z
+  .object({
+    completed_at: timestampSchema,
+    owner: z.literal("root"),
+    provider: z.literal("codex_app_server"),
+    provider_finish_reason: z.string().min(1).optional(),
+  })
+  .strict();
+
+/**
+ * One immutable, idempotently addressed diagnostic completion. The identity is
+ * derived by Root from the report, active diagnostic session, persisted thread,
+ * and observed diagnostic-worktree HEAD; it is deliberately independent of a
+ * mutable workpad revision.
+ */
+export const diagnosticCompletionRecordSchema = z
+  .object({
+    schema_version: z.literal("failure-report/diagnostic-completion/v1"),
+    completion_id: identifierSchema,
+    report_id: identifierSchema,
+    target_revision: immutableGitRevisionSchema,
+    diagnostic_session_identity: identifierSchema,
+    codex_thread_id: z.string().min(1),
+    observed_worktree_head: immutableGitRevisionSchema,
+    outcome: diagnosticCompletionOutcomeSchema,
+    metadata: diagnosticCompletionMetadataSchema,
+  })
+  .strict();
+
 /**
  * Validates durable backend state required to resume an isolated diagnostic session.
  * The state belongs to the report but is intentionally outside `shared_context`.
@@ -283,6 +409,10 @@ export const failureReportSchema = z
     updated_at: timestampSchema,
     shared_context: githubIssueContextSchema.optional(),
     diagnostic_session: diagnosticSessionSchema.optional(),
+    /** Immutable Root-owned completions projected into this report. */
+    diagnostic_completions: z
+      .array(diagnosticCompletionRecordSchema)
+      .optional(),
     origin: z
       .object({
         source: z.enum([
@@ -485,7 +615,75 @@ export const failureReportSchema = z
       })
       .strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((report, context) => {
+    const completions = report.diagnostic_completions ?? [];
+    if (completions.length === 0) {
+      return;
+    }
+    const session = report.diagnostic_session;
+    if (!session) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "diagnostic completions require a persisted diagnostic session",
+        path: ["diagnostic_completions"],
+      });
+      return;
+    }
+
+    const completionIds = new Set<string>();
+    for (let index = 0; index < completions.length; index += 1) {
+      const completion = completions[index];
+      if (!completion) {
+        continue;
+      }
+      if (completionIds.has(completion.completion_id)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "diagnostic completion identities must be unique",
+          path: ["diagnostic_completions", index, "completion_id"],
+        });
+      }
+      completionIds.add(completion.completion_id);
+      if (completion.report_id !== report.id) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "diagnostic completion must belong to this report",
+          path: ["diagnostic_completions", index, "report_id"],
+        });
+      }
+      if (completion.target_revision !== report.target.revision) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "diagnostic completion must preserve the report target revision",
+          path: ["diagnostic_completions", index, "target_revision"],
+        });
+      }
+      if (
+        completion.diagnostic_session_identity !== session.worktree.identity
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "diagnostic completion must belong to the active session",
+          path: [
+            "diagnostic_completions",
+            index,
+            "diagnostic_session_identity",
+          ],
+        });
+      }
+      if (completion.codex_thread_id !== session.codex_thread_id) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "diagnostic completion must match the persisted Codex thread",
+          path: ["diagnostic_completions", index, "codex_thread_id"],
+        });
+      }
+    }
+  });
 
 /** Operations exposed by the single public Root entry point. */
 export const rootOperationSchema = z.enum([
@@ -552,6 +750,18 @@ export type GithubIssueContext = z.infer<typeof githubIssueContextSchema>;
 export type GithubIssueSelector = z.infer<typeof githubIssueSelectorSchema>;
 /** Typed durable diagnostic-session state inferred from the durable schema. */
 export type DiagnosticSession = z.infer<typeof diagnosticSessionSchema>;
+/** Typed immutable Root-owned completion record inferred from the durable schema. */
+export type DiagnosticCompletionRecord = z.infer<
+  typeof diagnosticCompletionRecordSchema
+>;
+/** Typed report fields a completion is permitted to project. */
+export type DiagnosticCompletionOutcome = z.infer<
+  typeof diagnosticCompletionOutcomeSchema
+>;
+/** Typed Root-generated metadata paired with a completion record. */
+export type DiagnosticCompletionMetadata = z.infer<
+  typeof diagnosticCompletionMetadataSchema
+>;
 /** Typed isolated diagnostic-worktree identity inferred from the durable schema. */
 export type DiagnosticWorktree = z.infer<typeof diagnosticWorktreeSchema>;
 /** Typed public Root request inferred from the transport schema. */
