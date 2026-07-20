@@ -349,6 +349,65 @@ export const diagnosticCompletionRecordSchema = z
   })
   .strict();
 
+/** Terminal outcome retained for one backend-native approval lifecycle. */
+export const nativeApprovalTerminalStatusSchema = z.enum([
+  "resolved",
+  "denied",
+  "cancelled",
+  "timed_out",
+  "interrupted",
+]);
+
+/** Sanitized explanation for a terminal native-approval lifecycle. */
+export const nativeApprovalTerminalReasonSchema = z.enum([
+  "duplicate_request",
+  "identity_mismatch",
+  "stale_session",
+  "concurrent_request",
+  "cancelled_by_backend",
+  "timeout",
+  "process_interrupted",
+  "response_delivery_failed",
+]);
+
+/**
+ * Durable, provider-neutral evidence for a native approval lifecycle.
+ *
+ * The broker generates `approval_id`; it is not an App Server request id. Raw
+ * request ids, commands, paths, arguments, tokens, and connection state remain
+ * live transport details and are intentionally absent from this schema.
+ */
+export const nativeApprovalTerminalEvidenceSchema = z
+  .object({
+    schema_version: z.literal("failure-report/native-approval-terminal/v1"),
+    approval_id: identifierSchema,
+    backend_id: identifierSchema,
+    diagnostic_session_identity: identifierSchema,
+    turn_id: identifierSchema.optional(),
+    status: nativeApprovalTerminalStatusSchema,
+    decision: z.enum(["approve", "deny"]).optional(),
+    reason: nativeApprovalTerminalReasonSchema.optional(),
+    recorded_at: timestampSchema,
+  })
+  .strict()
+  .superRefine((evidence, context) => {
+    if (evidence.status === "resolved" && !evidence.decision) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "a resolved native approval requires its normalized decision",
+        path: ["decision"],
+      });
+    }
+    if (evidence.status !== "resolved" && evidence.decision) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "only a resolved native approval may retain a normalized decision",
+        path: ["decision"],
+      });
+    }
+  });
+
 /**
  * Validates durable backend state required to resume an isolated diagnostic session.
  * The state belongs to the report but is intentionally outside `shared_context`.
@@ -363,6 +422,10 @@ export const diagnosticSessionSchema = z
     diagnostic_branch_slug: diagnosticBranchSlugSchema,
     diagnostic_branch: diagnosticBranchSchema.optional(),
     last_diagnosed_at: timestampSchema.optional(),
+    /** Sanitized terminal evidence; no live provider request is resumable. */
+    native_approval_evidence: z
+      .array(nativeApprovalTerminalEvidenceSchema)
+      .optional(),
   })
   .strict()
   .superRefine((session, context) => {
@@ -379,6 +442,45 @@ export const diagnosticSessionSchema = z
         message: "a finalized diagnostic session requires a diagnostic_branch",
         path: ["diagnostic_branch"],
       });
+    }
+
+    const approvalIds = new Set<string>();
+    for (
+      let index = 0;
+      index < (session.native_approval_evidence?.length ?? 0);
+      index += 1
+    ) {
+      const evidence = session.native_approval_evidence?.[index];
+      if (!evidence) {
+        continue;
+      }
+      if (approvalIds.has(evidence.approval_id)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "native approval evidence ids must be unique",
+          path: ["native_approval_evidence", index, "approval_id"],
+        });
+      }
+      approvalIds.add(evidence.approval_id);
+      if (evidence.backend_id !== session.backend_id) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "native approval evidence must match the session backend",
+          path: ["native_approval_evidence", index, "backend_id"],
+        });
+      }
+      if (evidence.diagnostic_session_identity !== session.worktree.identity) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "native approval evidence must match the session worktree identity",
+          path: [
+            "native_approval_evidence",
+            index,
+            "diagnostic_session_identity",
+          ],
+        });
+      }
     }
   });
 
@@ -761,6 +863,10 @@ export type DiagnosticCompletionOutcome = z.infer<
 /** Typed Root-generated metadata paired with a completion record. */
 export type DiagnosticCompletionMetadata = z.infer<
   typeof diagnosticCompletionMetadataSchema
+>;
+/** Typed durable terminal evidence for a backend-native approval request. */
+export type NativeApprovalTerminalEvidence = z.infer<
+  typeof nativeApprovalTerminalEvidenceSchema
 >;
 /** Typed isolated diagnostic-worktree identity inferred from the durable schema. */
 export type DiagnosticWorktree = z.infer<typeof diagnosticWorktreeSchema>;
