@@ -145,9 +145,18 @@ async function createCodexAppServerModel(
       }
       return threadId;
     },
-    async complete(metadataThreadId?: string): Promise<void> {
-      const persistedThreadId = metadataThreadId ?? (await this.ensureThread());
-      await workpad.recordCompletion(envelope, persistedThreadId);
+    async complete(metadata?: {
+      thread_id?: string;
+      provider_finish_reason?: string;
+    }): Promise<void> {
+      const persistedThreadId =
+        metadata?.thread_id ?? (await this.ensureThread());
+      await workpad.recordCompletion(
+        envelope,
+        persistedThreadId,
+        undefined,
+        metadata?.provider_finish_reason,
+      );
     },
   };
 
@@ -177,7 +186,10 @@ function trackCodexModel(
   rawModel: CodexAppServerLanguageModel,
   journal: {
     ensureThread(): Promise<string>;
-    complete(metadataThreadId?: string): Promise<void>;
+    complete(metadata?: {
+      thread_id?: string;
+      provider_finish_reason?: string;
+    }): Promise<void>;
   },
 ): LanguageModel {
   const model = {
@@ -218,7 +230,10 @@ function trackCodexModel(
 function persistAfterFinish<T>(
   stream: ReadableStream<T>,
   journal: {
-    complete(metadataThreadId?: string): Promise<void>;
+    complete(metadata?: {
+      thread_id?: string;
+      provider_finish_reason?: string;
+    }): Promise<void>;
   },
 ): ReadableStream<T> {
   const reader = stream.getReader();
@@ -229,7 +244,12 @@ function persistAfterFinish<T>(
       return;
     }
     completed = true;
-    await journal.complete(readThreadIdFromProviderMetadata(part));
+    const threadId = readThreadIdFromProviderMetadata(part);
+    const finishReason = readFinishReason(part);
+    await journal.complete({
+      ...(threadId ? { thread_id: threadId } : {}),
+      ...(finishReason ? { provider_finish_reason: finishReason } : {}),
+    });
   };
 
   return new ReadableStream<T>({
@@ -296,6 +316,17 @@ function readThreadIdFromProviderMetadata(value: unknown): string | undefined {
     return undefined;
   }
   return codex.sessionId;
+}
+
+/** Extracts a provider-reported finish reason without trusting arbitrary metadata. */
+function readFinishReason(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const finishReason = value.finishReason ?? value.finish_reason;
+  return typeof finishReason === "string" && finishReason
+    ? finishReason
+    : undefined;
 }
 
 /** Narrows unknown provider metadata before accessing its nested fields. */

@@ -433,6 +433,7 @@ describe("Codex diagnostic session", () => {
                 });
                 controller.enqueue({
                   type: "finish",
+                  finishReason: "stop",
                   providerMetadata: { codex: { sessionId: threadId } },
                 });
                 controller.close();
@@ -481,11 +482,28 @@ describe("Codex diagnostic session", () => {
     expect(
       harness.currentReport().diagnostic_session?.last_diagnosed_at,
     ).toBeTruthy();
+    expect(harness.currentReport().diagnostic_completions).toHaveLength(1);
+    expect(
+      harness.currentReport().diagnostic_completions?.[0]?.metadata
+        .provider_finish_reason,
+    ).toBe("stop");
 
-    await resolveModel([
+    // A provider finish can be replayed after Root recreates its model wrapper.
+    // The persisted thread resumes, while Root recognizes the immutable
+    // completion record instead of appending evidence a second time.
+    const resumed = await resolveModel([
       { role: "user", content: prepared.delegation_message },
     ]);
+    const resumedModel = resumed.model as unknown as {
+      doStream(options: unknown): Promise<{ stream: ReadableStream<unknown> }>;
+    };
+    const resumedResult = await resumedModel.doStream({});
+    const resumedReader = resumedResult.stream.getReader();
+    while (!(await resumedReader.read()).done) {
+      // Drain the replayed provider response so its finish persistence runs.
+    }
     expect(providerSettings[1]?.resume).toBe("thr-ckb-54");
+    expect(harness.currentReport().diagnostic_completions).toHaveLength(1);
   });
 
   it("finalizes a clean detached diagnosis into an idempotent snapshot branch without checkout", async () => {
