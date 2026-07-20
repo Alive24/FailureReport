@@ -54,11 +54,34 @@ examples/                 Extension and host examples
 Node 24 and pnpm 10 are required.
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm build
 pnpm check
 pnpm test
 ```
+
+### Cold-start Eve development
+
+A fresh checkout needs no manually inferred whole-workspace build before starting Eve. Install the locked workspace and run the normal development entrypoint:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm --filter @Alive24/FailureReport dev
+```
+
+`dev` first runs its `dev:preflight`, which builds only `@failure-report/protocol` and `@failure-report/ckb-domain-pack`: the direct workspace packages Eve imports through generated `dist/` exports. It then runs `eve dev --no-ui`. This is deliberately narrower than `pnpm build` and needs no separate developer action.
+
+The preflight may create ignored `dist/` output, and Eve may create ignored `.eve/` runtime-cache state. Neither is a dependency installation. Root is explicitly pinned to the declared `just-bash` dependency with automatic installation disabled, so this path must never run `pnpm add`, rewrite a package manifest or lockfile, or provision a Docker/microsandbox image or VM. Image or VM provisioning belongs only to an explicitly selected future sandbox backend; it is separate from build output and never a reason to mutate dependencies.
+
+For a clean-checkout, non-interactive preflight smoke (which avoids a persistent dev watcher), run this in a disposable clone after the frozen install:
+
+```bash
+pnpm --filter @Alive24/FailureReport run dev:preflight
+git status --short
+git diff --check
+```
+
+The two Git commands must produce no output. On a host with ordinary watcher capacity, start `dev` normally and run the same Git checks after shutdown. An `EMFILE` watcher failure is a host/upstream resource condition to report separately; it must not trigger dependency installation or metadata changes.
 
 To verify native Codex skill discovery locally without starting a model turn, run the opt-in App Server smoke test. It creates a temporary Git worktree, links the CKB skill beneath `.agents/skills`, and performs the same bounded `initialize` plus `skills/list` exchange that Root uses:
 
