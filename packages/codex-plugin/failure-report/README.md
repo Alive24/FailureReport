@@ -28,7 +28,7 @@ Start Eve first, in a separate terminal:
 pnpm --filter @Alive24/FailureReport dev
 ```
 
-Then load this plugin from `packages/codex-plugin/failure-report`. Its `.mcp.json` starts `pnpm --filter @failure-report/mcp-adapter mcp` from the workspace root, so Codex receives the `failure_report` MCP tool automatically. The plugin is kept inside this repository because that command intentionally invokes the outer workspace adapter.
+That command runs `eve dev --no-ui`, whose documented local Channel endpoint is `http://127.0.0.1:2000`. Then load this plugin from `packages/codex-plugin/failure-report`. Its `.mcp.json` starts `pnpm --filter @failure-report/mcp-adapter mcp` from the workspace root, so Codex receives the `failure_report` MCP tool automatically. With no `FAILURE_REPORT_EVE_HOST`, the adapter owns and uses that local endpoint. The plugin configuration deliberately declares only optional runtime environment variables; it does not embed a host or credentials.
 
 For a non-local Eve deployment, provide runtime environment variables to the Codex process before it starts the plugin:
 
@@ -37,7 +37,7 @@ export FAILURE_REPORT_EVE_HOST="https://your-eve-host.example"
 export FAILURE_REPORT_EVE_BEARER_TOKEN="your-runtime-token"
 ```
 
-`FAILURE_REPORT_EVE_HOST` defaults to `http://127.0.0.1:3000`; the bearer token is optional and only needed when the Eve Channel requires it. No credentials are stored in this plugin or its MCP configuration.
+`FAILURE_REPORT_EVE_HOST` overrides the adapter's local development default for non-local Eve deployments. The bearer token is optional and only needed when the Eve Channel requires it. No credentials are stored in this plugin or its MCP configuration.
 
 For adapter-only diagnostics outside Codex, run:
 

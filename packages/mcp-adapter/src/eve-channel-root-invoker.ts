@@ -317,6 +317,14 @@ export type McpRootCompositionOptions = {
 };
 
 /**
+ * Adapter-owned fallback for the documented local `eve dev --no-ui` Channel.
+ *
+ * Deployments must provide an explicit runtime host rather than relying on this
+ * development-only endpoint.
+ */
+const defaultLocalEveChannelHost = "http://127.0.0.1:2000";
+
+/**
  * Connects an external wrapper to the built-in Eve Channel.
  *
  * The default endpoint is the local `eve dev` server. Production callers pass
@@ -325,7 +333,7 @@ export type McpRootCompositionOptions = {
 export function createMcpRootInvoker(
   options: McpRootCompositionOptions = {},
 ): RootInvoker {
-  const host = options.host ?? "http://127.0.0.1:3000";
+  const host = options.host ?? defaultLocalEveChannelHost;
   const transport =
     options.transport ??
     new EveChannelRootTransport({
