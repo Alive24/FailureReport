@@ -113,6 +113,14 @@ Before every new or resumed diagnostic delegation, Root runs a bounded host-runt
 
 Codex runs directly in the user's existing host environment, retaining `~/.codex`, plugins, native skills, MCP configuration, authentication, Git credentials, model settings, and persistent thread storage. `workspace-write` permits focused tests, caches, debugging artifacts, and bounded commits whose message and content clearly identifies them as diagnostic-only. It does not authorize implementation or PR workflow. After every turn, Codex reports its outcome to Root; Root validates the persisted thread and observed HEAD, then appends or recognizes one immutable completion record through bounded read–merge–write–readback reconciliation. Exact replay is a no-op, while incompatible duplicate content or newer incompatible session state returns `needs_input`; Codex never retries or writes GitHub state.
 
+### Native approval lifecycle
+
+Managed diagnostic backends may receive native, server-initiated approval requests while a turn is live. The internal `NativeApprovalBroker` owns at most one such request for one Root-validated report, backend, persisted thread, live turn, and managed worktree. A future App Server transport adapter normalizes only the request kind, transient provider request id, and `threadId`/`turnId` binding; it retains raw command text, cwd, arguments, tokens, and connection state on the live transport side.
+
+The broker accepts only one normalized `approve` or `deny` response and records a sanitized terminal result (`resolved`, `denied`, `cancelled`, `timed_out`, or `interrupted`). Its durable evidence contains a broker-generated approval id, backend/session identity, safe turn id, outcome, and timestamp. It never contains a provider request id or raw request payload. Duplicate, stale, mismatched, cancelled, timed-out, and process-interrupted requests fail closed. Process loss is terminal: the next process must not replay the former connection-bound request.
+
+This is not a Root, MCP, Temporal, or Channel approval protocol. The eventual backend adapter maps the broker's one response back to the provider's native JSON-RPC request and handles the provider's later cleanup notification. A native policy may choose a decision before calling the broker; for example, Codex Auto-review can remain the configured native reviewer for interactive sandbox-boundary requests. Auto-review is a reviewer swap, not a permission grant: it must not widen the diagnostic worktree, sandbox, network policy, or Root authority. The broker deliberately has no session-wide accept, exec-policy amendment, or continuation API.
+
 ## Verification Scope
 
 Tests cover direct protocol renames and legacy-field rejection; allocation and resume; external-HEAD rejection; workpad/thread persistence; native-skill link creation, repair, and fail-closed conflicts; bounded App Server initialization/skill discovery, failure classification, cleanup, and one fresh-process retry; and the CKB extension's pure-capability shape. An optional local App Server smoke test uses the ambient host runtime in a temporary Git worktree without starting a model turn.
@@ -121,3 +129,5 @@ Tests cover direct protocol renames and legacy-field rejection; allocation and r
 
 - [Eve extensions](https://eve.dev/docs/extensions)
 - [Codex App Server native skills](https://learn.chatgpt.com/docs/app-server#skills)
+- [Codex App Server approvals](https://learn.chatgpt.com/docs/app-server#approvals)
+- [Codex Auto-review](https://learn.chatgpt.com/docs/sandboxing/auto-review)
