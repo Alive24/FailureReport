@@ -25,3 +25,7 @@ Run the Tauri app from an independent Shea Symphony 2606 MVP checkout's app dire
       npm run tauri -- dev
 
 The shared profile intentionally omits cli_path so the Tauri app uses its 2606 engine bridge rather than assuming a target-local Shea binary. Do not use the browser-only npm run dev command to orchestrate FailureReport.
+
+260720 Notes: We are using vendored version of Shea Symphony 2606 by running:
+
+SHEA_SYMPHONY_APP_PROFILE_PATH="$PWD/.shea/app-profile.json" ./.shea/app/shea-symphony-app
