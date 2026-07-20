@@ -15,7 +15,11 @@ import {
   parseCodexAppServerBackendConfig,
   type CodexAppServerBackendConfig,
 } from "../agent/lib/backends/codex-app-server-config.js";
-import { diagnosticSessionPreparationEnvelopeSchema } from "../agent/lib/diagnostics/envelope.js";
+import { createDiagnosticNativeApprovalBroker } from "../agent/lib/backends/native-approval-broker.js";
+import {
+  diagnosticSessionEnvelopeSchema,
+  diagnosticSessionPreparationEnvelopeSchema,
+} from "../agent/lib/diagnostics/envelope.js";
 import type { DomainExtension } from "../agent/lib/diagnostics/domain-extensions.js";
 import {
   DiagnosticSessionWorkpad,
@@ -381,11 +385,12 @@ describe("Codex diagnostic session", () => {
     ).rejects.toThrow("native skills do not match");
   });
 
-  it("persists a Codex thread and resumes it in the same Root-provided cwd", async () => {
+  it("persists a Codex thread and keeps native tools and approvals out of Eve", async () => {
     const harness = await createHarness();
     const prepared = await harness.workpad.prepare(preparationFor(harness));
 
     const providerSettings: Array<Record<string, unknown>> = [];
+    let workerTurns = 0;
     const createProvider = ((options: {
       defaultSettings: Record<string, unknown>;
     }) => {
@@ -399,6 +404,7 @@ describe("Codex diagnostic session", () => {
         supportsStructuredOutputs: true,
         supportsImageUrls: true,
         async doStream() {
+          workerTurns += 1;
           const threadId =
             (options.defaultSettings.resume as string | undefined) ??
             "thr-ckb-54";
@@ -425,6 +431,17 @@ describe("Codex diagnostic session", () => {
                   toolCallId: "native-command",
                   toolName: "exec",
                   result: { exitCode: 0 },
+                });
+                controller.enqueue({
+                  type: "tool-approval-request",
+                  requestId: "native-approval-request",
+                  command: "git status --short",
+                  cwd: "/private/diagnostic-worktree",
+                });
+                controller.enqueue({
+                  type: "tool-approval-response",
+                  requestId: "native-approval-request",
+                  decision: "decline",
                 });
                 controller.enqueue({
                   type: "text-delta",
@@ -469,6 +486,7 @@ describe("Codex diagnostic session", () => {
     }
 
     expect(parts.map((part) => part.type)).toEqual(["text-delta", "finish"]);
+    expect(workerTurns).toBe(1);
 
     expect(providerSettings[0]?.cwd).toBe(
       prepared.diagnostic_session.state.worktree.path,
@@ -483,6 +501,9 @@ describe("Codex diagnostic session", () => {
       harness.currentReport().diagnostic_session?.last_diagnosed_at,
     ).toBeTruthy();
     expect(harness.currentReport().diagnostic_completions).toHaveLength(1);
+    expect(JSON.stringify(harness.currentReport())).not.toContain(
+      "native-approval-request",
+    );
     expect(
       harness.currentReport().diagnostic_completions?.[0]?.metadata
         .provider_finish_reason,
@@ -504,6 +525,73 @@ describe("Codex diagnostic session", () => {
     }
     expect(providerSettings[1]?.resume).toBe("thr-ckb-54");
     expect(harness.currentReport().diagnostic_completions).toHaveLength(1);
+  });
+
+  it("persists only sanitized terminal native-approval evidence", async () => {
+    const harness = await createHarness();
+    const prepared = await harness.workpad.prepare(preparationFor(harness));
+    const envelope = diagnosticSessionEnvelopeSchema.parse({
+      ...preparationFor(harness),
+      workpad_revision: prepared.workpad_revision,
+    });
+    await harness.workpad.recordThread(envelope, "thread-native-approval");
+    const binding =
+      await harness.workpad.loadNativeApprovalSessionBinding(envelope);
+    const broker = await createDiagnosticNativeApprovalBroker({
+      workpad: harness.workpad,
+      envelope,
+      now: () => "2026-07-20T14:53:00Z",
+      create_approval_id: () => "native-approval-workpad-54",
+    });
+    const rawProviderRequest = {
+      id: "json-rpc-request-id-54",
+      command: "curl https://example.invalid?token=hidden",
+      cwd: "/private/diagnostic-worktree",
+      arguments: ["--header", "Authorization: Bearer hidden"],
+    };
+    const responses: Array<{ decision: "approve" | "deny" }> = [];
+    const registered = await broker.register({
+      request: {
+        provider_request_id: rawProviderRequest.id,
+        kind: "command_execution",
+        turn_id: "turn-approval-54",
+        session: binding,
+      },
+      async respond(response) {
+        responses.push(response);
+      },
+    });
+    if (registered.status !== "registered") {
+      throw new Error("Expected a valid native approval to register.");
+    }
+
+    await expect(
+      registered.resolve({ decision: "approve" }),
+    ).resolves.toMatchObject({
+      status: "resolved",
+      evidence: {
+        approval_id: "native-approval-workpad-54",
+        decision: "approve",
+      },
+    });
+    expect(responses).toEqual([{ decision: "approve" }]);
+    expect(
+      harness.currentReport().diagnostic_session?.native_approval_evidence,
+    ).toEqual([
+      expect.objectContaining({
+        approval_id: "native-approval-workpad-54",
+        backend_id: "codex_app_server",
+        diagnostic_session_identity: expect.any(String),
+        turn_id: "turn-approval-54",
+        status: "resolved",
+        decision: "approve",
+      }),
+    ]);
+    const persistedWorkpad = JSON.stringify(harness.currentReport());
+    expect(persistedWorkpad).not.toContain(rawProviderRequest.id);
+    expect(persistedWorkpad).not.toContain(rawProviderRequest.command);
+    expect(persistedWorkpad).not.toContain(rawProviderRequest.cwd);
+    expect(persistedWorkpad).not.toContain(rawProviderRequest.arguments[1]);
   });
 
   it("finalizes a clean detached diagnosis into an idempotent snapshot branch without checkout", async () => {

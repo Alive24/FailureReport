@@ -1,11 +1,14 @@
 import {
   diagnosticBranchSlugFor,
   failureReportSchema,
+  nativeApprovalTerminalEvidenceSchema,
   type DiagnosticCompletionRecord,
   type DiagnosticSession,
   type FailureReport,
+  type NativeApprovalTerminalEvidence,
 } from "@failure-report/protocol";
 
+import type { NativeApprovalSessionBinding } from "../backends/native-approval-broker.js";
 import { getDefaultGithubIssueGateway } from "../integrations/github/gateway-factory.js";
 import {
   isRetryableWorkpadPublicationError,
@@ -99,6 +102,14 @@ export type DiagnosticCompletionReconciliationResult =
       completion_id?: string;
       attempts: number;
     };
+
+/** Durable result of recording sanitized native-approval terminal evidence. */
+export type NativeApprovalTerminalPersistenceResult = {
+  report: FailureReport;
+  workpad_revision: number;
+  evidence: NativeApprovalTerminalEvidence;
+  idempotent: boolean;
+};
 
 /** Signals a legacy caller that Root could not durably reconcile a completion. */
 export class DiagnosticCompletionNeedsInputError extends DiagnosticSafetyError {
@@ -258,6 +269,82 @@ export class DiagnosticSessionWorkpad {
       codex_thread_id: threadId,
     });
     return published.report;
+  }
+
+  /**
+   * Derives the only broker binding from a workpad-validated, Root-managed
+   * worktree. The live broker receives no local path and no write authority.
+   */
+  async loadNativeApprovalSessionBinding(
+    envelope: DiagnosticSessionEnvelope,
+  ): Promise<NativeApprovalSessionBinding> {
+    const current = await this.loadForDiagnosticSession(envelope);
+    return this.nativeApprovalSessionBinding(envelope, current);
+  }
+
+  /**
+   * Appends one sanitized terminal approval fact after revalidating the active
+   * diagnostic session. Provider request ids and approval payloads are absent
+   * by type, so they cannot become workpad state through this boundary.
+   */
+  async recordNativeApprovalTerminal(
+    envelope: DiagnosticSessionEnvelope,
+    binding: NativeApprovalSessionBinding,
+    evidence: NativeApprovalTerminalEvidence,
+  ): Promise<NativeApprovalTerminalPersistenceResult> {
+    const current = await this.loadForDiagnosticSession(envelope);
+    this.assertNativeApprovalBinding(envelope, current, binding);
+    const terminal = nativeApprovalTerminalEvidenceSchema.parse(evidence);
+    if (
+      terminal.backend_id !== binding.backend_id ||
+      terminal.diagnostic_session_identity !==
+        binding.diagnostic_session_identity
+    ) {
+      throw new DiagnosticSafetyError(
+        "Native approval terminal evidence does not match the active diagnostic session.",
+      );
+    }
+
+    const state = current.diagnostic_session.state;
+    const existing = state.native_approval_evidence?.find(
+      (candidate) => candidate.approval_id === terminal.approval_id,
+    );
+    if (existing) {
+      if (!sameNativeApprovalTerminal(existing, terminal)) {
+        throw new DiagnosticSafetyError(
+          "Native approval terminal evidence repeats an id with incompatible content.",
+        );
+      }
+      return {
+        report: current.report,
+        workpad_revision: current.workpad_revision,
+        evidence: existing,
+        idempotent: true,
+      };
+    }
+
+    const published = await this.publishDiagnosticSession(current, {
+      ...state,
+      native_approval_evidence: [
+        ...(state.native_approval_evidence ?? []),
+        terminal,
+      ],
+    });
+    const persisted =
+      published.report.diagnostic_session?.native_approval_evidence?.find(
+        (candidate) => candidate.approval_id === terminal.approval_id,
+      );
+    if (!persisted || !sameNativeApprovalTerminal(persisted, terminal)) {
+      throw new DiagnosticSafetyError(
+        "Native approval terminal evidence post-write readback did not contain the expected record.",
+      );
+    }
+    return {
+      report: published.report,
+      workpad_revision: published.workpad_revision,
+      evidence: persisted,
+      idempotent: false,
+    };
   }
 
   /**
@@ -618,6 +705,56 @@ export class DiagnosticSessionWorkpad {
     };
   }
 
+  /** Derives a generic binding only after the current worktree was restored. */
+  private nativeApprovalSessionBinding(
+    envelope: DiagnosticSessionEnvelope,
+    current: LoadedDiagnosticSession,
+  ): NativeApprovalSessionBinding {
+    const state = current.diagnostic_session.state;
+    if (state.lifecycle !== "active") {
+      throw new DiagnosticSafetyError(
+        "Native approval requires an active diagnostic session.",
+      );
+    }
+    if (!state.codex_thread_id) {
+      throw new DiagnosticSafetyError(
+        "Native approval requires the persisted diagnostic thread identity.",
+      );
+    }
+    return {
+      report_id: envelope.report_id,
+      repository: envelope.repository,
+      issue_number: envelope.issue_number,
+      backend_id: state.backend_id,
+      diagnostic_session_identity: state.worktree.identity,
+      worktree_identity: current.diagnostic_session.state.worktree.identity,
+      persistent_thread_id: state.codex_thread_id,
+    };
+  }
+
+  /** Rejects a stale, mismatched, finalized, or threadless broker binding. */
+  private assertNativeApprovalBinding(
+    envelope: DiagnosticSessionEnvelope,
+    current: LoadedDiagnosticSession,
+    binding: NativeApprovalSessionBinding,
+  ): void {
+    const expected = this.nativeApprovalSessionBinding(envelope, current);
+    if (
+      binding.report_id !== expected.report_id ||
+      binding.repository !== expected.repository ||
+      binding.issue_number !== expected.issue_number ||
+      binding.backend_id !== expected.backend_id ||
+      binding.diagnostic_session_identity !==
+        expected.diagnostic_session_identity ||
+      binding.worktree_identity !== expected.worktree_identity ||
+      binding.persistent_thread_id !== expected.persistent_thread_id
+    ) {
+      throw new DiagnosticSafetyError(
+        "Native approval binding no longer matches the active Root-managed diagnostic session.",
+      );
+    }
+  }
+
   /** Shapes all deterministic reconciliation conflicts for Root callers. */
   private completionNeedsInput(
     reportId: string,
@@ -817,4 +954,22 @@ function validateCompletionReconciliationState(input: {
     return "The observed diagnostic worktree is not bound to the persisted Codex thread.";
   }
   return undefined;
+}
+
+/** Compares the fixed sanitized approval-evidence shape without provider data. */
+function sameNativeApprovalTerminal(
+  left: NativeApprovalTerminalEvidence,
+  right: NativeApprovalTerminalEvidence,
+): boolean {
+  return (
+    left.schema_version === right.schema_version &&
+    left.approval_id === right.approval_id &&
+    left.backend_id === right.backend_id &&
+    left.diagnostic_session_identity === right.diagnostic_session_identity &&
+    left.turn_id === right.turn_id &&
+    left.status === right.status &&
+    left.decision === right.decision &&
+    left.reason === right.reason &&
+    left.recorded_at === right.recorded_at
+  );
 }
