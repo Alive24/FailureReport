@@ -52,7 +52,7 @@ workpad_templates:
   forge_rework_blocked: ../template/workpad/rework-run.md
 
 polling:
-  interval_ms: 5000
+  interval_ms: 50000
 
 artifacts:
   root: ../artifacts
@@ -63,7 +63,7 @@ workspace:
 
 main_lane:
   backend: codex
-  max_concurrent_agents: 1
+  max_concurrent_agents: 3
   max_turns: 3
   max_retry_backoff_ms: 300000
 
@@ -85,11 +85,11 @@ review_lane:
   agy_command: /Users/chuntengxiao/.local/bin/agy
   agy_model: "Gemini 3.1 Pro (High)"
   timeout_ms: 1200000
-  max_concurrent_workers: 1
+  max_concurrent_workers: 3
 
 merge_lane:
   agent_backend: codex
-  max_concurrent_workers: 1
+  max_concurrent_workers: 3
 
 quality_gate:
   llm:
