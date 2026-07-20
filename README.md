@@ -74,7 +74,7 @@ To use the public Root MCP surface through Codex, start Eve (and therefore its d
 pnpm --filter @Alive24/FailureReport dev
 ```
 
-Then load the repository-local Codex plugin at `packages/codex-plugin/failure-report`. Its `.mcp.json` starts the external `@failure-report/mcp-adapter` wrapper, which exposes the single `failure_report` tool and calls the default Eve Channel. `FAILURE_REPORT_EVE_HOST` can point that wrapper at a deployed Root; set `FAILURE_REPORT_EVE_BEARER_TOKEN` when the Eve Channel requires bearer auth.
+The command above runs `eve dev --no-ui`; when `FAILURE_REPORT_EVE_HOST` is unset, the adapter-owned local default is `http://127.0.0.1:2000`. This fallback is only for that local development path. Then load the repository-local Codex plugin at `packages/codex-plugin/failure-report`. Its `.mcp.json` starts the external `@failure-report/mcp-adapter` wrapper, which exposes the single `failure_report` tool and calls the default Eve Channel. `FAILURE_REPORT_EVE_HOST` can point the wrapper at a deployed Root, and `FAILURE_REPORT_EVE_BEARER_TOKEN` remains optional for Channels that require bearer auth.
 
 The local MCP wrapper persists only Eve's serialized session cursor in a user-private state file, so an existing-Issue retry can resume after the wrapper process restarts. Set `FAILURE_REPORT_MCP_SESSION_STORE` to place that file on a managed state volume; it contains continuation tokens and should remain readable only by the operating user. The public request contract never accepts a session-store path.
 
