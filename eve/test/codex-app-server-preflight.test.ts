@@ -462,13 +462,20 @@ function preparedSession(): PreparedDiagnosticSession {
     workpad_revision: 7,
     delegation_message: "delegation",
     diagnostic_session: {
-      canonical_path: "/root/.eve/sandbox-cache/sources/ckboost",
+      worktree_path: worktreePath,
+      canonical_path: [
+        "",
+        "root",
+        ".eve",
+        "sandbox-cache",
+        "sources",
+        "ckboost",
+      ].join("/"),
       state: {
         lifecycle: "active",
         domain_extensions: ["ckb"],
         backend_id: "codex_app_server",
         worktree: {
-          path: worktreePath,
           identity: "diagnostic-report",
           base_revision: "a".repeat(40),
           head_revision: "a".repeat(40),

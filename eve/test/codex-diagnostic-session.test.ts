@@ -113,7 +113,7 @@ describe("Codex diagnostic session", () => {
       "ckboost-issue-54",
     );
     const skillLink = nativeSkillLink(
-      allocated.state.worktree.path,
+      allocated.worktree_path,
       ckbSkillName,
     );
 
@@ -133,7 +133,7 @@ describe("Codex diagnostic session", () => {
           "worktree",
           "add",
           "--detach",
-          allocated.state.worktree.path,
+          allocated.worktree_path,
           harness.report.target.revision,
         ],
       }),
@@ -186,12 +186,12 @@ describe("Codex diagnostic session", () => {
     expect(allocated.state.domain_extensions).toEqual(["ckb", "evm"]);
     expect(
       harness.paths.linkTarget(
-        nativeSkillLink(allocated.state.worktree.path, ckbSkillName),
+        nativeSkillLink(allocated.worktree_path, ckbSkillName),
       ),
     ).toBe(ckbSkillSource);
     expect(
       harness.paths.linkTarget(
-        nativeSkillLink(allocated.state.worktree.path, evmSkillName),
+        nativeSkillLink(allocated.worktree_path, evmSkillName),
       ),
     ).toBe(evmSkillSource);
 
@@ -235,66 +235,19 @@ describe("Codex diagnostic session", () => {
     ).rejects.toThrow("not a valid v2 entry envelope");
   });
 
-  it("rehomes an unchanged legacy runtime worktree before exposing the session", async () => {
-    const harness = await createHarness({ legacyRuntimeWorktree: true });
-
-    const prepared = await harness.workpad.prepare(preparationFor(harness));
-    const rehomed = prepared.diagnostic_session.state;
-    expect(prepared.workpad_revision).toBe(1);
-    expect(rehomed.worktree.path).toBe(
-      join(worktreeRoot, rehomed.worktree.identity),
-    );
-    expect(rehomed.codex_thread_id).toBeUndefined();
-    expect(harness.currentReport().diagnostic_session?.worktree.path).toBe(
-      rehomed.worktree.path,
-    );
-    expect(
-      harness.calls.some((call) => call.cwd.startsWith("/former-root/")),
-    ).toBe(false);
-
-    const resumed = await harness.workpad.prepare(preparationFor(harness));
-    expect(resumed.workpad_revision).toBe(prepared.workpad_revision);
-    expect(resumed.diagnostic_session.state.worktree.path).toBe(
-      rehomed.worktree.path,
+  it("strictly rejects legacy path-bearing diagnostic sessions", async () => {
+    await expect(createHarness({ legacyRuntimeWorktree: true })).rejects.toThrow(
+      "Unrecognized key",
     );
   });
 
-  it("rehomes a legacy runtime worktree before finalizing its snapshot", async () => {
-    const harness = await createHarness({ legacyRuntimeWorktree: true });
-
-    const finalized = await harness.workpad.finalize(
-      finalizationInput(harness),
-    );
-    expect(finalized.workpad_revision).toBe(2);
-    expect(finalized.diagnostic_session.codex_thread_id).toBeUndefined();
-    expect(finalized.diagnostic_session).toMatchObject({
-      lifecycle: "finalized",
-      worktree: {
-        path: join(
-          worktreeRoot,
-          finalized.diagnostic_session.worktree.identity,
-        ),
-      },
-      diagnostic_branch: {
-        name: "diagnostic/54-ckboost-issue-54",
-      },
-    });
-  });
-
-  it("refuses to rehome a legacy runtime worktree with a divergent recorded HEAD", async () => {
-    const harness = await createHarness({
-      legacyRuntimeWorktree: true,
-      legacyRuntimeHeadDiverged: true,
-    });
-
+  it("refuses path-bearing legacy state before any Git rehydration", async () => {
     await expect(
-      harness.workpad.prepare(preparationFor(harness)),
-    ).rejects.toThrow("requires an unchanged recorded target revision");
-    expect(
-      harness.calls.some(
-        (call) => call.args[0] === "worktree" && call.args[1] === "add",
-      ),
-    ).toBe(false);
+      createHarness({
+        legacyRuntimeWorktree: true,
+        legacyRuntimeHeadDiverged: true,
+      }),
+    ).rejects.toThrow("Unrecognized key");
   });
 
   it("rebuilds only a missing native skill symlink and rejects unsafe replacements", async () => {
@@ -303,10 +256,7 @@ describe("Codex diagnostic session", () => {
       harness.report,
       "ckboost-issue-54",
     );
-    const skillLink = nativeSkillLink(
-      allocated.state.worktree.path,
-      ckbSkillName,
-    );
+    const skillLink = nativeSkillLink(allocated.worktree_path, ckbSkillName);
 
     harness.paths.removeLink(skillLink);
     await expect(

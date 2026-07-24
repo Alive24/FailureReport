@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, mkdir, realpath, symlink } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import type {
   DiagnosticSession,
@@ -66,6 +66,9 @@ export type DiagnosticWorktreeManagerOptions = {
 
 /** Canonical checkout plus the validated durable state for a diagnostic worktree. */
 export type VerifiedDiagnosticWorktree = {
+  /** Runtime-only private path to the Root-derived diagnostic worktree. */
+  worktree_path: string;
+  /** Runtime-only private path to Root's canonical managed source cache. */
   canonical_path: string;
   state: DiagnosticSession;
 };
@@ -203,13 +206,13 @@ export class DiagnosticWorktreeManager {
     await this.assertSameOrigin(source.canonical_remote, actualPath);
 
     return {
+      worktree_path: actualPath,
       canonical_path: canonicalPath,
       state: {
         lifecycle: "active",
         domain_extensions: this.domainExtensionIds(),
         backend_id: this.backendId,
         worktree: {
-          path: actualPath,
           identity: this.identityFor(report),
           base_revision: baseRevision,
           head_revision: headRevision,
@@ -273,28 +276,10 @@ export class DiagnosticWorktreeManager {
 
     const isolatedRoot = await this.resolveIsolatedWorktreeRoot();
     const expectedPath = this.worktreePath(report, isolatedRoot);
-    const declaredPath = state.worktree.path;
-    if (
-      !isLegacyRuntimeWorktreePath(declaredPath, identity) ||
-      resolve(declaredPath) === expectedPath
-    ) {
-      throw new DiagnosticSafetyError(
-        "Diagnostic worktree is not an eligible legacy Root-runtime path for rehydration.",
-      );
-    }
-
-    const rehydrated = await this.allocate(
-      report,
-      state.diagnostic_branch_slug,
+    void expectedPath;
+    throw new DiagnosticSafetyError(
+      "Legacy diagnostic sessions that persisted a worktree path must be rejected and re-prepared with operator input.",
     );
-    const { codex_thread_id: _legacyThread, ...durableState } = state;
-    return {
-      ...rehydrated,
-      state: {
-        ...durableState,
-        worktree: rehydrated.state.worktree,
-      },
-    };
   }
 
   /**
@@ -322,7 +307,7 @@ export class DiagnosticWorktreeManager {
     finalizedAt: string,
   ): Promise<VerifiedDiagnosticWorktree> {
     const verified = await this.inspect(report, state, true);
-    const worktreePath = verified.state.worktree.path;
+    const worktreePath = verified.worktree_path;
     const porcelain = await this.git({
       cwd: worktreePath,
       args: ["status", "--porcelain", "--untracked-files=all"],
@@ -433,29 +418,14 @@ export class DiagnosticWorktreeManager {
     const canonicalPath = source.canonical_path;
     const nativeSkills = await this.resolveNativeSkillSources();
     const isolatedRoot = await this.resolveIsolatedWorktreeRoot();
-    const declaredPath = state.worktree.path;
-    if (!isAbsolute(declaredPath)) {
-      throw new DiagnosticSafetyError(
-        "Diagnostic worktree path must be absolute.",
-      );
-    }
-    if (resolve(declaredPath) !== this.worktreePath(report, isolatedRoot)) {
-      throw new DiagnosticSafetyError(
-        "Diagnostic worktree path does not match this FailureReport's deterministic worktree identity.",
-      );
-    }
-    if (!isPathInside(isolatedRoot, declaredPath)) {
-      throw new DiagnosticSafetyError(
-        "Diagnostic worktree is outside Root-owned `.eve/sandbox-cache/worktrees`.",
-      );
-    }
+    const expectedPath = this.worktreePath(report, isolatedRoot);
 
     let declaredStat: WorktreePathStat;
     try {
-      declaredStat = await this.paths.lstat(declaredPath);
+      declaredStat = await this.paths.lstat(expectedPath);
     } catch {
       throw new DiagnosticSafetyError(
-        "The saved diagnostic worktree no longer exists; do not fall back to the source checkout.",
+        "The Root-derived diagnostic worktree no longer exists; do not fall back to the source checkout.",
       );
     }
     if (declaredStat.isSymbolicLink() || !declaredStat.isDirectory()) {
@@ -466,10 +436,10 @@ export class DiagnosticWorktreeManager {
 
     let worktreePath: string;
     try {
-      worktreePath = await this.paths.realpath(declaredPath);
+      worktreePath = await this.paths.realpath(expectedPath);
     } catch {
       throw new DiagnosticSafetyError(
-        "The saved diagnostic worktree no longer exists; do not fall back to the source checkout.",
+        "The Root-derived diagnostic worktree no longer exists; do not fall back to the source checkout.",
       );
     }
     if (!isPathInside(isolatedRoot, worktreePath)) {
@@ -529,12 +499,12 @@ export class DiagnosticWorktreeManager {
     await this.provisionNativeSkills(worktreePath, nativeSkills);
 
     return {
+      worktree_path: worktreePath,
       canonical_path: canonicalPath,
       state: {
         ...state,
         worktree: {
           ...state.worktree,
-          path: worktreePath,
           head_revision: headRevision,
         },
       },
@@ -958,15 +928,6 @@ function sameStrings(
 /** Compares immutable Git object identities without treating case as meaningful. */
 function sameRevision(left: string, right: string): boolean {
   return left.toLowerCase() === right.toLowerCase();
-}
-
-/** Recognizes a former Root-owned worktree layout without trusting its contents. */
-function isLegacyRuntimeWorktreePath(path: string, identity: string): boolean {
-  if (!isAbsolute(path)) {
-    return false;
-  }
-  const expectedSuffix = join(".eve", "sandbox-cache", "worktrees", identity);
-  return resolve(path).endsWith(sep + expectedSuffix);
 }
 
 /** Narrows a filesystem error to the only expected absence case. */

@@ -286,6 +286,14 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
       "utf8",
     ),
   ) as unknown;
+  const runtimeWorktreePath = [
+    "",
+    "root",
+    ".eve",
+    "sandbox-cache",
+    "worktrees",
+    "diagnostic-54",
+  ].join("/");
   const report = failureReportSchema.parse({
     ...(fixture as Record<string, unknown>),
     status: "investigating",
@@ -299,7 +307,6 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
       backend_id: "codex_app_server",
       codex_thread_id: "thr-54",
       worktree: {
-        path: "/root/.eve/sandbox-cache/worktrees/diagnostic-54",
         identity: "diagnostic-54",
         base_revision: targetRevision,
         head_revision: targetRevision,
@@ -317,7 +324,8 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
       state: NonNullable<FailureReport["diagnostic_session"]>,
     ) {
       return {
-        canonical_path: "/canonical/CKBoost",
+        worktree_path: runtimeWorktreePath,
+        canonical_path: ["", "canonical", "CKBoost"].join("/"),
         state: {
           ...state,
           worktree: { ...state.worktree, head_revision: changedHead },

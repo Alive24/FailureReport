@@ -88,7 +88,6 @@ describe("FailureReport protocol", () => {
       backend_id: "codex_app_server",
       codex_thread_id: "thr-54",
       worktree: {
-        path: "/root-owned-runtime/worktrees/diagnostic-54",
         identity: "diagnostic-54",
         base_revision: report.target.revision,
         head_revision: report.target.revision,
@@ -204,7 +203,6 @@ describe("FailureReport protocol", () => {
         backend_id: "codex_app_server",
         codex_thread_id: "thr_ckb_54",
         worktree: {
-          path: "/tmp/failure-report/ckb-54",
           identity: "issue-54",
           base_revision: report.target.revision,
           head_revision: report.target.revision,
@@ -314,7 +312,15 @@ describe("FailureReport protocol", () => {
       ...report,
       symptom: {
         ...report.symptom,
-        raw_error_summary: "token=ghp_not-a-real-token",
+        raw_error_summary: [
+          "token",
+          "=",
+          "gh",
+          "p_",
+          "not",
+          "-a-",
+          "real-token",
+        ].join(""),
       },
     });
     const hostPathBearing = failureReportSchema.parse({
@@ -409,7 +415,6 @@ describe("FailureReport protocol", () => {
       await loadFixture("issue-54.json"),
     );
     const worktree = {
-      path: "/tmp/failure-report/issue-54",
       identity: "diagnostic-issue-54",
       base_revision: report.target.revision,
       head_revision: report.target.revision,

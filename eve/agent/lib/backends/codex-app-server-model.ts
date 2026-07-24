@@ -242,7 +242,7 @@ async function startDirectCodexTurn(
   const loaded = await options.workpad.loadForDiagnosticSession(
     options.envelope,
   );
-  const cwd = loaded.diagnostic_session.state.worktree.path;
+  const cwd = loaded.diagnostic_session.worktree_path;
   const process = await options.host_runtime.startAppServer({
     executable: options.config.codex_path,
     cwd,

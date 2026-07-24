@@ -142,7 +142,6 @@ export const githubIssueContextSchema = z
 /** Validates the immutable identity and current revision of an isolated worktree. */
 export const diagnosticWorktreeSchema = z
   .object({
-    path: z.string().min(1),
     identity: z.string().min(1),
     base_revision: immutableGitRevisionSchema,
     head_revision: immutableGitRevisionSchema,

@@ -73,7 +73,6 @@ type DiagnosticSession = {
   codex_thread_id?: string;
   worktree: {
     identity: string;
-    path: string;
     base_revision: string;
     head_revision: string;
   };
