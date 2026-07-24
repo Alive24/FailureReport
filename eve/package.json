@@ -8,7 +8,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --exclude '**/.eve/**'",
+    "dev:preflight": "pnpm --filter @failure-report/protocol --filter @failure-report/ckb-domain-pack run build",
+    "predev": "pnpm run dev:preflight",
     "dev": "eve dev --no-ui",
     "eve:info": "eve info",
     "eval": "eve eval"
