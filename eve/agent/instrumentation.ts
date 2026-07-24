@@ -17,8 +17,12 @@ export default defineCatalystEveInstrumentation({
     "failure_report.component": "eve-root",
     "failure_report.trace_guide.url":
       "https://docs.inference.net/integrations/traces/eve.md",
+    "failure_report.trace_guide.retrieved_at":
+      "2026-07-24T18:21:08.942664+00:00",
     "failure_report.trace_guide.sha256":
       "4cb9dcf2e3537f4f1cb7be1644bfb13d07e25754baf8c25cad335cdfd10a5c2e",
+    "failure_report.trace_guide.selection":
+      "Current official catalog ranks Vercel Eve Traces for @inference/tracing and Eve 0.24.4.",
   },
   batching: "simple",
 });

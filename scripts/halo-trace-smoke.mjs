@@ -11,7 +11,10 @@ import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { SEMRESATTRS_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 
-const repositoryRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+const repositoryRoot = dirname(
+  fileURLToPath(new URL("../package.json", import.meta.url)),
+);
+const canonicalWorkpadMarker = "<!-- failure-report-workpad -->";
 const artifactPath = join(
   repositoryRoot,
   ".shea/artifacts/halo/traces/failure-report-trace-smoke.jsonl",
@@ -32,8 +35,8 @@ process.env.CATALYST_SERVICE_VERSION ??= "halo-issue-26-trace-smoke";
 async function main() {
   await assertNativeInstrumentationFile();
 
-const jsonlExporter = new AtomicJsonlSpanExporter(artifactPath);
-const otlpExporter = new StrictExporter(
+  const jsonlExporter = new AtomicJsonlSpanExporter(artifactPath);
+  const otlpExporter = new StrictExporter(
   new OTLPTraceExporter({
     url: otlpEndpoint,
     headers: process.env.CATALYST_OTLP_TOKEN
@@ -42,8 +45,8 @@ const otlpExporter = new StrictExporter(
   }),
   `OTLP export to ${otlpEndpoint}`,
 );
-const provider = new NodeTracerProvider({
-  resource: resourceFromAttributes({
+  const provider = new NodeTracerProvider({
+    resource: resourceFromAttributes({
     [SEMRESATTRS_SERVICE_NAME]: "failure-report-eve-root",
     "service.name": "failure-report-eve-root",
     "service.version": process.env.CATALYST_SERVICE_VERSION,
@@ -51,8 +54,12 @@ const provider = new NodeTracerProvider({
     "telemetry.sdk.language": "nodejs",
     "failure_report.trace_guide.url":
       "https://docs.inference.net/integrations/traces/eve.md",
+    "failure_report.trace_guide.retrieved_at":
+      "2026-07-24T18:21:08.942664+00:00",
     "failure_report.trace_guide.sha256":
       "4cb9dcf2e3537f4f1cb7be1644bfb13d07e25754baf8c25cad335cdfd10a5c2e",
+    "failure_report.trace_guide.selection":
+      "Current catalog ranks Vercel Eve Traces for @inference/tracing and eve 0.24.4.",
   }),
   spanProcessors: [
     new SimpleSpanProcessor(new MultiSpanExporter([jsonlExporter, otlpExporter])),
@@ -67,13 +74,14 @@ try {
   await captureRepresentativeFailureReportFlow(tracer);
   await provider.forceFlush();
   await provider.shutdown();
-  await verifyCanonicalJsonl(artifactPath);
+  const verification = await verifyCanonicalJsonl(artifactPath);
   console.log(
     JSON.stringify(
       {
         artifact: artifactPath,
         otlp_endpoint: otlpEndpoint,
         spans: jsonlExporter.exportedSpanCount,
+        verification,
       },
       null,
       2,
@@ -97,6 +105,7 @@ async function assertNativeInstrumentationFile() {
     "defineCatalystEveInstrumentation",
     "failure-report-root",
     "failure-report-eve-root",
+    "2026-07-24T18:21:08.942664+00:00",
   ];
   for (const marker of required) {
     if (!contents.includes(marker)) {
@@ -106,12 +115,21 @@ async function assertNativeInstrumentationFile() {
 }
 
 async function captureRepresentativeFailureReportFlow(tracer) {
+  const expectedNativeSpanNames = ["ai.eve.turn", "invoke_agent", "execute_tool"];
+  const syntheticAgentAttributes = {
+    "agent.name": "failure-report-root",
+    "agent.id": "failure-report-root",
+    "gen_ai.system": "eve",
+    "failure_report.trace.mode": "synthetic_exporter_contract_smoke",
+  };
+
   await withSpan(
     tracer,
     "failure_report.diagnostic_session",
     {
       kind: SpanKind.INTERNAL,
       attributes: {
+        ...syntheticAgentAttributes,
         "openinference.span.kind": "CHAIN",
         "input.value": JSON.stringify({
           report_id: "halo-issue-26-smoke",
@@ -125,6 +143,7 @@ async function captureRepresentativeFailureReportFlow(tracer) {
         "failure_report.native_expected.root_turn_span": "ai.eve.turn",
         "failure_report.native_expected.delegated_agent_span": "invoke_agent",
         "failure_report.native_expected.tool_span": "execute_tool",
+        ...nativeCoverageGapAttributes(expectedNativeSpanNames),
       },
     },
     async () => {
@@ -134,6 +153,7 @@ async function captureRepresentativeFailureReportFlow(tracer) {
         {
           kind: SpanKind.INTERNAL,
           attributes: {
+            ...syntheticAgentAttributes,
             "openinference.span.kind": "CHAIN",
             "failure_report.lifecycle.boundary": "diagnostic_session.prepare",
             "tool.name": "prepare_diagnostic_session",
@@ -157,6 +177,7 @@ async function captureRepresentativeFailureReportFlow(tracer) {
         {
           kind: SpanKind.CLIENT,
           attributes: {
+            ...syntheticAgentAttributes,
             "openinference.span.kind": "TOOL",
             "failure_report.lifecycle.boundary": "codex_app_server.session",
             "rpc.system": "jsonrpc",
@@ -172,6 +193,7 @@ async function captureRepresentativeFailureReportFlow(tracer) {
             {
               kind: SpanKind.CLIENT,
               attributes: {
+                ...syntheticAgentAttributes,
                 "openinference.span.kind": "LLM",
                 "llm.model_name": "codex-app-server",
                 "gen_ai.system": "codex",
@@ -193,16 +215,27 @@ async function captureRepresentativeFailureReportFlow(tracer) {
         {
           kind: SpanKind.CLIENT,
           attributes: {
+            ...syntheticAgentAttributes,
             "openinference.span.kind": "TOOL",
             "failure_report.lifecycle.boundary": "github_handoff.workpad",
             "tool.name": "github_issue_workpad",
-            "input.value": JSON.stringify({ marker: "<!-- shea-halo-workpad -->" }),
+            "failure_report.workpad.marker": canonicalWorkpadMarker,
+            "input.value": JSON.stringify({ marker: canonicalWorkpadMarker }),
             "output.value": JSON.stringify({ status: "workpad-ready" }),
           },
         },
         async () => undefined,
       );
     },
+  );
+}
+
+function nativeCoverageGapAttributes(expectedNativeSpanNames) {
+  return Object.fromEntries(
+    expectedNativeSpanNames.flatMap((spanName) => [
+      [`failure_report.native_span_present.${spanName}`, false],
+      [`failure_report.coverage_gap.${spanName}`, true],
+    ]),
   );
 }
 
@@ -383,6 +416,51 @@ async function verifyCanonicalJsonl(outputPath) {
       }
     }
   }
+  const bySpanId = new Map(records.map((record) => [record.span_id, record]));
+  const roots = records.filter((record) => !record.parent_span_id);
+  if (roots.length !== 1) {
+    throw new Error(`Expected exactly one root span; captured ${roots.length}.`);
+  }
+  for (const record of records) {
+    if (record.attributes["agent.name"] !== "failure-report-root") {
+      throw new Error(`Span ${record.name} is missing FailureReport agent identity.`);
+    }
+    if (record.parent_span_id && !bySpanId.has(record.parent_span_id)) {
+      throw new Error(`Span ${record.name} has a missing parent ${record.parent_span_id}.`);
+    }
+    if (record.parent_span_id) {
+      const parent = bySpanId.get(record.parent_span_id);
+      const childStart = Date.parse(record.start_time);
+      const childEnd = Date.parse(record.end_time);
+      const parentStart = Date.parse(parent.start_time);
+      const parentEnd = Date.parse(parent.end_time);
+      if (childStart < parentStart || childEnd > parentEnd + 1) {
+        throw new Error(`Span ${record.name} is outside parent time containment.`);
+      }
+    }
+  }
+  const names = new Set(records.map((record) => record.name));
+  const expectedNativeSpanNames = ["ai.eve.turn", "invoke_agent", "execute_tool"];
+  const nativeSpanCoverage = Object.fromEntries(
+    expectedNativeSpanNames.map((spanName) => [spanName, names.has(spanName)]),
+  );
+  const root = roots[0];
+  for (const [spanName, present] of Object.entries(nativeSpanCoverage)) {
+    if (root.attributes[`failure_report.native_span_present.${spanName}`] !== present) {
+      throw new Error(`Native span coverage metadata is inconsistent for ${spanName}.`);
+    }
+  }
+  const llmSpan = records.find((record) => record.name === "failure_report.codex_model_turn");
+  const promptTokens = llmSpan?.attributes["llm.token_count.prompt"];
+  const completionTokens = llmSpan?.attributes["llm.token_count.completion"];
+  const totalTokens = llmSpan?.attributes["llm.token_count.total"];
+  if (promptTokens + completionTokens !== totalTokens) {
+    throw new Error("LLM token counts are inconsistent.");
+  }
+  return {
+    native_span_coverage: nativeSpanCoverage,
+    root_span: root.name,
+  };
 }
 
 await main();
