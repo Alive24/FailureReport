@@ -684,8 +684,8 @@
     ]
   },
   "handoff": {
-    "todo_status": "ready_with_assumptions",
-    "gate_decision": "Ready With Assumptions",
+    "todo_status": "ready",
+    "gate_decision": "Ready",
     "uat_required": true,
     "goal": "Make Nostr-backed quest submissions fail safely, remain diagnosable, and recover without allowing an unverified replacement to become the durable chain reference.",
     "why_now": "The failure blocks an active hackathon participant from reviewing and editing required submission content and exposes a broader reliability gap.",
@@ -738,10 +738,10 @@
         "Confirm the GitHub issue remains open until reporter or equivalent UAT evidence is recorded."
       ]
     },
-    "remaining_assumptions": [
-      "Two verified relay copies are sufficient for submission-class durability.",
-      "One verified copy remains acceptable for generic social events.",
-      "The replacement event is the authoritative eight-answer content for recovery."
+    "residual_risks": [
+      "The exact browser or network condition that triggered the reporter's failure.",
+      "Why the reporter previously saw eight answers when the old persisted event had only one non-empty response.",
+      "Whether the reporter completed successful post-deployment UAT."
     ]
   },
   "domain": {

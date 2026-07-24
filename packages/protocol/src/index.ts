@@ -1,5 +1,20 @@
 import { z } from "zod";
 
+import {
+  humanInputRequestSchema,
+  implementationHandoffSchema,
+} from "./handoff.js";
+
+export {
+  HandoffNeedsInputError,
+  humanInputRequestSchema,
+  implementationHandoffSchema,
+  renderDiagnosticHandoff,
+  type DiagnosticHandoff,
+  type HumanInputRequest,
+  type ImplementationHandoff,
+} from "./handoff.js";
+
 /**
  * Canonical runtime and persistence contract for FailureReport.
  *
@@ -682,15 +697,9 @@ export const failureReportSchema = z
       .strict(),
     handoff: z
       .object({
-        todo_status: z.enum([
-          "not_ready",
-          "ready",
-          "ready_with_assumptions",
-          "published",
-        ]),
+        todo_status: z.enum(["not_ready", "ready", "published"]),
         gate_decision: z.enum([
           "Ready",
-          "Ready With Assumptions",
           "Need to Clarify",
           "Too Broad",
           "Blocked",
@@ -704,7 +713,32 @@ export const failureReportSchema = z
         guardrails: stringListSchema,
         required_outcomes: stringListSchema,
         verification: verificationSchema,
-        remaining_assumptions: stringListSchema,
+        /** Non-blocking concerns that cannot change the implementation contract. */
+        residual_risks: stringListSchema,
+        /** One durable question specification while material uncertainty remains. */
+        human_input: z
+          .object({
+            remaining_material_unknown: z.string().min(1),
+            viable_options: stringListSchema
+              .min(2)
+              .refine(
+                (options) => new Set(options).size === options.length,
+                "human input options must be unique",
+              ),
+            question: z
+              .string()
+              .min(1)
+              .refine(
+                (question) =>
+                  question.trim().endsWith("?") &&
+                  [...question].filter((character) => character === "?")
+                    .length === 1,
+                "human input request must contain exactly one question",
+              ),
+            resume_condition: z.string().min(1),
+          })
+          .strict()
+          .optional(),
         issue_ref: z.string().min(1).optional(),
       })
       .strict(),
@@ -719,6 +753,75 @@ export const failureReportSchema = z
   })
   .strict()
   .superRefine((report, context) => {
+    const humanInput = report.handoff.human_input;
+    if (
+      report.handoff.todo_status === "ready" &&
+      report.handoff.gate_decision !== "Ready"
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "todo_status ready requires the fully Ready gate decision",
+        path: ["handoff", "gate_decision"],
+      });
+    }
+    if (
+      report.handoff.gate_decision === "Ready" &&
+      !["ready", "published"].includes(report.handoff.todo_status)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "the Ready gate requires todo_status ready or a separately acknowledged published state",
+        path: ["handoff", "todo_status"],
+      });
+    }
+    if (
+      humanInput &&
+      (report.status !== "needs_input" ||
+        report.handoff.todo_status !== "not_ready" ||
+        report.handoff.gate_decision !== "Need to Clarify")
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "human_input requires needs_input status, not_ready todo status, and Need to Clarify gate",
+        path: ["handoff", "human_input"],
+      });
+    }
+    if (
+      report.handoff.uat_required &&
+      report.handoff.verification.uat.length === 0
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "uat_required requires at least one explicit UAT step",
+        path: ["handoff", "verification", "uat"],
+      });
+    }
+    const remainingUncertainty = new Set(
+      report.conclusion.remaining_uncertainty,
+    );
+    const classifiedUncertainty = new Set(report.handoff.residual_risks);
+    if (humanInput) {
+      classifiedUncertainty.add(humanInput.remaining_material_unknown);
+    }
+    if (
+      ((report.status === "todo_ready" &&
+        report.handoff.gate_decision === "Ready") ||
+        humanInput) &&
+      (remainingUncertainty.size !== classifiedUncertainty.size ||
+        [...remainingUncertainty].some(
+          (uncertainty) => !classifiedUncertainty.has(uncertainty),
+        ))
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "every remaining uncertainty must be classified as a non-blocking residual risk or the one material human-input unknown",
+        path: ["conclusion", "remaining_uncertainty"],
+      });
+    }
+
     const completions = report.diagnostic_completions ?? [];
     if (completions.length === 0) {
       return;
@@ -830,6 +933,51 @@ export const rootRequestSchema = z
         path: ["issue_selector"],
       });
     }
+    if (
+      request.issue &&
+      reportIssue &&
+      (request.issue.repository !== reportIssue.repository ||
+        request.issue.issue_number !== reportIssue.issue_number ||
+        request.issue.workpad_revision !== reportIssue.workpad_revision)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "issue context must match report.shared_context identity and revision",
+        path: ["issue"],
+      });
+    }
+
+    if (request.operation === "render_handoff") {
+      if (!request.report?.shared_context) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "render_handoff requires the caller's persisted report binding so Root can reject stale state",
+          path: ["report"],
+        });
+      }
+      if (
+        reportIssue &&
+        (!reportIssue.workpad_logical_session_id ||
+          !reportIssue.workpad_entry_id)
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "render_handoff requires a persisted workpad logical-session and entry identity",
+          path: ["report", "shared_context"],
+        });
+      }
+      if (request.issue_selector) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "render_handoff requires a revision-bound report, not a minimal Issue selector",
+          path: ["issue_selector"],
+        });
+      }
+    }
   });
 
 /** Validates the only result shape adapters are allowed to return to callers. */
@@ -840,9 +988,34 @@ export const rootResultSchema = z
     report: failureReportSchema.optional(),
     issue: githubIssueContextSchema.optional(),
     summary: z.string().min(1),
-    handoff_markdown: z.string().optional(),
+    implementation_handoff: implementationHandoffSchema.optional(),
+    human_input_request: humanInputRequestSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((result, context) => {
+    if (result.implementation_handoff && result.human_input_request) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "implementation_handoff and human_input_request are mutually exclusive",
+        path: ["implementation_handoff"],
+      });
+    }
+    if (result.implementation_handoff && result.status !== "completed") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "implementation_handoff requires completed Root status",
+        path: ["status"],
+      });
+    }
+    if (result.human_input_request && result.status !== "needs_input") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "human_input_request requires needs_input Root status",
+        path: ["status"],
+      });
+    }
+  });
 
 /** Typed FailureReport value inferred from the durable schema. */
 export type FailureReport = z.infer<typeof failureReportSchema>;

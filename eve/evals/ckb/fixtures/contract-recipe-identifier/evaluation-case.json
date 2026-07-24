@@ -196,9 +196,9 @@
       "meaning": "Exact root cause, minimal remediation, and correctly scoped verification."
     },
     {
-      "name": "Todo-ready with assumptions",
+      "name": "Ready with residual risk",
       "minimum_score": 75,
-      "meaning": "Correct diagnosis with a small explicit verification gap."
+      "meaning": "Correct executable diagnosis with only a non-blocking verification limitation."
     },
     {
       "name": "Needs clarification",

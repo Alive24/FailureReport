@@ -8,7 +8,10 @@ import {
   diagnosticCompletionRecordSchema,
   failureReportSchema,
   githubIssueSelectorSchema,
+  humanInputRequestSchema,
+  implementationHandoffSchema,
   parseFailureReportWorkpad,
+  renderDiagnosticHandoff,
   renderFailureReportWorkpad,
   rootRequestSchema,
   rootResultSchema,
@@ -21,6 +24,139 @@ import {
 async function loadFixture(name: string): Promise<unknown> {
   const file = new URL("./fixtures/" + name, import.meta.url);
   return JSON.parse(await readFile(file, "utf8"));
+}
+
+/** Creates a complete finalized report suitable for deterministic handoff tests. */
+async function finalizedReadyReport(revision = 7): Promise<FailureReport> {
+  const report = failureReportSchema.parse(
+    await loadFixture("contract-recipe-identifier.json"),
+  );
+  const logicalSessionId = "github-issue/Alive24/CKBoost/54/" + report.id;
+  const entryId = logicalSessionId + "/revision-" + String(revision);
+  const sessionIdentity = "diagnostic-54-contract-recipe";
+  return failureReportSchema.parse({
+    ...report,
+    shared_context: {
+      provider: "github_issue",
+      repository: "Alive24/CKBoost",
+      issue_number: 54,
+      issue_url: "https://github.com/Alive24/CKBoost/issues/54",
+      workpad_marker: workpadMarker,
+      workpad_comment_ref: "comment-ready-54",
+      workpad_revision: revision,
+      workpad_logical_session_id: logicalSessionId,
+      workpad_entry_id: entryId,
+      workpad_producer_id: "root-gh",
+      synced_at: report.updated_at,
+    },
+    diagnostic_session: {
+      lifecycle: "finalized",
+      domain_extensions: ["ckb"],
+      backend_id: "codex_app_server",
+      codex_thread_id: "thread-ready-54",
+      worktree: {
+        path: "/root-owned/worktrees/diagnostic-54",
+        identity: sessionIdentity,
+        base_revision: report.target.revision,
+        head_revision: report.target.revision,
+      },
+      diagnostic_branch_slug: "contract-recipe-identifier",
+      diagnostic_branch: {
+        name: "diagnostic/54-contract-recipe-identifier",
+        head_revision: report.target.revision,
+        remote_name: "origin",
+        remote_ref: "refs/heads/diagnostic/54-contract-recipe-identifier",
+        remote_url:
+          "https://github.com/Alive24/CKBoost/tree/diagnostic/54-contract-recipe-identifier",
+        pushed_at: report.updated_at,
+        finalized_at: report.updated_at,
+        reuse_policy: "diagnostic_snapshot_only",
+      },
+    },
+    diagnostic_completions: [
+      {
+        schema_version: "failure-report/diagnostic-completion/v1",
+        completion_id: "diagnostic-completion/contract-recipe",
+        report_id: report.id,
+        target_revision: report.target.revision,
+        diagnostic_session_identity: sessionIdentity,
+        codex_thread_id: "thread-ready-54",
+        observed_worktree_head: report.target.revision,
+        outcome: {
+          evidence: [],
+          operation_evidence: [],
+          hypotheses: [],
+          experiments: [],
+        },
+        metadata: {
+          completed_at: report.updated_at,
+          owner: "root",
+          provider: "codex_app_server",
+        },
+      },
+    ],
+  });
+}
+
+/** Creates an unresolved report that must preserve and resume its active session. */
+async function activeHumanInputReport(): Promise<FailureReport> {
+  const report = failureReportSchema.parse(await loadFixture("issue-54.json"));
+  const revision = 5;
+  const logicalSessionId = "github-issue/Alive24/CKBoost/54/" + report.id;
+  return failureReportSchema.parse({
+    ...report,
+    status: "needs_input",
+    conclusion: {
+      ...report.conclusion,
+      remaining_uncertainty: [
+        "The required submission durability quorum is a product policy decision.",
+      ],
+    },
+    shared_context: {
+      provider: "github_issue",
+      repository: "Alive24/CKBoost",
+      issue_number: 54,
+      issue_url: "https://github.com/Alive24/CKBoost/issues/54",
+      workpad_marker: workpadMarker,
+      workpad_comment_ref: "comment-human-input-54",
+      workpad_revision: revision,
+      workpad_logical_session_id: logicalSessionId,
+      workpad_entry_id: logicalSessionId + "/revision-" + String(revision),
+      workpad_producer_id: "root-gh",
+      synced_at: report.updated_at,
+    },
+    diagnostic_session: {
+      lifecycle: "active",
+      domain_extensions: ["ckb"],
+      backend_id: "codex_app_server",
+      codex_thread_id: "thread-human-input-54",
+      worktree: {
+        path: "/root-owned/worktrees/diagnostic-human-input-54",
+        identity: "diagnostic-human-input-54",
+        base_revision: report.target.revision,
+        head_revision: report.target.revision,
+      },
+      diagnostic_branch_slug: "issue-54-human-input",
+    },
+    handoff: {
+      ...report.handoff,
+      todo_status: "not_ready",
+      gate_decision: "Need to Clarify",
+      residual_risks: [],
+      human_input: {
+        remaining_material_unknown:
+          "The required submission durability quorum is a product policy decision.",
+        viable_options: [
+          "Require two independently verified relay copies.",
+          "Require three independently verified relay copies.",
+        ],
+        question:
+          "Which verified relay-copy quorum must gate submission finalization?",
+        resume_condition:
+          "Resume this same diagnostic session after the owner selects one quorum.",
+      },
+    },
+  });
 }
 
 /** Builds a v2 entry whose report context agrees with its immutable envelope. */
@@ -72,11 +208,176 @@ describe("FailureReport protocol", () => {
       const report = failureReportSchema.parse(await loadFixture(name));
 
       expect(report.schema_version).toBe("failure-report/v1");
-      expect(["ready", "ready_with_assumptions"]).toContain(
-        report.handoff.todo_status,
-      );
+      expect(report.handoff.todo_status).toBe("ready");
     },
   );
+
+  it("rejects the removed assumption-dependent states without aliases or migration", async () => {
+    const report = failureReportSchema.parse(
+      await loadFixture("issue-54.json"),
+    );
+
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        handoff: {
+          ...report.handoff,
+          todo_status: "ready_with_assumptions",
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        handoff: {
+          ...report.handoff,
+          gate_decision: "Ready With Assumptions",
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("requires every Todo-ready uncertainty to be explicitly non-blocking", async () => {
+    const report = failureReportSchema.parse(
+      await loadFixture("contract-recipe-identifier.json"),
+    );
+
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        conclusion: {
+          ...report.conclusion,
+          remaining_uncertainty: [
+            ...report.conclusion.remaining_uncertainty,
+            "A material implementation choice is unresolved.",
+          ],
+        },
+      }),
+    ).toThrow("every remaining uncertainty must be classified");
+  });
+
+  it("requires a revision-bound persisted report for render_handoff requests", async () => {
+    const report = await finalizedReadyReport();
+
+    expect(
+      rootRequestSchema.parse({
+        request_id: "render-ready-report",
+        operation: "render_handoff",
+        report,
+      }).report,
+    ).toEqual(report);
+    expect(() =>
+      rootRequestSchema.parse({
+        request_id: "render-without-report",
+        operation: "render_handoff",
+        issue_selector: {
+          repository: "Alive24/CKBoost",
+          issue_number: 54,
+        },
+      }),
+    ).toThrow("persisted report binding");
+  });
+
+  it("renders byte-identical canonical implementation handoffs and revision-bound identities", async () => {
+    const report = await finalizedReadyReport();
+    const reordered = failureReportSchema.parse({
+      ...report,
+      evidence: [...report.evidence].reverse(),
+      handoff: {
+        ...report.handoff,
+        scope_in: [...report.handoff.scope_in].reverse(),
+        guardrails: [...report.handoff.guardrails].reverse(),
+        verification: {
+          ...report.handoff.verification,
+          automated: [...report.handoff.verification.automated].reverse(),
+        },
+      },
+    });
+    const first = renderDiagnosticHandoff(report);
+    const second = renderDiagnosticHandoff(reordered);
+    const advanced = renderDiagnosticHandoff(await finalizedReadyReport(8));
+
+    expect(first.schema_version).toBe(
+      "failure-report/implementation-handoff/v1",
+    );
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+    expect(first.markdown).toBe(second.markdown);
+    expect(first.markdown.endsWith("\n")).toBe(true);
+    const firstId = "handoff_id" in first ? first.handoff_id : first.request_id;
+    const advancedId =
+      "handoff_id" in advanced ? advanced.handoff_id : advanced.request_id;
+    expect(advancedId).not.toBe(firstId);
+    expect(implementationHandoffSchema.parse(first)).toEqual(first);
+    expect(() =>
+      implementationHandoffSchema.parse({ ...first, downstream_lane: "main" }),
+    ).toThrow();
+  });
+
+  it("renders one structured human-input request while retaining active-session identity", async () => {
+    const report = await activeHumanInputReport();
+    const rendered = renderDiagnosticHandoff(report);
+
+    expect(rendered.schema_version).toBe(
+      "failure-report/human-input-request/v1",
+    );
+    if (rendered.schema_version !== "failure-report/human-input-request/v1") {
+      throw new Error("Expected a human-input request.");
+    }
+    expect(rendered.question.match(/\?/g)).toHaveLength(1);
+    expect(rendered.diagnostic_session).toEqual({
+      identity: report.diagnostic_session?.worktree.identity,
+      lifecycle: "active",
+    });
+    expect(rendered.completed_or_exhausted_experiments.length).toBeGreaterThan(
+      0,
+    );
+    expect(rendered.eliminated_hypotheses.length).toBeGreaterThan(0);
+    expect(humanInputRequestSchema.parse(rendered)).toEqual(rendered);
+    expect(() =>
+      humanInputRequestSchema.parse({ ...rendered, tracker_status: "Todo" }),
+    ).toThrow();
+  });
+
+  it("makes Root handoff outputs explicit and mutually exclusive", async () => {
+    const implementation = renderDiagnosticHandoff(
+      await finalizedReadyReport(),
+    );
+    const humanInput = renderDiagnosticHandoff(await activeHumanInputReport());
+
+    expect(
+      rootResultSchema.parse({
+        request_id: "render-ready-54",
+        status: "completed",
+        summary: "Rendered the latest finalized handoff.",
+        implementation_handoff: implementation,
+      }).implementation_handoff,
+    ).toEqual(implementation);
+    expect(
+      rootResultSchema.parse({
+        request_id: "render-human-input-54",
+        status: "needs_input",
+        summary: "One material product decision remains.",
+        human_input_request: humanInput,
+      }).human_input_request,
+    ).toEqual(humanInput);
+    expect(() =>
+      rootResultSchema.parse({
+        request_id: "render-conflict-54",
+        status: "completed",
+        summary: "Conflicting outputs.",
+        implementation_handoff: implementation,
+        human_input_request: humanInput,
+      }),
+    ).toThrow("mutually exclusive");
+    expect(() =>
+      rootResultSchema.parse({
+        request_id: "legacy-markdown-only",
+        status: "completed",
+        summary: "Legacy output.",
+        handoff_markdown: "# Unstructured",
+      }),
+    ).toThrow();
+  });
 
   it("persists a typed Root-owned diagnostic completion with session bindings", async () => {
     const report = failureReportSchema.parse(
