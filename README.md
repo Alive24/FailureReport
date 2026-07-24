@@ -144,6 +144,58 @@ Runtime configuration is optional for that common path. These alternatives are a
 
 All credentials belong in runtime environment/secret management only. FailureReport does not put tokens, App private keys, credential output, host-local paths, or raw private evidence into the public workpad, prompts, logs, or fixtures. Non-public evidence must be retained outside GitHub and referenced only through an opaque handle.
 
+## Team-authorized GitHub Issue Channel
+
+The optional GitHub Issue Channel is a separate Eve-native ingress at `/eve/v1/github`. It does not change the default HTTP Channel in `eve/agent/channels/eve.ts`: the HTTP Channel remains governed by deployment reachability and its configured HTTP authentication. This Channel uses Eve's verified GitHub App webhook handling and only dispatches Issue timeline comments from active members of configured organization teams.
+
+It is disabled unless `FAILURE_REPORT_GITHUB_CHANNEL_POLICY` is configured. The policy is deployment-owned JSON; no Issue, Root request, MCP caller, Temporal caller, or model can select a repository, organization, team, credential, or policy path.
+
+```bash
+export FAILURE_REPORT_GITHUB_CHANNEL_BOT_NAME="failure-report"
+export FAILURE_REPORT_GITHUB_CHANNEL_POLICY='{
+  "repositories": [
+    {
+      "repository": "Acme/FailureReport",
+      "organization": "Acme",
+      "team_slugs": ["failure-report-operators"]
+    }
+  ]
+}'
+```
+
+`GITHUB_APP_SLUG` is an accepted fallback for `FAILURE_REPORT_GITHUB_CHANNEL_BOT_NAME`. Policy parsing rejects malformed entries, repository/organization mismatches, duplicate repositories, empty team lists, and repeated or invalid team slugs. Keep the policy in deployment configuration, not an Issue, workpad, model context, or adapter payload.
+
+### GitHub App setup
+
+Use Eve's native GitHub App credentials in deployment secret management:
+
+```bash
+GITHUB_APP_ID=...
+GITHUB_APP_PRIVATE_KEY=...
+GITHUB_WEBHOOK_SECRET=...
+```
+
+Point the App webhook at `https://<deployment>/eve/v1/github` and subscribe to **Issue comments** (`issue_comment`) only. Give the installation access to each configured repository, repository **Issues: read and write** for Issue replies and optional reactions, and organization **Members: read** for the per-comment team-membership lookup. GitHub App metadata read access is automatic. Do not grant Contents, Pull requests, Checks, Actions/Workflows, or broader organization permissions for this Channel.
+
+### Vercel Connect (optional)
+
+An Eve-supported Vercel Connect deployment can supply `connectGitHubCredentials("github/<uid>")` to the exported `createGithubIssueChannel()` factory instead of App-key environment variables. Connect supplies the installation token and verified-webhook provider, so keep its UID and all credential material in deployment configuration. Attach its trigger to `/eve/v1/github`, subscribe only to `issue_comment`, and grant the managed App the same repository **Issues: read and write** and organization **Members: read** access above. The policy gate and Root-only workspace boundary are unchanged.
+
+For every initial `@failure-report` mention and every accepted direct missing-input reply, the Channel uses the webhook installation token to call `GET /orgs/{org}/teams/{team_slug}/memberships/{username}` for every configured team. Only a returned `state: "active"` authorizes Root. Pending or absent membership, an unconfigured repository, missing `Members: read`, a GitHub API failure, a malformed delivery, or failed webhook verification all fail closed. A lookup failure emits only the fixed operator outcome code `failure-report.github-issue-channel.authorization-lookup-failed`, at most once per process; it never logs raw GitHub data, policy, or credentials. Rejections intentionally do not tell a commenter which policy or credential check failed.
+
+The Channel ignores PR timeline comments, review comments, Issue-open events, CI events, schedules, proactive sends, and ordinary unmentioned Issue comments. A direct reply is accepted only when the running Channel has exactly one known `ask_question` missing-information request for that Issue and the reply unambiguously answers it. Approval prompts and ambiguous correlations are never continued through GitHub. Membership is rechecked for every accepted reply; authorization is never cached.
+
+Eve's stock GitHub Channel would check a repository out on `turn.started`. FailureReport replaces just that handler: it can retain the bounded `eyes` progress reaction and native Issue replies, but it never asks Eve for a sandbox, clones, fetches, selects a revision, sets a remote, or passes a checkout path to Root or Codex. Root remains the sole owner of `.eve/sandbox-cache/` source and diagnostic-worktree lifecycle.
+
+### GitHub Channel UAT
+
+Before enabling this ingress in production, install a test App on a configured test repository and verify all of the following:
+
+- An active configured-team member can mention the bot in an Issue and receives a Root reply; then directly answer one known missing-information prompt without another mention.
+- A non-member, pending member, unconfigured repository, invalid webhook, revoked App access, and missing `Members: read` do not dispatch or continue Root and do not reveal policy details.
+- PR/review/CI/Issue-open events and ordinary Issue comments do not start a turn.
+- No Eve sandbox checkout is created; any diagnostic source or worktree is created only by Root's managed lifecycle.
+
 ## Managed GitHub Workpads
 
 Every public workpad entry carries a versioned envelope with its immutable producer, logical session, entry identity, revision, and any predecessor-comment reference. The concise status summary appears before a folded, schema-validated JSON snapshot. Root rehydrates only one valid linear lineage; it never migrates a legacy marker-only comment or guesses between candidates.
