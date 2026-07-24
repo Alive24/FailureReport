@@ -8,6 +8,8 @@ Tracked configuration:
 - workflows/shea-symphony.md contains the GitHub Project #10 and lane runtime configuration.
 - prompts/ contains the separate Main, Review, and Merge lane contracts.
 
+`workflows/` and `prompts/` are FailureReport-owned integration contracts and may be tailored to this Node/TypeScript repository. `.shea/app/` and `.shea/bin/` are the vendored Shea Symphony 2606 MVP runtime; do not patch them when changing FailureReport's tracker policy or lane instructions.
+
 Machine-local files are ignored by the repository root .gitignore:
 
 - logs/, artifacts/, and worktrees/ are runtime output.

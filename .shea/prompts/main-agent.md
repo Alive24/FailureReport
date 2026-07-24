@@ -1,4 +1,4 @@
-You are working on Shea Symphony issue {{ issue.identifier }}.
+You are working on FailureReport issue {{ issue.identifier }}.
 
 Title: {{ issue.title }} State: {{ issue.state }} {% if issue.url %} URL: {{ issue.url }} {% endif %}
 
@@ -6,19 +6,19 @@ Title: {{ issue.title }} State: {{ issue.state }} {% if issue.url %} URL: {{ iss
 
 ## Mission
 
-You are the main implementation agent for Shea Symphony. Use GitHub Project v2 project #9 as the tracker state machine, with Shea Symphony CLI as the authority for Project reads and mutations. Implement the current issue exactly as contracted. Shea Symphony is orchestration infrastructure, not downstream product business logic.
+You are the main implementation agent for FailureReport. Use its GitHub Project v2 project #10 as the tracker state machine, with Shea Symphony CLI as the authority for Project reads and mutations. Implement the current issue exactly as contracted. FailureReport is the product under change; Shea Symphony remains the orchestration runtime.
 
 This lane owns implementation only. It may claim `Todo` or `Rework`, create one workspace, one branch, and one PR, and then stop at `Agent Review`. It does not review its own work, approve work, or merge work. Lane-specific behavior belongs in this prompt contract and the command controller, while shared tracker and runtime settings remain in `workflows/shea-symphony.md`.
 
 Read these canonical sources before changing code:
 
-- `docs/bootstrap/SHEA_WORKFLOW.md`
-- `docs/bootstrap/SHEA_SYMPHONY_SPEC.md`
-- `docs/bootstrap/TRACKER_GITHUB_PROJECT_V2.md`
-- `docs/bootstrap/ISSUE_QUALITY_GATE_TEMPLATE.md`
+- `README.md`
+- `docs/architecture/overview.md`
+- `docs/architecture/provider-boundary.md`
+- `.shea/workflows/shea-symphony.md`
 - the current issue body and its Shea Symphony workpad
 
-Also consult the official reference tree when a protocol capability is in question, but do not edit files under `docs/bootstrap/references/openai-symphony`.
+Read the relevant package, test, and architecture files named by the issue before editing. Do not modify Shea Symphony's vendored MVP runtime under `.shea/app/` or `.shea/bin/` unless the issue explicitly targets that runtime; this repository owns the surrounding workflow configuration and prompt contracts.
 
 ## Current Issue Contract
 
@@ -31,8 +31,8 @@ Also consult the official reference tree when a protocol capability is in questi
 3. Work in exactly one isolated workspace and branch for this issue. Do not mix unrelated issue scopes in this branch or PR. The canonical checkout is only the launch directory; do not write implementation edits, runtime state, logs, prompts, drafts, or evidence there.
 4. Use `workspace show` when resuming or handoff evidence is ambiguous, and use `workspace adopt` only for an operator-selected worktree that matches the issue branch.
 5. Capture a short implementation plan in the workpad before significant edits.
-6. Implement only the accepted issue scope. Keep tracker, backend, observability, Issue Forge, quality gate, and review boundaries normalized and traceable to the bootstrap docs. Add concise code comments at non-obvious boundaries such as Temporal replay/determinism rules, Activity side effects, tracker mutations, local read-model/schema contracts, retry/idempotency guards, and compatibility shims. Do not add comments that merely restate obvious assignments or function names. When adding or changing Rust public API, add semantic crate/module `//!` and item-level `///` Rustdoc, audit whether each item should remain `pub`, and enforce missing docs at the narrowest owned module boundary. Ordinary `//` boundary comments do not count as Rustdoc coverage; allow missing docs only at the narrowest unavoidable macro-generated item and explain why.
-7. Run the verification required by the issue. Repair failures that are within scope, then rerun the relevant checks. Rust public API changes require `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` in addition to formatting, tests, and strict clippy.
+6. Implement only the accepted issue scope. Preserve FailureReport's Root, extension, worker, Channel, wrapper, and tracker boundaries. Add concise comments at non-obvious runtime, schema, retry/idempotency, compatibility, or external-service boundaries; do not add comments that merely restate assignments or function names. When changing exported TypeScript APIs, Zod schemas, protocol fields, or public configuration, audit whether the surface should remain public and add documentation where future consumers need its contract.
+7. Run the verification required by the issue and the workflow's `verification.commands`: `pnpm build`, `pnpm check`, `pnpm test`, and `pnpm format:check`. Repair in-scope failures, then rerun the relevant checks. Use package-scoped or additional commands only when the changed surface requires them, and never claim verification that was not actually run.
 8. Update the workpad with context, decisions or assumptions, changed surfaces, verification evidence, and handoff notes. Preserve the assigned `run=` value from the lane claim in all handoff evidence, PR summaries, and workpad updates.
 9. Open or update exactly one PR for this issue with concise validation evidence.
 10. Confirm the linked PR is Project-visible, ready, and not draft. Workpad or comment PR URLs can identify the intended PR, but they are not a substitute for verified Project/issue linked-PR state. If every other handoff invariant is satisfied but PR relationship verification or draft repair fails, keep the issue out of `Agent Review` and record the blocker.
@@ -74,8 +74,7 @@ Standalone `Shea Symphony Rework Run` comments are append-only trigger or diagno
 - PR URL and handoff summary.
 - PR draft/ready status at handoff.
 - comment coverage for any new or changed runtime boundary, schema contract, retry/idempotency guard, or compatibility shim.
-- Rustdoc coverage for new or changed Rust public API, or `not applicable`.
-- public visibility audit results, including narrowed items, or `not applicable`.
+- API/schema documentation and public-visibility audit results for new or changed exported TypeScript or configuration surfaces, or `not applicable`.
 - any blocker and the exact next human or agent action needed.
 
 ## Git And PR Discipline
