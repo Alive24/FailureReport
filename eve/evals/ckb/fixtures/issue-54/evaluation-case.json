@@ -313,9 +313,9 @@
       "meaning": "Safe, high-information handoff capable of driving the historical repair class."
     },
     {
-      "name": "Todo-ready with assumptions",
+      "name": "Need human input",
       "minimum_score": 75,
-      "meaning": "Executable, with explicit assumptions still requiring confirmation."
+      "meaning": "Useful bounded diagnosis, but one material choice still requires a precise human answer."
     },
     {
       "name": "Needs clarification",

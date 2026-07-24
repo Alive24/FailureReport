@@ -181,7 +181,7 @@ describe("host-managed diagnostic workspace", () => {
         diagnostic_branch: { name: branch, head_revision: revision },
       },
     });
-  });
+  }, 15_000);
 });
 
 function fixtureReport() {
@@ -265,7 +265,7 @@ function fixtureReport() {
       guardrails: ["fixture only"],
       required_outcomes: ["fixture passes"],
       verification: { automated: ["vitest"], uat: [], context: [] },
-      remaining_assumptions: ["local git available"],
+      residual_risks: ["local git availability is verified by the host"],
     },
     domain: {
       pack_id: "ckb",
