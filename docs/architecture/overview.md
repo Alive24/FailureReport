@@ -6,7 +6,7 @@
 
 Eve Root is the only public agent. Its sole product entry is the built-in Eve Channel declared at `eve/agent/channels/eve.ts`. MCP, Temporal, and the installable Codex plugin are outer wrappers that call that Channel; they never become alternate roots and do not import `eve/agent`.
 
-Root owns intake, GitHub workpad publication, routing, aggregation, and delegation to the one declared `codex` worker. Root uses a tool-capable model, while the Codex App Server provider is reserved for the internal worker because it does not expose Eve's custom-tool schema. External access is governed by reachable deployment credentials and network policy, not a Root approval loop.
+Root owns intake, GitHub workpad publication, routing, aggregation, and delegation to the one declared `codex` worker. Root uses a tool-capable model, while the direct Codex App Server transport is reserved for the internal worker because it does not expose Eve's custom-tool schema. External access is governed by reachable deployment credentials and network policy, not a Root approval loop.
 
 ## Domain Capability, Session, and Worker
 
@@ -16,7 +16,7 @@ CKB is a mounted internal Eve extension. It contributes CKB instructions, the `f
 
 After Root determines the diagnosis is complete, `finalize_diagnostic_session` validates a clean detached worktree and creates and pushes a non-checked-out `diagnostic/<target-issue-number>-<issue-title-slug>` snapshot branch. The workpad records its `origin` ref and URL and marks it diagnostic-only: it is neither an implementation branch nor a PR base.
 
-Eve is pinned to just-bash for Root orchestration. Its virtual shell is not asked to clone, fetch, run Git, or execute Codex. Root's host-side diagnostics adapters perform the controlled workspace lifecycle and inspection. The one Codex worker validates the prepared envelope, restores the persisted thread, and runs Codex App Server directly on the host with the session worktree as `cwd`, reusing the user's existing Codex Home, plugins, skills, MCP configuration, authentication, Git credentials, and model configuration. It defaults to evidence, hypotheses, experiments, and recommendations. `workspace-write` is available for tests/cache/debug artifacts and bounded diagnostic-only commits; it is not permission to start implementation work, create a branch, or open a PR.
+Eve is pinned to just-bash for Root orchestration. Its virtual shell is not asked to clone, fetch, run Git, or execute Codex. Root's host-side diagnostics adapters perform the controlled workspace lifecycle and inspection. The one Codex worker validates the prepared envelope, restores the persisted thread, and runs Codex App Server directly on the host with the session worktree as `cwd`, reusing the user's existing Codex Home, plugins, skills, MCP configuration, authentication, Git credentials, and model configuration. It defaults to evidence, hypotheses, experiments, and recommendations. `workspace-write` is available for focused tests, caches, and ephemeral debugging artifacts; it is not permission for business-code changes, commits, pushes, pull requests, or diagnostic finalization.
 
 ## Durable Context
 

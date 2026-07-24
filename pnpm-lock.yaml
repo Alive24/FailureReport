@@ -34,9 +34,6 @@ importers:
       ai:
         specifier: ^7.0.26
         version: 7.0.28(zod@4.4.3)
-      ai-sdk-provider-codex-app-server:
-        specifier: 1.1.7
-        version: 1.1.7(zod@4.4.3)
       eve:
         specifier: ^0.24.4
         version: 0.24.4(@opentelemetry/api@1.9.1)(ai@7.0.28(zod@4.4.3))(just-bash@3.1.0)(vite@8.1.4(@types/node@24.13.3)(yaml@2.9.0))
@@ -1010,15 +1007,6 @@ packages:
         integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==,
       }
     engines: { node: ">= 0.6" }
-
-  ai-sdk-provider-codex-app-server@1.1.7:
-    resolution:
-      {
-        integrity: sha512-5fDJ6dte0vaN/capeHPaP4JgjovUcBN7MLA7Kdz3L09Jo0uczp/nBmfvsicCzcGOdmahZEAPWmHBaV7ujFa3iw==,
-      }
-    engines: { node: ">=18" }
-    peerDependencies:
-      zod: ^3.0.0 || ^4.0.0
 
   ai@7.0.28:
     resolution:
@@ -3354,12 +3342,6 @@ snapshots:
     dependencies:
       mime-types: 3.0.2
       negotiator: 1.0.0
-
-  ai-sdk-provider-codex-app-server@1.1.7(zod@4.4.3):
-    dependencies:
-      "@ai-sdk/provider": 3.0.14
-      "@ai-sdk/provider-utils": 4.0.39(zod@4.4.3)
-      zod: 4.4.3
 
   ai@7.0.28(zod@4.4.3):
     dependencies:

@@ -31,8 +31,8 @@ Only Root is public, through `eve/agent/channels/eve.ts`. An extension namespace
 | Layer | Owns | Does not own |
 | --- | --- | --- |
 | CKB extension | CKB instructions, `failure-report-ckb-debugging`, deterministic `ckb__recommend_log` | sandbox, worktree, provider config, session preparation, subagent |
-| FailureReport Root | domain-extension registry, host-managed source cache, detached worktree allocation, remote snapshot finalization, workpad/session/thread journal, delegation | extension skill content, third-party Codex provider implementation |
-| Codex worker | shell/Git/MCP diagnosis in Root-provided `cwd`, tests, diagnostic artifacts, and bounded diagnostic-only commits | selecting `cwd`, checkout, branch, skill path, GitHub workpad writes, implementation or PR workflow |
+| FailureReport Root | domain-extension registry, host-managed source cache, detached worktree allocation, remote snapshot finalization, workpad/session/thread journal, delegation | extension skill content, global Codex configuration, target implementation or PR workflow |
+| Codex worker | shell/Git/MCP diagnosis in Root-provided `cwd`, focused tests, and ephemeral diagnostic evidence | selecting `cwd`, checkout, branch, skill path, GitHub workpad writes, business-code changes, commits, pushes, PRs, or diagnostic finalization |
 
 This respects [Eve extension boundaries](https://eve.dev/docs/extensions): extensions contribute capabilities but cannot define an agent, sandbox, schedule, or nested subagent.
 
@@ -100,18 +100,24 @@ GitHub's Issue body and comments remain shared collaboration context. Root never
 
 The prepared delegation begins with every selected `$failure-report-…` native skill before the revision-bound diagnostic-session envelope. Codex's native skill discovery finds the worktree-local `.agents/skills` symlinks, so the worker uses native `$skill`, shell, Git, and MCP rather than Eve's `load_skill` tool or a copied global skill.
 
-Eve is pinned to its just-bash backend for Root orchestration. just-bash has a virtual filesystem and no real Git or package-manager binaries, so it is not a substitute for the controlled host workspace. Root's authored diagnostics adapters inspect and manage the fixed host workspace; Codex App Server is launched only after Root validates the envelope and workpad. It receives:
+Eve is pinned to its just-bash backend for Root orchestration. just-bash has a virtual filesystem and no real Git or package-manager binaries, so it is not a substitute for the controlled host workspace. Root's authored diagnostics adapters inspect and manage the fixed host workspace; the direct Codex App Server transport is launched only after Root validates the envelope and workpad. It sends:
 
 ```text
-cwd: Root-owned detached diagnostic worktree
-threadMode: persistent
-approvalMode: on-request
-sandboxMode: workspace-write
+thread/start or thread/resume
+  cwd: Root-owned detached diagnostic worktree
+  approvalPolicy: on-request
+  approvalsReviewer: auto_review
+  sandbox: workspace-write
+
+turn/start
+  cwd: Root-owned detached diagnostic worktree
+  approvalPolicy: on-request
+  approvalsReviewer: auto_review
 ```
 
 Before every new or resumed diagnostic delegation, Root runs a bounded host-runtime preflight after workpad preparation has validated the managed worktree. It starts only the configured App Server executable with that worktree as `cwd`, inherits the ambient Codex runtime without setting or copying `CODEX_HOME`, sends `initialize`, sends `initialized`, then checks `skills/list` for every Root-selected repository skill before terminating the child. It never creates a thread, sends a model request, invokes a native tool, or modifies global Codex configuration, credentials, permissions, or state files directly. A transient startup, handshake, transport, or timeout failure is cleaned up and retried once with a fresh child after Root revalidates the same managed workspace; permanent executable, state-access, credential, containment, or skill-discovery failures return sanitized `needs_input` instead of a delegation.
 
-Codex runs directly in the user's existing host environment, retaining `~/.codex`, plugins, native skills, MCP configuration, authentication, Git credentials, model settings, and persistent thread storage. `workspace-write` permits focused tests, caches, debugging artifacts, and bounded commits whose message and content clearly identifies them as diagnostic-only. It does not authorize implementation or PR workflow. After every turn, Codex reports its outcome to Root; Root validates the persisted thread and observed HEAD, then appends or recognizes one immutable completion record through bounded read–merge–write–readback reconciliation. Exact replay is a no-op, while incompatible duplicate content or newer incompatible session state returns `needs_input`; Codex never retries or writes GitHub state.
+Codex runs directly in the user's existing host environment, retaining `~/.codex`, plugins, native skills, MCP configuration, authentication, Git credentials, model settings, and persistent thread storage. `workspace-write` permits focused tests, caches, and ephemeral debugging artifacts only. It does not authorize business-code changes, commits, pushes, pull requests, or diagnostic finalization. After every turn, Codex reports its outcome to Root; Root validates the persisted thread and observed HEAD, then appends or recognizes one immutable completion record through bounded read–merge–write–readback reconciliation. Exact replay is a no-op, while incompatible duplicate content or newer incompatible session state returns `needs_input`; Codex never retries or writes GitHub state.
 
 ### Native approval lifecycle
 
@@ -119,11 +125,11 @@ Managed diagnostic backends may receive native, server-initiated approval reques
 
 The broker accepts only one normalized `approve` or `deny` response and records a sanitized terminal result (`resolved`, `denied`, `cancelled`, `timed_out`, or `interrupted`). Its durable evidence contains a broker-generated approval id, backend/session identity, safe turn id, outcome, and timestamp. It never contains a provider request id or raw request payload. Duplicate, stale, mismatched, cancelled, timed-out, and process-interrupted requests fail closed. Process loss is terminal: the next process must not replay the former connection-bound request.
 
-This is not a Root, MCP, Temporal, or Channel approval protocol. The eventual backend adapter maps the broker's one response back to the provider's native JSON-RPC request and handles the provider's later cleanup notification. A native policy may choose a decision before calling the broker; for example, Codex Auto-review can remain the configured native reviewer for interactive sandbox-boundary requests. Auto-review is a reviewer swap, not a permission grant: it must not widen the diagnostic worktree, sandbox, network policy, or Root authority. The broker deliberately has no session-wide accept, exec-policy amendment, or continuation API.
+This is not a Root, MCP, Temporal, or Channel approval protocol. The direct App Server adapter maps the broker's one response back to a live native JSON-RPC request and handles the server's later cleanup notification. When Codex resolves an auto-review internally, the adapter records only its safe terminal decision while the process and turn remain live. Auto-review is a reviewer swap, not a permission grant: it must not widen the diagnostic worktree, sandbox, network policy, or Root authority. The broker deliberately has no session-wide accept, exec-policy amendment, or continuation API.
 
 ## Verification Scope
 
-Tests cover direct protocol renames and legacy-field rejection; allocation and resume; external-HEAD rejection; workpad/thread persistence; native-skill link creation, repair, and fail-closed conflicts; bounded App Server initialization/skill discovery, failure classification, cleanup, and one fresh-process retry; and the CKB extension's pure-capability shape. An optional local App Server smoke test uses the ambient host runtime in a temporary Git worktree without starting a model turn.
+Tests cover direct transport thread start/resume, turn start, approval response, denial, cancellation, timeout, process interruption, raw-event filtering, and legacy-field rejection; allocation and resume; external-HEAD rejection; workpad/thread persistence; native-skill link creation, repair, and fail-closed conflicts; bounded App Server initialization/skill discovery, failure classification, cleanup, and one fresh-process retry; and the CKB extension's pure-capability shape. An optional local App Server smoke test uses the ambient host runtime in a temporary Git worktree without starting a model turn.
 
 ## References
 

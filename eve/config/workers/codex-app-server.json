@@ -4,6 +4,7 @@
   "codex_path": "codex",
   "model": "gpt-5.4",
   "approval_mode": "on-request",
+  "approvals_reviewer": "auto_review",
   "sandbox_mode": "workspace-write",
   "reasoning_effort": "medium",
   "model_context_window_tokens": 200000
