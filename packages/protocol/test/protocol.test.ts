@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import {
   appendFailureReportWorkpadEntry,
+  createFailureReportWorkpadChunkGroup,
   diagnosticBranchSlugSchema,
   diagnosticCompletionRecordSchema,
   failureReportSchema,
@@ -11,10 +12,14 @@ import {
   humanInputRequestSchema,
   implementationHandoffSchema,
   parseFailureReportWorkpad,
+  parseFailureReportWorkpadManifest,
+  reconstructFailureReportWorkpadManifest,
   renderDiagnosticHandoff,
   renderFailureReportWorkpad,
+  renderFailureReportWorkpadManifest,
   rootRequestSchema,
   rootResultSchema,
+  serializeFailureReportWorkpadEntryPayload,
   workpadMarker,
   type FailureReport,
   type FailureReportWorkpadEntry,
@@ -55,7 +60,6 @@ async function finalizedReadyReport(revision = 7): Promise<FailureReport> {
       backend_id: "codex_app_server",
       codex_thread_id: "thread-ready-54",
       worktree: {
-        path: "/root-owned/worktrees/diagnostic-54",
         identity: sessionIdentity,
         base_revision: report.target.revision,
         head_revision: report.target.revision,
@@ -131,7 +135,6 @@ async function activeHumanInputReport(): Promise<FailureReport> {
       backend_id: "codex_app_server",
       codex_thread_id: "thread-human-input-54",
       worktree: {
-        path: "/root-owned/worktrees/diagnostic-human-input-54",
         identity: "diagnostic-human-input-54",
         base_revision: report.target.revision,
         head_revision: report.target.revision,
@@ -463,6 +466,86 @@ describe("FailureReport protocol", () => {
     expect(parsed.entries[0]?.report).toEqual(entryFor(report, 0).report);
   });
 
+  it("round-trips a multi-chunk revision only through its final manifest", async () => {
+    const report = failureReportSchema.parse(
+      await loadFixture("issue-54.json"),
+    );
+    const entry = entryFor(report, 3, {
+      predecessor_comment_ref: "comment-2",
+    });
+    const group = createFailureReportWorkpadChunkGroup(entry, 211);
+    const refs = group.chunks.map((_, index) => "chunk-" + String(index));
+    const manifestMarkdown = renderFailureReportWorkpadManifest(group, refs);
+    const manifest = parseFailureReportWorkpadManifest(manifestMarkdown);
+    const comments = refs.map((commentRef, index) => ({
+      comment_ref: commentRef,
+      body: group.chunk_comment_bodies[index] ?? "",
+    }));
+    const reconstructed = reconstructFailureReportWorkpadManifest(
+      manifest,
+      comments,
+    );
+
+    expect(group.chunks.length).toBeGreaterThan(1);
+    expect(group.chunk_comment_bodies[0]).toContain("non-authoritative");
+    expect(serializeFailureReportWorkpadEntryPayload(reconstructed)).toBe(
+      serializeFailureReportWorkpadEntryPayload(entry),
+    );
+    expect(reconstructed.report).toEqual(entry.report);
+  });
+
+  it("rejects incomplete, reordered, duplicated, and modified manifest chunks", async () => {
+    const report = failureReportSchema.parse(
+      await loadFixture("issue-54.json"),
+    );
+    const group = createFailureReportWorkpadChunkGroup(
+      entryFor(report, 0),
+      173,
+    );
+    const refs = group.chunks.map((_, index) => "chunk-" + String(index));
+    const manifest = parseFailureReportWorkpadManifest(
+      renderFailureReportWorkpadManifest(group, refs),
+    );
+    const comments = refs.map((commentRef, index) => ({
+      comment_ref: commentRef,
+      body: group.chunk_comment_bodies[index] ?? "",
+    }));
+
+    expect(() =>
+      reconstructFailureReportWorkpadManifest(manifest, comments.slice(1)),
+    ).toThrow("missing or has extra");
+    expect(() =>
+      reconstructFailureReportWorkpadManifest(
+        { ...manifest, chunks: [...manifest.chunks].reverse() },
+        comments,
+      ),
+    ).toThrow("unique and contiguous");
+    expect(() =>
+      reconstructFailureReportWorkpadManifest(
+        {
+          ...manifest,
+          chunks: manifest.chunks.map((chunk, index) => ({
+            ...chunk,
+            comment_ref: index === 1 ? (refs[0] ?? "") : chunk.comment_ref,
+          })),
+        },
+        comments,
+      ),
+    ).toThrow("unique and contiguous");
+
+    const original = group.chunks[0]?.content_base64 ?? "";
+    const changed = (original.startsWith("A") ? "B" : "A") + original.slice(1);
+    expect(() =>
+      reconstructFailureReportWorkpadManifest(manifest, [
+        {
+          ...comments[0],
+          body: (comments[0]?.body ?? "").replace(original, changed),
+        },
+        ...comments.slice(1),
+      ]),
+    ).toThrow("digest");
+  });
+
   it("rejects legacy marker-only workpads rather than silently migrating them", () => {
     expect(() =>
       parseFailureReportWorkpad(
@@ -542,6 +625,33 @@ describe("FailureReport protocol", () => {
     const jsonSchema = JSON.stringify(z.toJSONSchema(failureReportSchema));
 
     expect(jsonSchema).not.toContain("\\p{");
+  });
+
+  it("keeps provider budgets and physical chunk layout out of public request and report schemas", async () => {
+    const requestJsonSchema = JSON.stringify(z.toJSONSchema(rootRequestSchema));
+    for (const providerPrivateField of [
+      "encoded_byte_budget",
+      "chunk_index",
+      "chunk_digest",
+      "group_id",
+      "payload_digest",
+      "failure-report-workpad-chunk",
+      "failure-report-workpad-manifest",
+    ]) {
+      expect(requestJsonSchema).not.toContain(providerPrivateField);
+    }
+
+    const report = failureReportSchema.parse(
+      await loadFixture("issue-54.json"),
+    );
+    expect(() =>
+      failureReportSchema.parse({
+        ...report,
+        workpad_group_id: "provider-private",
+        workpad_chunk_refs: ["101", "102"],
+        github_comment_budget: 60_000,
+      }),
+    ).toThrow("Unrecognized");
   });
 
   it("accepts a strictly minimal existing-Issue selector without weakening durable context validation", () => {
@@ -638,6 +748,12 @@ describe("FailureReport protocol", () => {
     ).toThrow("credential-like");
     expect(() =>
       renderFailureReportWorkpad(entryFor(hostPathBearing, 0)),
+    ).toThrow("prohibited host path");
+    expect(() =>
+      createFailureReportWorkpadChunkGroup(entryFor(credentialBearing, 0), 128),
+    ).toThrow("credential-like");
+    expect(() =>
+      createFailureReportWorkpadChunkGroup(entryFor(hostPathBearing, 0), 128),
     ).toThrow("prohibited host path");
   });
 

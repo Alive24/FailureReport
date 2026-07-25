@@ -11,6 +11,7 @@ import {
 import {
   type GithubIssueSnapshot,
   type WorkpadProducerConfiguration,
+  encodedWorkpadCommentRequestBytes,
   findExistingWorkpad,
   prepareIssueWorkpadMutation,
 } from "../agent/lib/integrations/github/issue-workpad.js";
@@ -126,6 +127,7 @@ describe("Octokit Issue gateway", () => {
     const gateway = new OctokitIssueGateway(
       fake.octokit as unknown as Octokit,
       rootGh,
+      100_000,
     );
 
     const first = await gateway.publishSharedContext(
@@ -192,6 +194,170 @@ describe("Octokit Issue gateway", () => {
     expect(latest?.predecessor_comment_ref).toBe(first.workpad_comment_ref);
   });
 
+  it("rolls to a same-producer successor without changing its predecessor comment", async () => {
+    const report = await loadReport();
+    const fake = createMutableOctokit();
+    const initialGateway = new OctokitIssueGateway(
+      fake.octokit as unknown as Octokit,
+      rootGh,
+    );
+    const first = await initialGateway.publishSharedContext(
+      repository,
+      issueNumber,
+      report,
+      "2026-07-15T10:01:00Z",
+    );
+    const predecessorBody = fake.comments[0]?.body ?? "";
+    const current = await initialGateway.readIssue(repository, issueNumber);
+    const append = prepareIssueWorkpadMutation(
+      current,
+      first.report,
+      "2026-07-15T10:02:00Z",
+      rootGh,
+      100_000,
+    );
+    if (append.mode === "chunk") {
+      throw new Error("Fixture append unexpectedly required chunking.");
+    }
+    const gateway = new OctokitIssueGateway(
+      fake.octokit as unknown as Octokit,
+      rootGh,
+      encodedWorkpadCommentRequestBytes(append.workpad_comment_body) - 1,
+    );
+    const second = await gateway.publishSharedContext(
+      repository,
+      issueNumber,
+      first.report,
+      "2026-07-15T10:02:00Z",
+    );
+
+    expect(fake.comments).toHaveLength(2);
+    expect(fake.comments[0]?.body).toBe(predecessorBody);
+    expect(fake.octokit.rest.issues.updateComment).not.toHaveBeenCalled();
+    expect(second.workpad_comment_ref).toBe("102");
+    expect(
+      findExistingWorkpad(
+        await gateway.readIssue(repository, issueNumber),
+        rootGh,
+      ),
+    ).toMatchObject({
+      revision: 1,
+      predecessor_comment_ref: "101",
+      continuation_kind: "capacity",
+    });
+  });
+
+  it("publishes oversized state as bounded provisional chunks and one authoritative manifest", async () => {
+    const report = await loadReport();
+    const fake = createMutableOctokit();
+    const budget = 5_000;
+    const gateway = new OctokitIssueGateway(
+      fake.octokit as unknown as Octokit,
+      rootGh,
+      budget,
+    );
+    const published = await gateway.publishSharedContext(
+      repository,
+      issueNumber,
+      report,
+      "2026-07-15T10:01:00Z",
+    );
+    const latest = findExistingWorkpad(
+      await gateway.readIssue(repository, issueNumber),
+      rootGh,
+    );
+
+    expect(fake.comments.length).toBeGreaterThan(2);
+    expect(
+      fake.comments.every(
+        (comment) => encodedWorkpadCommentRequestBytes(comment.body) <= budget,
+      ),
+    ).toBe(true);
+    expect(fake.octokit.rest.issues.update).not.toHaveBeenCalled();
+    expect(fake.octokit.rest.issues.updateComment).not.toHaveBeenCalled();
+    expect(latest).toMatchObject({
+      representation: "manifest",
+      revision: 0,
+      comment: { id: published.workpad_comment_ref },
+      report: published.report,
+    });
+  });
+
+  it("never accepts concurrently created manifests as one authoritative head", async () => {
+    const report = await loadReport();
+    const fake = createMutableOctokit();
+    fake.forkManifestCreate();
+    const gateway = new OctokitIssueGateway(
+      fake.octokit as unknown as Octokit,
+      rootGh,
+      5_000,
+    );
+
+    await expect(
+      gateway.publishSharedContext(
+        repository,
+        issueNumber,
+        report,
+        "2026-07-15T10:01:00Z",
+      ),
+    ).rejects.toThrow("exactly one root");
+    expect(
+      fake.comments.filter((comment) =>
+        comment.body.includes("failure-report-workpad-manifest/v1"),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("reuses a verified provisional chunk after an interrupted readback", async () => {
+    const report = await loadReport();
+    const fake = createMutableOctokit();
+    fake.failIssueReadAt(
+      4,
+      Object.assign(new Error("temporary chunk readback outage"), {
+        status: 503,
+      }),
+    );
+    const gateway = new OctokitIssueGateway(
+      fake.octokit as unknown as Octokit,
+      rootGh,
+      5_000,
+    );
+
+    await expect(
+      gateway.publishSharedContext(
+        repository,
+        issueNumber,
+        report,
+        "2026-07-15T10:01:00Z",
+      ),
+    ).rejects.toMatchObject({
+      name: "WorkpadPostWriteReadbackError",
+      retryable: true,
+    });
+    expect(fake.comments).toHaveLength(1);
+    const firstChunkBody = fake.comments[0]?.body;
+
+    const resumed = await gateway.publishSharedContext(
+      repository,
+      issueNumber,
+      report,
+      "2026-07-15T10:01:00Z",
+    );
+    expect(
+      fake.comments.filter((comment) => comment.body === firstChunkBody),
+    ).toHaveLength(1);
+    expect(
+      findExistingWorkpad(
+        await gateway.readIssue(repository, issueNumber),
+        rootGh,
+      ),
+    ).toMatchObject({
+      revision: 0,
+      representation: "manifest",
+      comment: { id: resumed.workpad_comment_ref },
+    });
+  });
+
   it("rejects an authenticated actor mismatch before it writes any comment", async () => {
     const report = await loadReport();
     const fake = createMutableOctokit();
@@ -255,6 +421,7 @@ describe("Octokit Issue gateway", () => {
       first.report,
       "2026-07-15T10:02:00Z",
       rootGh,
+      100_000,
     );
     const changed = {
       ...initial,
@@ -330,6 +497,7 @@ function createMutableOctokit() {
   let nextCommentId = 101;
   let issueReadCount = 0;
   let issueReadFailure: { at: number; error: unknown } | undefined;
+  let forkManifest = false;
   const comments: Array<{
     id: number;
     body: string;
@@ -380,6 +548,13 @@ function createMutableOctokit() {
             };
             nextCommentId += 1;
             comments.push(comment);
+            if (
+              forkManifest &&
+              commentBody.includes("failure-report-workpad-manifest/v1")
+            ) {
+              comments.push({ ...comment, id: nextCommentId });
+              nextCommentId += 1;
+            }
             updatedAt = comment.updated_at;
             return { data: comment };
           },
@@ -415,6 +590,9 @@ function createMutableOctokit() {
     },
     failIssueReadAt(read: number, error: unknown) {
       issueReadFailure = { at: read, error };
+    },
+    forkManifestCreate() {
+      forkManifest = true;
     },
   };
 }

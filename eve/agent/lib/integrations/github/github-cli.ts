@@ -45,8 +45,9 @@ export class GithubCliIssueGateway extends IssueWorkpadGateway {
   constructor(
     private readonly executable = "gh",
     producers?: WorkpadProducerConfiguration,
+    encodedByteBudget?: number,
   ) {
-    super(producers);
+    super(producers, encodedByteBudget);
   }
 
   /** Reads an Issue and all comments needed to locate its single workpad. */

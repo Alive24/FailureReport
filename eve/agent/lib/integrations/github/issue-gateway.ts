@@ -6,7 +6,9 @@ import {
   type IssueWorkpadMutation,
   type WorkpadProducerConfiguration,
   WorkpadNeedsInputError,
+  defaultGithubWorkpadEncodedByteBudget,
   findExistingWorkpad,
+  prepareVerifiedWorkpadManifest,
   prepareIssueWorkpadMutation,
   validateProducerConfiguration,
 } from "./issue-workpad.js";
@@ -80,9 +82,14 @@ export interface GithubIssueGateway {
 /** Shared implementation for Octokit and the explicit gh fallback. */
 export abstract class IssueWorkpadGateway implements GithubIssueGateway {
   private readonly producers?: WorkpadProducerConfiguration;
+  private readonly encodedByteBudget: number;
 
-  protected constructor(producers?: WorkpadProducerConfiguration) {
+  protected constructor(
+    producers?: WorkpadProducerConfiguration,
+    encodedByteBudget = defaultGithubWorkpadEncodedByteBudget,
+  ) {
     this.producers = producers && validateProducerConfiguration(producers);
+    this.encodedByteBudget = encodedByteBudget;
   }
 
   getWorkpadProducerConfiguration(): WorkpadProducerConfiguration {
@@ -119,6 +126,7 @@ export abstract class IssueWorkpadGateway implements GithubIssueGateway {
       report,
       syncedAt,
       producers,
+      this.encodedByteBudget,
     );
 
     const latest = await this.readIssue(repository, issueNumber);
@@ -127,6 +135,7 @@ export abstract class IssueWorkpadGateway implements GithubIssueGateway {
       repository,
       issueNumber,
       mutation,
+      producers,
     );
 
     // A post-write read validates the actual GitHub author before returning the
@@ -187,7 +196,72 @@ export abstract class IssueWorkpadGateway implements GithubIssueGateway {
     repository: string,
     issueNumber: number,
     mutation: IssueWorkpadMutation,
+    producers: WorkpadProducerConfiguration,
   ): Promise<string> {
+    if (mutation.mode === "chunk") {
+      const commentRefs: string[] = [];
+      for (const planned of mutation.chunks) {
+        const latest = await this.readIssue(repository, issueNumber);
+        assertFreshWorkpadMutation(latest, mutation, producers, true);
+        if (planned.existing_comment_ref) {
+          const reusable = latest.comments.filter(
+            (comment) => comment.id === planned.existing_comment_ref,
+          );
+          if (
+            reusable.length !== 1 ||
+            reusable[0]?.body !== planned.workpad_comment_body ||
+            reusable[0]?.author?.id !== producers.current.github_actor_id
+          ) {
+            throw new WorkpadPublicationRaceError(
+              "FailureReport provisional chunk changed before safe retry reuse.",
+            );
+          }
+          commentRefs.push(planned.existing_comment_ref);
+          continue;
+        }
+
+        const created = await this.createWorkpadComment(
+          repository,
+          issueNumber,
+          planned.workpad_comment_body,
+        );
+        let readback: GithubIssueSnapshot;
+        try {
+          readback = await this.readIssue(repository, issueNumber);
+        } catch (error) {
+          throw new WorkpadPostWriteReadbackError(
+            "FailureReport could not read back a provisional chunk after publication.",
+            isTransientPublicationFailure(error),
+          );
+        }
+        assertFreshWorkpadMutation(readback, mutation, producers, true);
+        const persisted = readback.comments.filter(
+          (comment) => comment.id === created,
+        );
+        if (
+          persisted.length !== 1 ||
+          persisted[0]?.body !== planned.workpad_comment_body ||
+          persisted[0]?.author?.id !== producers.current.github_actor_id
+        ) {
+          throw new WorkpadPostWriteReadbackError(
+            "FailureReport could not verify a provisional chunk after publication.",
+          );
+        }
+        commentRefs.push(created);
+      }
+
+      const latest = await this.readIssue(repository, issueNumber);
+      assertFreshWorkpadMutation(latest, mutation, producers, true);
+      const manifestBody = prepareVerifiedWorkpadManifest(
+        latest,
+        mutation,
+        commentRefs,
+        producers,
+      );
+      // This create is the sole visibility boundary for the logical revision.
+      return this.createWorkpadComment(repository, issueNumber, manifestBody);
+    }
+
     if (mutation.mode === "create" || mutation.mode === "continue") {
       return this.createWorkpadComment(
         repository,
@@ -215,8 +289,12 @@ export function assertFreshWorkpadMutation(
   issue: GithubIssueSnapshot,
   mutation: IssueWorkpadMutation,
   producers: WorkpadProducerConfiguration,
+  ignoreIssueTimestamp = false,
 ): void {
-  if (issue.updated_at !== mutation.expected_issue_updated_at) {
+  if (
+    !ignoreIssueTimestamp &&
+    issue.updated_at !== mutation.expected_issue_updated_at
+  ) {
     throw new WorkpadPublicationRaceError(
       "GitHub Issue changed while preparing the FailureReport workpad.",
     );
@@ -239,6 +317,17 @@ export function assertFreshWorkpadMutation(
   if (mutation.mode === "create" && current) {
     throw new WorkpadPublicationRaceError(
       "A FailureReport workpad appeared before first publication.",
+    );
+  }
+  if (
+    mutation.mode === "chunk" &&
+    ((mutation.expected_workpad_revision === null && current) ||
+      (mutation.expected_workpad_revision !== null &&
+        (!current ||
+          current.comment.id !== mutation.expected_workpad_comment_ref)))
+  ) {
+    throw new WorkpadPublicationRaceError(
+      "Chunked FailureReport publication no longer has its verified predecessor head.",
     );
   }
   if (

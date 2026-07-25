@@ -482,6 +482,7 @@ class MutableIssueGateway implements DiagnosticSessionIssueGateway {
       report,
       this.timestamp(),
       producers,
+      1_000_000,
     );
     this.issue = {
       ...initialIssue,
@@ -570,6 +571,7 @@ class MutableIssueGateway implements DiagnosticSessionIssueGateway {
       report,
       syncedAt,
       producers,
+      1_000_000,
     );
     const commentRef = mutation.target_comment_ref ?? "root-comment";
     this.issue.updated_at = syncedAt;

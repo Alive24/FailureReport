@@ -9,7 +9,9 @@ import {
 
 import {
   WorkpadNeedsInputError,
+  encodedWorkpadCommentRequestBytes,
   findExistingWorkpad,
+  prepareVerifiedWorkpadManifest,
   prepareIssueWorkpadMutation,
   type GithubIssueComment,
   type GithubIssueSnapshot,
@@ -109,6 +111,7 @@ describe("GitHub Issue workpad", () => {
       first.report,
       "2026-07-15T10:03:00Z",
       rootGh,
+      100_000,
     );
 
     expect(second.mode).toBe("append");
@@ -122,6 +125,64 @@ describe("GitHub Issue workpad", () => {
       ),
     ).toEqual([0, 1]);
     expect(findExistingWorkpad(resumedIssue, rootGh)?.revision).toBe(0);
+  });
+
+  it("uses the actual encoded-byte boundary and rolls over before overflow", async () => {
+    const report = await loadReport();
+    const first = prepareIssueWorkpadMutation(
+      issue(),
+      report,
+      "2026-07-15T10:01:00Z",
+      rootGh,
+    );
+    if (first.mode === "chunk") {
+      throw new Error("Fixture unexpectedly required chunking.");
+    }
+    const predecessor = managedComment(
+      "comment-1",
+      first.workpad_comment_body,
+      "101",
+    );
+    const resumed = issue([predecessor]);
+    const unconstrained = prepareIssueWorkpadMutation(
+      resumed,
+      first.report,
+      "2026-07-15T10:02:00Z",
+      rootGh,
+      100_000,
+    );
+    if (unconstrained.mode === "chunk") {
+      throw new Error("Fixture append unexpectedly required chunking.");
+    }
+    const exact = encodedWorkpadCommentRequestBytes(
+      unconstrained.workpad_comment_body,
+    );
+
+    expect(
+      prepareIssueWorkpadMutation(
+        resumed,
+        first.report,
+        "2026-07-15T10:02:00Z",
+        rootGh,
+        exact,
+      ).mode,
+    ).toBe("append");
+    const rollover = prepareIssueWorkpadMutation(
+      resumed,
+      first.report,
+      "2026-07-15T10:02:00Z",
+      rootGh,
+      exact - 1,
+    );
+    expect(rollover).toMatchObject({
+      mode: "continue",
+      predecessor_comment_ref: "comment-1",
+      entry: { continuation_kind: "capacity" },
+    });
+    if (rollover.mode === "chunk") {
+      throw new Error("Fixture rollover unexpectedly required chunking.");
+    }
+    expect(rollover.workpad_comment_body).not.toContain(predecessor.body);
   });
 
   it("creates a linked successor comment for a different explicitly configured producer", async () => {
@@ -160,6 +221,197 @@ describe("GitHub Issue workpad", () => {
       logical_session_id: expect.any(String),
       predecessor_comment_ref: "comment-1",
     });
+    expect(continued.entry.continuation_kind).toBe("producer_transition");
+  });
+
+  it("supports repeated capacity continuations mixed with a configured producer transition", async () => {
+    const report = await loadReport();
+    const first = prepareIssueWorkpadMutation(
+      issue(),
+      report,
+      "2026-07-15T10:01:00Z",
+      rootGh,
+    );
+    if (first.mode === "chunk") {
+      throw new Error("Fixture unexpectedly required chunking.");
+    }
+    const root = managedComment("comment-1", first.workpad_comment_body, "101");
+    const append = prepareIssueWorkpadMutation(
+      issue([root]),
+      first.report,
+      "2026-07-15T10:02:00Z",
+      rootGh,
+      100_000,
+    );
+    if (append.mode === "chunk") {
+      throw new Error("Fixture unexpectedly required chunking.");
+    }
+    const budget =
+      encodedWorkpadCommentRequestBytes(append.workpad_comment_body) - 1;
+    const capacityOne = prepareIssueWorkpadMutation(
+      issue([root]),
+      first.report,
+      "2026-07-15T10:02:00Z",
+      rootGh,
+      budget,
+    );
+    if (capacityOne.mode === "chunk") {
+      throw new Error("Fixture unexpectedly required chunking.");
+    }
+    const second = managedComment(
+      "comment-2",
+      capacityOne.workpad_comment_body,
+      "101",
+    );
+    const capacityTwo = prepareIssueWorkpadMutation(
+      issue([root, second]),
+      capacityOne.report,
+      "2026-07-15T10:03:00Z",
+      rootGh,
+      budget,
+    );
+    if (capacityTwo.mode === "chunk") {
+      throw new Error("Fixture unexpectedly required chunking.");
+    }
+    const third = managedComment(
+      "comment-3",
+      capacityTwo.workpad_comment_body,
+      "101",
+    );
+    const transition = prepareIssueWorkpadMutation(
+      issue([root, second, third]),
+      capacityTwo.report,
+      "2026-07-15T10:04:00Z",
+      rootApp,
+      budget,
+    );
+    if (transition.mode === "chunk") {
+      throw new Error("Fixture unexpectedly required chunking.");
+    }
+    const fourth = managedComment(
+      "comment-4",
+      transition.workpad_comment_body,
+      "202",
+    );
+    expect(
+      findExistingWorkpad(issue([root, second, third, fourth]), rootGh),
+    ).toMatchObject({
+      revision: 3,
+      comment: { id: "comment-4" },
+      continuation_kind: "producer_transition",
+    });
+  });
+
+  it("keeps provisional chunks non-authoritative, reuses verified retry chunks, and commits through one manifest", async () => {
+    const report = await loadReport();
+    const planned = prepareIssueWorkpadMutation(
+      issue(),
+      report,
+      "2026-07-15T10:01:00Z",
+      rootGh,
+      5_000,
+    );
+    expect(planned.mode).toBe("chunk");
+    if (planned.mode !== "chunk") {
+      throw new Error("Expected a chunked publication.");
+    }
+    const provisional = planned.chunks.map((chunk, index) =>
+      managedComment(
+        "chunk-" + String(index),
+        chunk.workpad_comment_body,
+        "101",
+      ),
+    );
+    const interrupted = issue(provisional);
+    expect(findExistingWorkpad(interrupted, rootGh)).toBeUndefined();
+
+    const retried = prepareIssueWorkpadMutation(
+      interrupted,
+      report,
+      "2026-07-15T10:01:00Z",
+      rootGh,
+      5_000,
+    );
+    expect(retried.mode).toBe("chunk");
+    if (retried.mode !== "chunk") {
+      throw new Error("Expected a chunked retry.");
+    }
+    expect(retried.chunks.map((chunk) => chunk.existing_comment_ref)).toEqual(
+      provisional.map((comment) => comment.id),
+    );
+
+    const manifest = prepareVerifiedWorkpadManifest(
+      interrupted,
+      planned,
+      provisional.map((comment) => comment.id),
+      rootGh,
+    );
+    const head = findExistingWorkpad(
+      issue([...provisional, managedComment("manifest-1", manifest, "101")]),
+      rootGh,
+    );
+    expect(head).toMatchObject({
+      revision: 0,
+      comment: { id: "manifest-1" },
+      representation: "manifest",
+      report: planned.report,
+    });
+  });
+
+  it("falls back to a fresh group for ambiguous retry chunks and rejects foreign referenced provenance", async () => {
+    const report = await loadReport();
+    const planned = prepareIssueWorkpadMutation(
+      issue(),
+      report,
+      "2026-07-15T10:01:00Z",
+      rootGh,
+      5_000,
+    );
+    if (planned.mode !== "chunk") {
+      throw new Error("Expected a chunked publication.");
+    }
+    const provisional = planned.chunks.map((chunk, index) =>
+      managedComment(
+        "chunk-" + String(index),
+        chunk.workpad_comment_body,
+        "101",
+      ),
+    );
+    const duplicated = managedComment(
+      "chunk-duplicate",
+      planned.chunks[0]?.workpad_comment_body ?? "",
+      "101",
+    );
+    const fresh = prepareIssueWorkpadMutation(
+      issue([...provisional, duplicated]),
+      report,
+      "2026-07-15T10:01:00Z",
+      rootGh,
+      5_000,
+    );
+    expect(fresh.mode).toBe("chunk");
+    if (fresh.mode !== "chunk") {
+      throw new Error("Expected a fresh chunked publication.");
+    }
+    expect(fresh.group.group_id).not.toBe(planned.group.group_id);
+    expect(fresh.chunks.every((chunk) => !chunk.existing_comment_ref)).toBe(
+      true,
+    );
+
+    const manifest = prepareVerifiedWorkpadManifest(
+      issue(provisional),
+      planned,
+      provisional.map((comment) => comment.id),
+      rootGh,
+    );
+    const foreign = [
+      { ...provisional[0], author: { id: "999" } },
+      ...provisional.slice(1),
+      managedComment("manifest-1", manifest, "101"),
+    ] as GithubIssueComment[];
+    expect(() => findExistingWorkpad(issue(foreign), rootGh)).toThrow(
+      "foreign-author",
+    );
   });
 
   it("returns needs_input for a copied marker, a legacy v1 payload, an unknown producer, and author mismatch", async () => {

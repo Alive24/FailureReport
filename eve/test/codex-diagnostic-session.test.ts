@@ -829,6 +829,7 @@ function createIssueGateway(
     report,
     "2026-07-15T10:00:01Z",
     workpadProducers,
+    1_000_000,
   );
   let issue: GithubIssueSnapshot = {
     ...initialIssue,
@@ -861,6 +862,7 @@ function createIssueGateway(
         nextReport,
         syncedAt,
         workpadProducers,
+        1_000_000,
       );
       const commentRef = mutation.target_comment_ref ?? "workpad-comment";
       issue = {

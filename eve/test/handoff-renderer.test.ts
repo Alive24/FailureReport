@@ -58,7 +58,6 @@ async function readyReport(
       backend_id: "codex_app_server",
       codex_thread_id: "thread-contract-54",
       worktree: {
-        path: "/root-owned/worktrees/diagnostic-contract-54",
         identity,
         base_revision: base.target.revision,
         head_revision: base.target.revision,
