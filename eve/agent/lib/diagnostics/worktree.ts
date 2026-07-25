@@ -249,6 +249,58 @@ export class DiagnosticWorktreeManager {
     report: FailureReport,
     state: DiagnosticSession,
   ): Promise<VerifiedDiagnosticWorktree> {
+    this.prepareMissingRootDerivedWorktreeRecovery(report, state);
+    if (state.codex_thread_id) {
+      throw new DiagnosticSafetyError(
+        "Missing-worktree recovery requires the stale Codex thread to be durably cleared before Git reconstruction.",
+      );
+    }
+    const source = await this.restoreCanonicalSource(
+      report,
+      state.worktree.base_revision,
+    );
+    const canonicalPath = source.canonical_path;
+    const isolatedRoot = await this.resolveIsolatedWorktreeRoot();
+    const expectedPath = this.worktreePath(report, isolatedRoot);
+    try {
+      await this.paths.lstat(expectedPath);
+      throw new DiagnosticSafetyError(
+        "Missing-worktree recovery found an existing Root-derived path; restore it normally or request operator input.",
+      );
+    } catch (error) {
+      if (error instanceof DiagnosticSafetyError) {
+        throw error;
+      }
+      if (!isNotFoundError(error)) {
+        throw new DiagnosticSafetyError(
+          "The Root-derived diagnostic worktree cannot be inspected safely.",
+        );
+      }
+    }
+
+    await this.git({
+      cwd: canonicalPath,
+      args: [
+        "worktree",
+        "add",
+        "--force",
+        "--detach",
+        expectedPath,
+        state.worktree.base_revision,
+      ],
+    });
+
+    return this.inspect(report, state, true);
+  }
+
+  /**
+   * Validates the durable state eligible for missing-worktree reconstruction and
+   * returns the state Root must publish before any Git side effect.
+   */
+  prepareMissingRootDerivedWorktreeRecovery(
+    report: FailureReport,
+    state: DiagnosticSession,
+  ): DiagnosticSession {
     if (state.lifecycle !== "active") {
       throw new DiagnosticSafetyError(
         "Only an active diagnostic session can be reconstructed after a missing Root-derived worktree.",
@@ -279,83 +331,8 @@ export class DiagnosticWorktreeManager {
         "Missing-worktree recovery requires an unchanged recorded target revision.",
       );
     }
-
-    const source = await this.restoreCanonicalSource(
-      report,
-      state.worktree.base_revision,
-    );
-    const canonicalPath = source.canonical_path;
-    const nativeSkills = await this.resolveNativeSkillSources();
-    const isolatedRoot = await this.resolveIsolatedWorktreeRoot();
-    const expectedPath = this.worktreePath(report, isolatedRoot);
-    try {
-      await this.paths.lstat(expectedPath);
-      throw new DiagnosticSafetyError(
-        "Missing-worktree recovery found an existing Root-derived path; restore it normally or request operator input.",
-      );
-    } catch (error) {
-      if (error instanceof DiagnosticSafetyError) {
-        throw error;
-      }
-      if (!isNotFoundError(error)) {
-        throw new DiagnosticSafetyError(
-          "The Root-derived diagnostic worktree cannot be inspected safely.",
-        );
-      }
-    }
-
-    await this.git({
-      cwd: canonicalPath,
-      args: [
-        "worktree",
-        "add",
-        "--detach",
-        expectedPath,
-        state.worktree.base_revision,
-      ],
-    });
-
-    const allocatedStat = await this.paths.lstat(expectedPath);
-    if (allocatedStat.isSymbolicLink() || !allocatedStat.isDirectory()) {
-      throw new DiagnosticSafetyError(
-        "The reconstructed diagnostic worktree must be a real directory, not a symlink or file.",
-      );
-    }
-    const worktreePath = await this.paths.realpath(expectedPath);
-    if (!isPathInside(isolatedRoot, worktreePath)) {
-      throw new DiagnosticSafetyError(
-        "The reconstructed diagnostic worktree resolves outside Root-owned `.eve/sandbox-cache/worktrees`.",
-      );
-    }
-    if (worktreePath === canonicalPath) {
-      throw new DiagnosticSafetyError(
-        "The reconstructed diagnostic worktree resolves to the source checkout.",
-      );
-    }
-    await this.assertSameOrigin(source.canonical_remote, worktreePath);
-    await this.provisionNativeSkills(worktreePath, nativeSkills);
-    const headRevision = await this.git({
-      cwd: worktreePath,
-      args: ["rev-parse", "HEAD"],
-    });
-    if (headRevision !== state.worktree.base_revision) {
-      throw new DiagnosticSafetyError(
-        "The reconstructed diagnostic worktree did not resolve to the recorded target revision.",
-      );
-    }
-
     const { codex_thread_id: _staleThreadId, ...stateWithoutThread } = state;
-    return {
-      worktree_path: worktreePath,
-      canonical_path: canonicalPath,
-      state: {
-        ...stateWithoutThread,
-        worktree: {
-          ...state.worktree,
-          head_revision: headRevision,
-        },
-      },
-    };
+    return stateWithoutThread;
   }
 
   /**

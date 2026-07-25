@@ -76,12 +76,15 @@ type Harness = {
   manager: DiagnosticWorktreeManager;
   workpad: DiagnosticSessionWorkpad;
   paths: FakePathOperations;
+  gateway: DiagnosticSessionIssueGateway;
   currentReport(): FailureReport;
   currentBranch(): string;
   replaceWithLegacyV1Workpad(): void;
+  failNextPublish(): void;
   setIssueTitle(value: string): void;
   setHead(value: string): void;
   setPorcelain(value: string): void;
+  deleteWorktree(): void;
   setSnapshotBranch(name: string, head: string): void;
   setRemoteSnapshotBranch(ref: string, head: string): void;
   calls: Array<{ cwd: string; args: string[] }>;
@@ -275,6 +278,121 @@ describe("Codex diagnostic session", () => {
     await expect(
       harness.manager.restore(harness.report, allocated.state),
     ).rejects.toThrow("non-symlink native skill entry");
+  });
+
+  it("clears a stale thread before missing-worktree reconstruction", async () => {
+    const harness = await createHarness();
+    const prepared = await harness.workpad.prepare(preparationFor(harness));
+    const envelope = diagnosticSessionEnvelopeSchema.parse({
+      ...preparationFor(harness),
+      workpad_revision: prepared.workpad_revision,
+    });
+    await harness.workpad.recordThread(envelope, "thread-before-missing-path");
+    harness.deleteWorktree();
+
+    const restored = await harness.workpad.loadForDiagnosticSession(envelope);
+
+    expect(restored.diagnostic_session.state.codex_thread_id).toBeUndefined();
+    expect(
+      harness.currentReport().diagnostic_session?.codex_thread_id,
+    ).toBeUndefined();
+    const addCallIndex = harness.calls.findIndex(
+      (call) =>
+        call.args[0] === "worktree" &&
+        call.args[1] === "add" &&
+        call.args.includes("--force"),
+    );
+    expect(addCallIndex).toBeGreaterThanOrEqual(0);
+    expect(harness.calls[addCallIndex]?.args).toEqual([
+      "worktree",
+      "add",
+      "--force",
+      "--detach",
+      restored.diagnostic_session.worktree_path,
+      harness.report.target.revision,
+    ]);
+  });
+
+  it("does not reconstruct when recovery state cannot publish first", async () => {
+    const harness = await createHarness();
+    const prepared = await harness.workpad.prepare(preparationFor(harness));
+    const envelope = diagnosticSessionEnvelopeSchema.parse({
+      ...preparationFor(harness),
+      workpad_revision: prepared.workpad_revision,
+    });
+    await harness.workpad.recordThread(envelope, "thread-before-publish-fail");
+    harness.deleteWorktree();
+    harness.failNextPublish();
+
+    await expect(
+      harness.workpad.loadForDiagnosticSession(envelope),
+    ).rejects.toThrow("publication failed");
+    expect(
+      harness.calls.some(
+        (call) =>
+          call.args[0] === "worktree" &&
+          call.args[1] === "add" &&
+          call.args.includes("--force"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not reconstruct after diagnostic completions exist", async () => {
+    const harness = await createHarness();
+    const prepared = await harness.workpad.prepare(preparationFor(harness));
+    const identity = prepared.diagnostic_session.state.worktree.identity;
+    const withCompletion = failureReportSchema.parse({
+      ...harness.currentReport(),
+      diagnostic_session: {
+        ...harness.currentReport().diagnostic_session,
+        codex_thread_id: "thread-with-completion",
+      },
+      diagnostic_completions: [
+        {
+          schema_version: "failure-report/diagnostic-completion/v1",
+          completion_id: "completion-with-missing-worktree",
+          report_id: harness.report.id,
+          target_revision: harness.report.target.revision,
+          diagnostic_session_identity: identity,
+          codex_thread_id: "thread-with-completion",
+          observed_worktree_head: harness.report.target.revision,
+          outcome: {
+            evidence: [],
+            operation_evidence: [],
+            hypotheses: [],
+            experiments: [],
+          },
+          metadata: {
+            completed_at: "2026-07-15T10:00:10Z",
+            owner: "root",
+            provider: "codex_app_server",
+          },
+        },
+      ],
+    });
+    await harness.gateway.publishSharedContext(
+      "Alive24/CKBoost",
+      54,
+      withCompletion,
+      "2026-07-15T10:00:11Z",
+    );
+    const envelope = diagnosticSessionEnvelopeSchema.parse({
+      ...preparationFor(harness),
+      workpad_revision: prepared.workpad_revision,
+    });
+    harness.deleteWorktree();
+
+    await expect(
+      harness.workpad.loadForDiagnosticSession(envelope),
+    ).rejects.toThrow("after diagnostic completions were recorded");
+    expect(
+      harness.calls.some(
+        (call) =>
+          call.args[0] === "worktree" &&
+          call.args[1] === "add" &&
+          call.args.includes("--force"),
+      ),
+    ).toBe(false);
   });
 
   it("fails closed when a selected extension skill source is missing or escapes its package", async () => {
@@ -575,7 +693,7 @@ async function createHarness(
       throw new Error("Missing test ref: " + revision);
     }
     if (input.args[0] === "worktree" && input.args[1] === "add") {
-      worktreePath = input.args[3];
+      worktreePath = input.args.at(-2);
       return "";
     }
     if (command === "rev-parse HEAD") {
@@ -663,9 +781,11 @@ async function createHarness(
     manager,
     workpad,
     paths,
+    gateway,
     currentReport: gateway.currentReport,
     currentBranch: () => currentBranch,
     replaceWithLegacyV1Workpad: gateway.replaceWithLegacyV1Workpad,
+    failNextPublish: gateway.failNextPublish,
     setIssueTitle(value) {
       gateway.setTitle(value);
     },
@@ -674,6 +794,9 @@ async function createHarness(
     },
     setPorcelain(value) {
       porcelain = value;
+    },
+    deleteWorktree() {
+      worktreePath = undefined;
     },
     setSnapshotBranch(name, snapshotHead) {
       snapshotBranches.set(name, snapshotHead);
@@ -761,6 +884,7 @@ function createIssueGateway(
 ): DiagnosticSessionIssueGateway & {
   currentReport(): FailureReport;
   replaceWithLegacyV1Workpad(): void;
+  failNextPublish(): void;
   setTitle(value: string): void;
 } {
   const initialIssue: GithubIssueSnapshot = {
@@ -790,6 +914,7 @@ function createIssueGateway(
       },
     ],
   };
+  let failPublish = false;
 
   return {
     getWorkpadProducerConfiguration() {
@@ -804,6 +929,10 @@ function createIssueGateway(
       nextReport,
       syncedAt,
     ) {
+      if (failPublish) {
+        failPublish = false;
+        throw new Error("publication failed");
+      }
       const mutation = prepareIssueWorkpadMutation(
         issue,
         nextReport,
@@ -882,6 +1011,9 @@ function createIssueGateway(
             : current,
         ),
       };
+    },
+    failNextPublish() {
+      failPublish = true;
     },
     setTitle(value) {
       issue = { ...issue, title: value };

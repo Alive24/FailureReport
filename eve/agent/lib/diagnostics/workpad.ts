@@ -172,11 +172,9 @@ export class DiagnosticSessionWorkpad {
         report,
         report.diagnostic_session,
       );
-      diagnosticSession = restored.diagnostic_session;
       const persisted = await this.persistRecoveredDiagnosticSession(
         current,
-        diagnosticSession,
-        restored.worktree_rehomed,
+        restored,
       );
       report = persisted.report;
       workpadRevision = persisted.workpad_revision;
@@ -245,8 +243,7 @@ export class DiagnosticSessionWorkpad {
     );
     return this.persistRecoveredDiagnosticSession(
       current,
-      restored.diagnostic_session,
-      restored.worktree_rehomed,
+      restored,
     );
   }
 
@@ -649,8 +646,7 @@ export class DiagnosticSessionWorkpad {
     );
     const recovered = await this.persistRecoveredDiagnosticSession(
       current,
-      restored.diagnostic_session,
-      restored.worktree_rehomed,
+      restored,
     );
     const diagnosticSession = await this.worktrees.finalize(
       recovered.report,
@@ -782,10 +778,12 @@ export class DiagnosticSessionWorkpad {
   ): Promise<{
     diagnostic_session: VerifiedDiagnosticWorktree;
     worktree_rehomed: boolean;
+    recovery_state?: DiagnosticSession;
   }> {
     try {
+      const diagnosticSession = await this.worktrees.restore(report, state);
       return {
-        diagnostic_session: await this.worktrees.restore(report, state),
+        diagnostic_session: diagnosticSession,
         worktree_rehomed: false,
       };
     } catch (error) {
@@ -793,12 +791,12 @@ export class DiagnosticSessionWorkpad {
         throw error;
       }
       return {
-        diagnostic_session:
-          await this.worktrees.reconstructMissingRootDerivedWorktree(
-            report,
-            state,
-          ),
+        diagnostic_session: undefined as never,
         worktree_rehomed: true,
+        recovery_state: this.worktrees.prepareMissingRootDerivedWorktreeRecovery(
+          report,
+          state,
+        ),
       };
     }
   }
@@ -812,31 +810,48 @@ export class DiagnosticSessionWorkpad {
       report: FailureReport;
       revision: number;
     },
-    diagnosticSession: VerifiedDiagnosticWorktree,
-    worktreeRehomed: boolean,
+    restored: {
+      diagnostic_session: VerifiedDiagnosticWorktree;
+      worktree_rehomed: boolean;
+      recovery_state?: DiagnosticSession;
+    },
   ): Promise<LoadedDiagnosticSession> {
-    if (!worktreeRehomed) {
+    if (!restored.worktree_rehomed) {
       return {
         report: current.report,
         workpad_revision: current.revision,
-        diagnostic_session: diagnosticSession,
+        diagnostic_session: restored.diagnostic_session,
       };
+    }
+    if ((current.report.diagnostic_completions?.length ?? 0) > 0) {
+      throw new DiagnosticSafetyError(
+        "Cannot reconstruct a missing Root-derived diagnostic worktree after diagnostic completions were recorded; operator input is required.",
+      );
+    }
+    const recoveryState = restored.recovery_state;
+    if (!recoveryState) {
+      throw new Error("Missing-worktree recovery did not prepare state.");
     }
 
     const published = await this.publishDiagnosticSession(
       {
         report: current.report,
         workpad_revision: current.revision,
-        diagnostic_session: diagnosticSession,
+        diagnostic_session: undefined as never,
       },
-      diagnosticSession.state,
+      recoveryState,
     );
     const state = published.report.diagnostic_session;
     if (!state) {
       throw new Error(
-        "Legacy diagnostic-session recovery did not persist session state.",
+        "Missing-worktree recovery did not persist session state before reconstruction.",
       );
     }
+    const diagnosticSession =
+      await this.worktrees.reconstructMissingRootDerivedWorktree(
+        published.report,
+        state,
+      );
     return {
       report: published.report,
       workpad_revision: published.workpad_revision,
