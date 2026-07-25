@@ -17,7 +17,10 @@ import {
   DiagnosticSessionWorkpad,
   type DiagnosticSessionIssueGateway,
 } from "../agent/lib/diagnostics/workpad.js";
-import type { DiagnosticWorktreeManager } from "../agent/lib/diagnostics/worktree.js";
+import {
+  DiagnosticWorktreeMissingError,
+  type DiagnosticWorktreeManager,
+} from "../agent/lib/diagnostics/worktree.js";
 import {
   WorkpadPublicationRaceError,
   type PublishedSharedContext,
@@ -260,11 +263,29 @@ describe("diagnostic completion reconciliation", () => {
       reason: expect.stringContaining("post-write readback"),
     });
   });
+
+  it("does not clear a thread or reconstruct a missing worktree after last diagnosed history exists", async () => {
+    const harness = await createHarness({
+      initial_last_diagnosed_at: "2026-07-15T10:00:02Z",
+      missing_worktree_for_load: true,
+    });
+
+    await expect(
+      harness.workpad.loadForDiagnosticSession(harness.envelope),
+    ).rejects.toThrow("after diagnostic completion history was recorded");
+    expect(harness.gateway.publishCalls).toBe(0);
+    expect(harness.reconstructCalls()).toBe(0);
+    expect(harness.gateway.currentReport().diagnostic_session).toMatchObject({
+      codex_thread_id: "thr-54",
+      last_diagnosed_at: "2026-07-15T10:00:02Z",
+    });
+  });
 });
 
 type HarnessOptions = {
   concurrent_races?: number;
   initial_last_diagnosed_at?: string;
+  missing_worktree_for_load?: boolean;
   post_write_readback?: "missing_record";
 };
 
@@ -274,6 +295,7 @@ type Harness = {
   report: FailureReport;
   workpad: DiagnosticSessionWorkpad;
   worktrees: DiagnosticWorktreeManager;
+  reconstructCalls(): number;
 };
 
 async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
@@ -318,7 +340,44 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     },
   });
   const gateway = new MutableIssueGateway(report, options);
+  let reconstructCallCount = 0;
   const worktrees = {
+    assertNativeSkillNames() {
+      return undefined;
+    },
+    async restore(
+      _report: FailureReport,
+      state: NonNullable<FailureReport["diagnostic_session"]>,
+    ) {
+      if (options.missing_worktree_for_load) {
+        throw new DiagnosticWorktreeMissingError(
+          "The Root-derived diagnostic worktree no longer exists.",
+        );
+      }
+      return {
+        worktree_path: runtimeWorktreePath,
+        canonical_path: ["", "canonical", "CKBoost"].join("/"),
+        state,
+      };
+    },
+    prepareMissingRootDerivedWorktreeRecovery(
+      _report: FailureReport,
+      state: NonNullable<FailureReport["diagnostic_session"]>,
+    ) {
+      const { codex_thread_id: _staleThreadId, ...stateWithoutThread } = state;
+      return stateWithoutThread;
+    },
+    async reconstructMissingRootDerivedWorktree(
+      _report: FailureReport,
+      state: NonNullable<FailureReport["diagnostic_session"]>,
+    ) {
+      reconstructCallCount += 1;
+      return {
+        worktree_path: runtimeWorktreePath,
+        canonical_path: ["", "canonical", "CKBoost"].join("/"),
+        state,
+      };
+    },
     async captureCurrent(
       _report: FailureReport,
       state: NonNullable<FailureReport["diagnostic_session"]>,
@@ -344,6 +403,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     gateway,
     worktrees,
     workpad,
+    reconstructCalls: () => reconstructCallCount,
     envelope: diagnosticSessionEnvelopeSchema.parse({
       schema_version: "failure-report/diagnostic-session/v1",
       domain_extensions: ["ckb"],
@@ -598,7 +658,7 @@ class MutableIssueGateway implements DiagnosticSessionIssueGateway {
     };
   }
 
-  private currentReport(): FailureReport {
+  currentReport(): FailureReport {
     const workpad = findExistingWorkpad(this.issue, producers);
     if (!workpad) {
       throw new Error("Missing test workpad.");

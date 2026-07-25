@@ -104,6 +104,16 @@ export type DiagnosticCompletionReconciliationResult =
       attempts: number;
     };
 
+type RestoredDiagnosticSessionResult =
+  | {
+      status: "restored";
+      diagnostic_session: VerifiedDiagnosticWorktree;
+    }
+  | {
+      status: "missing";
+      recovery_state: DiagnosticSession;
+    };
+
 /** Durable result of recording sanitized native-approval terminal evidence. */
 export type NativeApprovalTerminalPersistenceResult = {
   report: FailureReport;
@@ -654,11 +664,7 @@ export class DiagnosticSessionWorkpad {
       this.now(),
     );
     const published = await this.publishDiagnosticSession(
-      {
-        report: recovered.report,
-        workpad_revision: recovered.workpad_revision,
-        diagnostic_session: diagnosticSession,
-      },
+      { report: recovered.report },
       diagnosticSession.state,
     );
     const finalized = published.report.diagnostic_session;
@@ -676,7 +682,7 @@ export class DiagnosticSessionWorkpad {
 
   /** Publishes only validated diagnostic session state while retaining the report. */
   private async publishDiagnosticSession(
-    current: LoadedDiagnosticSession,
+    current: { report: FailureReport },
     diagnosticSession: DiagnosticSession,
   ): Promise<{ report: FailureReport; workpad_revision: number }> {
     const nextReport = failureReportSchema.parse({
@@ -775,24 +781,19 @@ export class DiagnosticSessionWorkpad {
   private async restoreOrReconstructMissingDiagnosticSession(
     report: FailureReport,
     state: DiagnosticSession,
-  ): Promise<{
-    diagnostic_session: VerifiedDiagnosticWorktree;
-    worktree_rehomed: boolean;
-    recovery_state?: DiagnosticSession;
-  }> {
+  ): Promise<RestoredDiagnosticSessionResult> {
     try {
       const diagnosticSession = await this.worktrees.restore(report, state);
       return {
+        status: "restored",
         diagnostic_session: diagnosticSession,
-        worktree_rehomed: false,
       };
     } catch (error) {
       if (!(error instanceof DiagnosticWorktreeMissingError)) {
         throw error;
       }
       return {
-        diagnostic_session: undefined as never,
-        worktree_rehomed: true,
+        status: "missing",
         recovery_state: this.worktrees.prepareMissingRootDerivedWorktreeRecovery(
           report,
           state,
@@ -810,13 +811,9 @@ export class DiagnosticSessionWorkpad {
       report: FailureReport;
       revision: number;
     },
-    restored: {
-      diagnostic_session: VerifiedDiagnosticWorktree;
-      worktree_rehomed: boolean;
-      recovery_state?: DiagnosticSession;
-    },
+    restored: RestoredDiagnosticSessionResult,
   ): Promise<LoadedDiagnosticSession> {
-    if (!restored.worktree_rehomed) {
+    if (restored.status === "restored") {
       return {
         report: current.report,
         workpad_revision: current.revision,
@@ -828,18 +825,15 @@ export class DiagnosticSessionWorkpad {
         "Cannot reconstruct a missing Root-derived diagnostic worktree after diagnostic completions were recorded; operator input is required.",
       );
     }
-    const recoveryState = restored.recovery_state;
-    if (!recoveryState) {
-      throw new Error("Missing-worktree recovery did not prepare state.");
+    if (current.report.diagnostic_session?.last_diagnosed_at) {
+      throw new DiagnosticSafetyError(
+        "Cannot reconstruct a missing Root-derived diagnostic worktree after diagnostic completion history was recorded; operator input is required.",
+      );
     }
 
     const published = await this.publishDiagnosticSession(
-      {
-        report: current.report,
-        workpad_revision: current.revision,
-        diagnostic_session: undefined as never,
-      },
-      recoveryState,
+      { report: current.report },
+      restored.recovery_state,
     );
     const state = published.report.diagnostic_session;
     if (!state) {

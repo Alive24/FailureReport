@@ -278,17 +278,23 @@ export class DiagnosticWorktreeManager {
       }
     }
 
-    await this.git({
-      cwd: canonicalPath,
-      args: [
-        "worktree",
-        "add",
-        "--force",
-        "--detach",
-        expectedPath,
-        state.worktree.base_revision,
-      ],
-    });
+    try {
+      await this.git({
+        cwd: canonicalPath,
+        args: [
+          "worktree",
+          "add",
+          "--force",
+          "--detach",
+          expectedPath,
+          state.worktree.base_revision,
+        ],
+      });
+    } catch {
+      throw new DiagnosticSafetyError(
+        "Unable to reconstruct the missing Root-derived diagnostic worktree with a bounded single-force Git worktree add; operator input is required.",
+      );
+    }
 
     return this.inspect(report, state, true);
   }
