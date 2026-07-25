@@ -33,6 +33,7 @@ import {
 } from "./envelope.js";
 import {
   DiagnosticSafetyError,
+  DiagnosticWorktreeMissingError,
   DiagnosticWorktreeManager,
   type VerifiedDiagnosticWorktree,
 } from "./worktree.js";
@@ -167,7 +168,7 @@ export class DiagnosticSessionWorkpad {
           "Diagnostic session is finalized; prepare a separate future workflow instead of resuming its diagnostic worktree.",
         );
       }
-      const restored = await this.restoreOrRehydrateDiagnosticSession(
+      const restored = await this.restoreOrReconstructMissingDiagnosticSession(
         report,
         report.diagnostic_session,
       );
@@ -238,7 +239,7 @@ export class DiagnosticSessionWorkpad {
         "Diagnosis is blocked because no diagnostic worktree was durably prepared.",
       );
     }
-    const restored = await this.restoreOrRehydrateDiagnosticSession(
+    const restored = await this.restoreOrReconstructMissingDiagnosticSession(
       current.report,
       state,
     );
@@ -642,7 +643,7 @@ export class DiagnosticSessionWorkpad {
       };
     }
 
-    const restored = await this.restoreOrRehydrateDiagnosticSession(
+    const restored = await this.restoreOrReconstructMissingDiagnosticSession(
       current.report,
       state,
     );
@@ -772,11 +773,10 @@ export class DiagnosticSessionWorkpad {
   }
 
   /**
-   * Rehydrates an old Root-runtime worktree only after normal restoration has
-   * failed its safety checks. The manager permits only an unchanged immutable
-   * target revision and never reuses the former runtime's directory.
+   * Reconstructs a pathless Root-managed worktree only when the deterministic
+   * active-session path is missing. Every other integrity failure fails closed.
    */
-  private async restoreOrRehydrateDiagnosticSession(
+  private async restoreOrReconstructMissingDiagnosticSession(
     report: FailureReport,
     state: DiagnosticSession,
   ): Promise<{
@@ -789,22 +789,23 @@ export class DiagnosticSessionWorkpad {
         worktree_rehomed: false,
       };
     } catch (error) {
-      if (!(error instanceof DiagnosticSafetyError)) {
+      if (!(error instanceof DiagnosticWorktreeMissingError)) {
         throw error;
       }
       return {
-        diagnostic_session: await this.worktrees.rehydrateLegacyRuntimeWorktree(
-          report,
-          state,
-        ),
+        diagnostic_session:
+          await this.worktrees.reconstructMissingRootDerivedWorktree(
+            report,
+            state,
+          ),
         worktree_rehomed: true,
       };
     }
   }
 
   /**
-   * Persists all narrow legacy recovery before Root exposes the active session
-   * or attempts finalization. A failed ordinary restore never reaches this write.
+   * Persists narrow missing-worktree recovery before Root exposes the active
+   * session or attempts finalization. Other restore failures never reach here.
    */
   private async persistRecoveredDiagnosticSession(
     current: {

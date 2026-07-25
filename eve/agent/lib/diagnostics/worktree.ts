@@ -33,6 +33,14 @@ export class DiagnosticSafetyError extends Error {
   }
 }
 
+/** Signals only the recoverable absence of Root's deterministic worktree path. */
+export class DiagnosticWorktreeMissingError extends DiagnosticSafetyError {
+  constructor(message: string) {
+    super(message);
+    this.name = "DiagnosticWorktreeMissingError";
+  }
+}
+
 /** Injectable Git runner used to make worktree safety behavior testable. */
 export type GitCommandRunner = (input: {
   cwd: string;
@@ -234,35 +242,33 @@ export class DiagnosticWorktreeManager {
   }
 
   /**
-   * Rehomes one narrowly defined historical session whose old Root runtime no
-   * longer owns its persisted worktree path. The old directory is never read,
-   * reused, or removed: only an unchanged immutable target revision may be
-   * reconstructed under the current Root-owned worktree root.
+   * Reconstructs only a pathless active session whose Root-derived worktree is
+   * absent. All other integrity failures remain ordinary safety errors.
    */
-  async rehydrateLegacyRuntimeWorktree(
+  async reconstructMissingRootDerivedWorktree(
     report: FailureReport,
     state: DiagnosticSession,
   ): Promise<VerifiedDiagnosticWorktree> {
     if (state.lifecycle !== "active") {
       throw new DiagnosticSafetyError(
-        "Only an active diagnostic session can be rehomed from a legacy Root runtime.",
+        "Only an active diagnostic session can be reconstructed after a missing Root-derived worktree.",
       );
     }
     if (!sameStrings(state.domain_extensions, this.domainExtensionIds())) {
       throw new DiagnosticSafetyError(
-        "Legacy diagnostic session belongs to a different Root-owned domain extension set.",
+        "Missing-worktree recovery belongs to a different Root-owned domain extension set.",
       );
     }
     if (state.backend_id !== this.backendId) {
       throw new DiagnosticSafetyError(
-        "Legacy diagnostic session uses an unsupported backend: " +
+        "Missing-worktree recovery uses an unsupported backend: " +
           state.backend_id,
       );
     }
     const identity = this.identityFor(report);
     if (state.worktree.identity !== identity) {
       throw new DiagnosticSafetyError(
-        "Legacy diagnostic worktree identity does not belong to this FailureReport.",
+        "Missing-worktree recovery identity does not belong to this FailureReport.",
       );
     }
     if (
@@ -270,16 +276,86 @@ export class DiagnosticWorktreeManager {
       !sameRevision(state.worktree.head_revision, state.worktree.base_revision)
     ) {
       throw new DiagnosticSafetyError(
-        "Legacy diagnostic worktree rehydration requires an unchanged recorded target revision.",
+        "Missing-worktree recovery requires an unchanged recorded target revision.",
       );
     }
 
+    const source = await this.restoreCanonicalSource(
+      report,
+      state.worktree.base_revision,
+    );
+    const canonicalPath = source.canonical_path;
+    const nativeSkills = await this.resolveNativeSkillSources();
     const isolatedRoot = await this.resolveIsolatedWorktreeRoot();
     const expectedPath = this.worktreePath(report, isolatedRoot);
-    void expectedPath;
-    throw new DiagnosticSafetyError(
-      "Legacy diagnostic sessions that persisted a worktree path must be rejected and re-prepared with operator input.",
-    );
+    try {
+      await this.paths.lstat(expectedPath);
+      throw new DiagnosticSafetyError(
+        "Missing-worktree recovery found an existing Root-derived path; restore it normally or request operator input.",
+      );
+    } catch (error) {
+      if (error instanceof DiagnosticSafetyError) {
+        throw error;
+      }
+      if (!isNotFoundError(error)) {
+        throw new DiagnosticSafetyError(
+          "The Root-derived diagnostic worktree cannot be inspected safely.",
+        );
+      }
+    }
+
+    await this.git({
+      cwd: canonicalPath,
+      args: [
+        "worktree",
+        "add",
+        "--detach",
+        expectedPath,
+        state.worktree.base_revision,
+      ],
+    });
+
+    const allocatedStat = await this.paths.lstat(expectedPath);
+    if (allocatedStat.isSymbolicLink() || !allocatedStat.isDirectory()) {
+      throw new DiagnosticSafetyError(
+        "The reconstructed diagnostic worktree must be a real directory, not a symlink or file.",
+      );
+    }
+    const worktreePath = await this.paths.realpath(expectedPath);
+    if (!isPathInside(isolatedRoot, worktreePath)) {
+      throw new DiagnosticSafetyError(
+        "The reconstructed diagnostic worktree resolves outside Root-owned `.eve/sandbox-cache/worktrees`.",
+      );
+    }
+    if (worktreePath === canonicalPath) {
+      throw new DiagnosticSafetyError(
+        "The reconstructed diagnostic worktree resolves to the source checkout.",
+      );
+    }
+    await this.assertSameOrigin(source.canonical_remote, worktreePath);
+    await this.provisionNativeSkills(worktreePath, nativeSkills);
+    const headRevision = await this.git({
+      cwd: worktreePath,
+      args: ["rev-parse", "HEAD"],
+    });
+    if (headRevision !== state.worktree.base_revision) {
+      throw new DiagnosticSafetyError(
+        "The reconstructed diagnostic worktree did not resolve to the recorded target revision.",
+      );
+    }
+
+    const { codex_thread_id: _staleThreadId, ...stateWithoutThread } = state;
+    return {
+      worktree_path: worktreePath,
+      canonical_path: canonicalPath,
+      state: {
+        ...stateWithoutThread,
+        worktree: {
+          ...state.worktree,
+          head_revision: headRevision,
+        },
+      },
+    };
   }
 
   /**
@@ -423,9 +499,14 @@ export class DiagnosticWorktreeManager {
     let declaredStat: WorktreePathStat;
     try {
       declaredStat = await this.paths.lstat(expectedPath);
-    } catch {
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        throw new DiagnosticWorktreeMissingError(
+          "The Root-derived diagnostic worktree no longer exists; reconstruct only after validating pathless session state.",
+        );
+      }
       throw new DiagnosticSafetyError(
-        "The Root-derived diagnostic worktree no longer exists; do not fall back to the source checkout.",
+        "The Root-derived diagnostic worktree cannot be inspected safely.",
       );
     }
     if (declaredStat.isSymbolicLink() || !declaredStat.isDirectory()) {
@@ -437,9 +518,14 @@ export class DiagnosticWorktreeManager {
     let worktreePath: string;
     try {
       worktreePath = await this.paths.realpath(expectedPath);
-    } catch {
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        throw new DiagnosticWorktreeMissingError(
+          "The Root-derived diagnostic worktree no longer exists; reconstruct only after validating pathless session state.",
+        );
+      }
       throw new DiagnosticSafetyError(
-        "The Root-derived diagnostic worktree no longer exists; do not fall back to the source checkout.",
+        "The Root-derived diagnostic worktree cannot be resolved safely.",
       );
     }
     if (!isPathInside(isolatedRoot, worktreePath)) {
