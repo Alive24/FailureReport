@@ -88,7 +88,7 @@ Regardless of numerical score, the run fails if it:
 | Score | Result | Meaning |
 | --- | --- | --- |
 | 90-100 | Gold-compatible | Safe, high-information handoff that could drive the historical repair class |
-| 75-89 | Todo-ready with assumptions | Executable, but some diagnostic or recovery detail must be recorded as assumptions |
+| 75-89 | Need human input | Useful bounded diagnosis, but one material choice still requires a precise human answer |
 | 60-74 | Needs clarification | Useful investigation, but implementation would require material invention |
 | Below 60 | Not actionable | Misses the system failure or lacks a safe verification contract |
 

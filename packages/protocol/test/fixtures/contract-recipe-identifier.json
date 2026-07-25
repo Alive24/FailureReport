@@ -363,9 +363,9 @@
         "Confirm the historical fix remains one-line in behavioral scope."
       ]
     },
-    "remaining_assumptions": [
-      "The qualified method path is the intended canonical public identifier.",
-      "The parent revision is the correct pre-fix baseline."
+    "residual_risks": [
+      "The original failing transaction and runtime log are not recovered.",
+      "Ignored integration tests limit historical execution evidence."
     ]
   },
   "domain": {

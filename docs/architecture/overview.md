@@ -16,6 +16,10 @@ CKB is a mounted internal Eve extension. It contributes CKB instructions, the `f
 
 After Root determines the diagnosis is complete, `finalize_diagnostic_session` validates a clean detached worktree and creates and pushes a non-checked-out `diagnostic/<target-issue-number>-<issue-title-slug>` snapshot branch. The workpad records its `origin` ref and URL and marks it diagnostic-only: it is neither an implementation branch nor a PR base.
 
+`render_handoff` is the consumer-neutral boundary after diagnosis. It reads the latest managed workpad twice around a pure render, rejects stale caller revisions or concurrent lineage changes, and performs no write. A report is renderable as an implementation handoff only when its target revision, completion lineage, finalized worktree HEAD, and diagnostic-only remote snapshot agree and the gate is exactly `Ready`. The versioned handoff identifies the report, Issue, workpad entry/revision, immutable target, completion records, snapshot, and evidence refs, then carries only implementation goal, scope, guardrails, required outcomes, verification, UAT, and residual risks. Canonical key and set ordering plus SHA-256 identity derivation make equivalent durable input byte-identical.
+
+Material uncertainty takes the other mutually exclusive result path. Root returns a versioned human-input request containing confirmed facts, completed or exhausted experiments, eliminated hypotheses, one remaining material unknown, viable options, exactly one question, and a resume condition. That path requires the same diagnostic session to remain `active`, with its worktree and Codex thread persisted and no diagnostic branch. The durable workpad remains the full evidence source in both cases.
+
 Eve is pinned to just-bash for Root orchestration. Its virtual shell is not asked to clone, fetch, run Git, or execute Codex. Root's host-side diagnostics adapters perform the controlled workspace lifecycle and inspection. The one Codex worker validates the prepared envelope, restores the persisted thread, and runs Codex App Server directly on the host with the session worktree as `cwd`, reusing the user's existing Codex Home, plugins, skills, MCP configuration, authentication, Git credentials, and model configuration. It defaults to evidence, hypotheses, experiments, and recommendations. `workspace-write` is available for focused tests, caches, and ephemeral debugging artifacts; it is not permission for business-code changes, commits, pushes, pull requests, or diagnostic finalization.
 
 ## Durable Context
@@ -34,6 +38,7 @@ eve/
     tools/
       prepare_diagnostic_session.ts
       finalize_diagnostic_session.ts
+      render_handoff.ts
     extensions/
       ckb.ts                     pure CKB capability mount
     subagents/
