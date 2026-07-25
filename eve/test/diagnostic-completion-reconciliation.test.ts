@@ -299,7 +299,6 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
       backend_id: "codex_app_server",
       codex_thread_id: "thr-54",
       worktree: {
-        path: "/root/.eve/sandbox-cache/worktrees/diagnostic-54",
         identity: "diagnostic-54",
         base_revision: targetRevision,
         head_revision: targetRevision,
@@ -318,6 +317,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     ) {
       return {
         canonical_path: "/canonical/CKBoost",
+        path: "/root/.eve/sandbox-cache/worktrees/diagnostic-54",
         state: {
           ...state,
           worktree: { ...state.worktree, head_revision: changedHead },

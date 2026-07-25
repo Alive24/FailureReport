@@ -33,6 +33,7 @@ import {
 } from "./envelope.js";
 import {
   DiagnosticSafetyError,
+  DiagnosticWorktreeMissingError,
   DiagnosticWorktreeManager,
   type VerifiedDiagnosticWorktree,
 } from "./worktree.js";
@@ -772,9 +773,9 @@ export class DiagnosticSessionWorkpad {
   }
 
   /**
-   * Rehydrates an old Root-runtime worktree only after normal restoration has
-   * failed its safety checks. The manager permits only an unchanged immutable
-   * target revision and never reuses the former runtime's directory.
+   * Reconstructs a missing Root-managed worktree only after ordinary restore
+   * proves that the deterministic path is absent. Every other integrity failure
+   * remains fail-closed.
    */
   private async restoreOrRehydrateDiagnosticSession(
     report: FailureReport,
@@ -789,11 +790,11 @@ export class DiagnosticSessionWorkpad {
         worktree_rehomed: false,
       };
     } catch (error) {
-      if (!(error instanceof DiagnosticSafetyError)) {
+      if (!(error instanceof DiagnosticWorktreeMissingError)) {
         throw error;
       }
       return {
-        diagnostic_session: await this.worktrees.rehydrateLegacyRuntimeWorktree(
+        diagnostic_session: await this.worktrees.rehydrateMissingWorktree(
           report,
           state,
         ),
@@ -803,7 +804,7 @@ export class DiagnosticSessionWorkpad {
   }
 
   /**
-   * Persists all narrow legacy recovery before Root exposes the active session
+   * Persists all narrow workspace recovery before Root exposes the active session
    * or attempts finalization. A failed ordinary restore never reaches this write.
    */
   private async persistRecoveredDiagnosticSession(

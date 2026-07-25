@@ -122,25 +122,19 @@ describe("host-managed diagnostic workspace", () => {
     );
 
     expect(isChild(expectedCacheRoot, allocated.canonical_path)).toBe(true);
-    expect(isChild(expectedWorktreeRoot, allocated.state.worktree.path)).toBe(
-      true,
+    expect(isChild(expectedWorktreeRoot, allocated.path)).toBe(true);
+    expect(await gitCommand(allocated.path, ["branch", "--show-current"])).toBe(
+      "",
     );
-    expect(
-      await gitCommand(allocated.state.worktree.path, [
-        "branch",
-        "--show-current",
-      ]),
-    ).toBe("");
-    expect(
-      await gitCommand(allocated.state.worktree.path, ["rev-parse", "HEAD"]),
-    ).toBe(revision);
+    expect(await gitCommand(allocated.path, ["rev-parse", "HEAD"])).toBe(
+      revision,
+    );
     await expect(
       worktrees.restore(report, allocated.state),
     ).resolves.toMatchObject({
       state: {
         lifecycle: "active",
         worktree: {
-          path: allocated.state.worktree.path,
           base_revision: revision,
         },
       },
@@ -164,12 +158,9 @@ describe("host-managed diagnostic workspace", () => {
         reuse_policy: "diagnostic_snapshot_only",
       },
     });
-    expect(
-      await gitCommand(allocated.state.worktree.path, [
-        "branch",
-        "--show-current",
-      ]),
-    ).toBe("");
+    expect(await gitCommand(allocated.path, ["branch", "--show-current"])).toBe(
+      "",
+    );
     expect(
       await gitCommand(remote, ["rev-parse", "refs/heads/" + branch]),
     ).toBe(revision);

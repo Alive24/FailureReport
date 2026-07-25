@@ -112,10 +112,7 @@ describe("Codex diagnostic session", () => {
       harness.report,
       "ckboost-issue-54",
     );
-    const skillLink = nativeSkillLink(
-      allocated.state.worktree.path,
-      ckbSkillName,
-    );
+    const skillLink = nativeSkillLink(allocated.path, ckbSkillName);
 
     expect(harness.paths.linkTarget(skillLink)).toBe(ckbSkillSource);
     expect(allocated.state).toMatchObject({
@@ -133,7 +130,7 @@ describe("Codex diagnostic session", () => {
           "worktree",
           "add",
           "--detach",
-          allocated.state.worktree.path,
+          allocated.path,
           harness.report.target.revision,
         ],
       }),
@@ -157,6 +154,33 @@ describe("Codex diagnostic session", () => {
     ).resolves.toMatchObject({
       state: { worktree: { head_revision: externallyChangedHead } },
     });
+  });
+
+  it("adopts only a pristine interrupted allocation and publishes no host path", async () => {
+    const harness = await createHarness();
+    const interrupted = await harness.manager.allocate(
+      harness.report,
+      "ckboost-issue-54",
+    );
+
+    const prepared = await harness.workpad.prepare(preparationFor(harness));
+    expect(prepared.diagnostic_session.path).toBe(interrupted.path);
+    expect(
+      harness.currentReport().diagnostic_session?.worktree,
+    ).not.toHaveProperty("path");
+    expect(JSON.stringify(harness.currentReport())).not.toContain(runtimeRoot);
+    expect(
+      harness.calls.filter(
+        (call) => call.args[0] === "worktree" && call.args[1] === "add",
+      ),
+    ).toHaveLength(1);
+
+    const unsafe = await createHarness();
+    await unsafe.manager.allocate(unsafe.report, "ckboost-issue-54");
+    unsafe.setPorcelain("?? diagnostic-output.txt");
+    await expect(
+      unsafe.workpad.prepare(preparationFor(unsafe)),
+    ).rejects.toThrow("contains changes outside Root-managed native skills");
   });
 
   it("rejects a symlinked managed worktree root before allocating a checkout", async () => {
@@ -185,14 +209,10 @@ describe("Codex diagnostic session", () => {
 
     expect(allocated.state.domain_extensions).toEqual(["ckb", "evm"]);
     expect(
-      harness.paths.linkTarget(
-        nativeSkillLink(allocated.state.worktree.path, ckbSkillName),
-      ),
+      harness.paths.linkTarget(nativeSkillLink(allocated.path, ckbSkillName)),
     ).toBe(ckbSkillSource);
     expect(
-      harness.paths.linkTarget(
-        nativeSkillLink(allocated.state.worktree.path, evmSkillName),
-      ),
+      harness.paths.linkTarget(nativeSkillLink(allocated.path, evmSkillName)),
     ).toBe(evmSkillSource);
 
     expect(prepared.delegation_message).toMatch(
@@ -235,32 +255,29 @@ describe("Codex diagnostic session", () => {
     ).rejects.toThrow("not a valid v2 entry envelope");
   });
 
-  it("rehomes an unchanged legacy runtime worktree before exposing the session", async () => {
-    const harness = await createHarness({ legacyRuntimeWorktree: true });
+  it("reconstructs an unchanged missing managed worktree before exposing the session", async () => {
+    const harness = await createHarness({ missingManagedWorktree: true });
 
     const prepared = await harness.workpad.prepare(preparationFor(harness));
     const rehomed = prepared.diagnostic_session.state;
     expect(prepared.workpad_revision).toBe(1);
-    expect(rehomed.worktree.path).toBe(
+    expect(prepared.diagnostic_session.path).toBe(
       join(worktreeRoot, rehomed.worktree.identity),
     );
     expect(rehomed.codex_thread_id).toBeUndefined();
-    expect(harness.currentReport().diagnostic_session?.worktree.path).toBe(
-      rehomed.worktree.path,
-    );
     expect(
-      harness.calls.some((call) => call.cwd.startsWith("/former-root/")),
-    ).toBe(false);
+      harness.currentReport().diagnostic_session?.worktree,
+    ).not.toHaveProperty("path");
 
     const resumed = await harness.workpad.prepare(preparationFor(harness));
     expect(resumed.workpad_revision).toBe(prepared.workpad_revision);
-    expect(resumed.diagnostic_session.state.worktree.path).toBe(
-      rehomed.worktree.path,
+    expect(resumed.diagnostic_session.path).toBe(
+      prepared.diagnostic_session.path,
     );
   });
 
-  it("rehomes a legacy runtime worktree before finalizing its snapshot", async () => {
-    const harness = await createHarness({ legacyRuntimeWorktree: true });
+  it("reconstructs a missing managed worktree before finalizing its snapshot", async () => {
+    const harness = await createHarness({ missingManagedWorktree: true });
 
     const finalized = await harness.workpad.finalize(
       finalizationInput(harness),
@@ -269,22 +286,17 @@ describe("Codex diagnostic session", () => {
     expect(finalized.diagnostic_session.codex_thread_id).toBeUndefined();
     expect(finalized.diagnostic_session).toMatchObject({
       lifecycle: "finalized",
-      worktree: {
-        path: join(
-          worktreeRoot,
-          finalized.diagnostic_session.worktree.identity,
-        ),
-      },
       diagnostic_branch: {
         name: "diagnostic/54-ckboost-issue-54",
       },
     });
+    expect(finalized.diagnostic_session.worktree).not.toHaveProperty("path");
   });
 
-  it("refuses to rehome a legacy runtime worktree with a divergent recorded HEAD", async () => {
+  it("refuses to reconstruct a missing managed worktree with a divergent recorded HEAD", async () => {
     const harness = await createHarness({
-      legacyRuntimeWorktree: true,
-      legacyRuntimeHeadDiverged: true,
+      missingManagedWorktree: true,
+      missingManagedWorktreeHeadDiverged: true,
     });
 
     await expect(
@@ -303,10 +315,7 @@ describe("Codex diagnostic session", () => {
       harness.report,
       "ckboost-issue-54",
     );
-    const skillLink = nativeSkillLink(
-      allocated.state.worktree.path,
-      ckbSkillName,
-    );
+    const skillLink = nativeSkillLink(allocated.path, ckbSkillName);
 
     harness.paths.removeLink(skillLink);
     await expect(
@@ -546,8 +555,8 @@ describe("Codex diagnostic session", () => {
 async function createHarness(
   options: {
     domainExtensions?: readonly DomainExtension[];
-    legacyRuntimeWorktree?: boolean;
-    legacyRuntimeHeadDiverged?: boolean;
+    missingManagedWorktree?: boolean;
+    missingManagedWorktreeHeadDiverged?: boolean;
   } = {},
 ): Promise<Harness> {
   const fixture = new URL(
@@ -559,7 +568,7 @@ async function createHarness(
   );
   const domainExtensions = options.domainExtensions ?? [createCkbExtension()];
   let report = loaded;
-  if (options.legacyRuntimeWorktree) {
+  if (options.missingManagedWorktree) {
     const identity = diagnosticWorktreeIdentity(report, domainExtensions);
     report = failureReportSchema.parse({
       ...report,
@@ -569,16 +578,9 @@ async function createHarness(
         backend_id: "codex_app_server",
         codex_thread_id: "legacy-thread",
         worktree: {
-          path: join(
-            "/former-root/FailureReport",
-            ".eve",
-            "sandbox-cache",
-            "worktrees",
-            identity,
-          ),
           identity,
           base_revision: report.target.revision,
-          head_revision: options.legacyRuntimeHeadDiverged
+          head_revision: options.missingManagedWorktreeHeadDiverged
             ? "b".repeat(40)
             : report.target.revision,
         },

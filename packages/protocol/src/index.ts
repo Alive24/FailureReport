@@ -139,10 +139,14 @@ export const githubIssueContextSchema = z
   })
   .strict();
 
-/** Validates the immutable identity and current revision of an isolated worktree. */
+/**
+ * Validates the durable identity and Git revisions of an isolated worktree.
+ *
+ * The host-local path is runtime state owned by Root and must never enter the
+ * public FailureReport workpad.
+ */
 export const diagnosticWorktreeSchema = z
   .object({
-    path: z.string().min(1),
     identity: z.string().min(1),
     base_revision: immutableGitRevisionSchema,
     head_revision: immutableGitRevisionSchema,

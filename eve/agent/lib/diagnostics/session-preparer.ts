@@ -119,19 +119,19 @@ export function createDiagnosticSessionPreparer(
       const readiness = await preflight({
         executable: options.codex_path,
         workspace: {
-          path: prepared.diagnostic_session.state.worktree.path,
+          path: prepared.diagnostic_session.path,
           native_skill_names: nativeSkillNames,
         },
         // Retry recovery is intentionally limited to the same Root-owned
-        // workpad/worktree path. `loadForDiagnosticSession` revalidates that
-        // workspace and repairs only a missing Root-selected skill symlink.
+        // workpad/worktree identity. `loadForDiagnosticSession` re-derives and
+        // validates the private path and repairs only a missing selected skill.
         revalidate_workspace: async () => {
           const restored = await workpad.loadForDiagnosticSession({
             ...envelope,
             workpad_revision: prepared.workpad_revision,
           });
           return {
-            path: restored.diagnostic_session.state.worktree.path,
+            path: restored.diagnostic_session.path,
             native_skill_names: nativeSkillNames,
           };
         },

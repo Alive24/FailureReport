@@ -534,8 +534,9 @@ class FakeWorkpad {
   async loadForDiagnosticSession(_envelope: DiagnosticSessionEnvelope) {
     return {
       diagnostic_session: {
+        path: worktreePath,
         state: {
-          worktree: { path: worktreePath, identity: "diagnostic-54" },
+          worktree: { identity: "diagnostic-54" },
           ...(this.threadId ? { codex_thread_id: this.threadId } : {}),
         },
       },
