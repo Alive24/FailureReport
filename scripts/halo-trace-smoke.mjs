@@ -62,7 +62,9 @@ async function main() {
         "Current catalog ranks Vercel Eve Traces for @inference/tracing and eve 0.24.4.",
     }),
     spanProcessors: [
-      new SimpleSpanProcessor(new MultiSpanExporter([jsonlExporter, otlpExporter])),
+      new SimpleSpanProcessor(
+        new MultiSpanExporter([jsonlExporter, otlpExporter]),
+      ),
     ],
   });
 
@@ -101,7 +103,10 @@ async function main() {
 }
 
 async function assertNativeInstrumentationFile() {
-  const instrumentationPath = join(repositoryRoot, "eve/agent/instrumentation.ts");
+  const instrumentationPath = join(
+    repositoryRoot,
+    "eve/agent/instrumentation.ts",
+  );
   const contents = await readFile(instrumentationPath, "utf8");
   const required = [
     "defineCatalystEveInstrumentation",
@@ -117,7 +122,11 @@ async function assertNativeInstrumentationFile() {
 }
 
 async function captureRepresentativeFailureReportFlow(tracer) {
-  const expectedNativeSpanNames = ["ai.eve.turn", "invoke_agent", "execute_tool"];
+  const expectedNativeSpanNames = [
+    "ai.eve.turn",
+    "invoke_agent",
+    "execute_tool",
+  ];
   const syntheticAgentAttributes = {
     "agent.name": "failure-report-root",
     "agent.id": "failure-report-root",
@@ -199,8 +208,10 @@ async function captureRepresentativeFailureReportFlow(tracer) {
                 "openinference.span.kind": "LLM",
                 "llm.model_name": "codex-app-server",
                 "gen_ai.system": "codex",
-                "input.value": "Inspect the FailureReport trace coverage issue.",
-                "output.value": "Identified native Eve coverage and semantic gaps.",
+                "input.value":
+                  "Inspect the FailureReport trace coverage issue.",
+                "output.value":
+                  "Identified native Eve coverage and semantic gaps.",
                 "llm.token_count.prompt": 12,
                 "llm.token_count.completion": 8,
                 "llm.token_count.total": 20,
@@ -296,7 +307,9 @@ class MultiSpanExporter {
   }
 
   async forceFlush() {
-    await Promise.all(this.exporters.map((exporter) => exporter.forceFlush?.()));
+    await Promise.all(
+      this.exporters.map((exporter) => exporter.forceFlush?.()),
+    );
   }
 }
 
@@ -358,7 +371,10 @@ class AtomicJsonlSpanExporter {
 function toCanonicalRecord(span) {
   const spanContext = span.spanContext();
   const parentSpanId =
-    span.parentSpanContext?.spanId || span.parentSpanId || span.parentSpanID || "";
+    span.parentSpanContext?.spanId ||
+    span.parentSpanId ||
+    span.parentSpanID ||
+    "";
   return {
     trace_id: spanContext.traceId,
     span_id: spanContext.spanId,
@@ -380,7 +396,9 @@ function toCanonicalRecord(span) {
         span.instrumentationLibrary?.name ||
         "unknown",
       version:
-        span.instrumentationScope?.version || span.instrumentationLibrary?.version || "",
+        span.instrumentationScope?.version ||
+        span.instrumentationLibrary?.version ||
+        "",
     },
     attributes: span.attributes || {},
     trace_state: spanContext.traceState?.serialize?.() || "",
@@ -405,7 +423,9 @@ async function verifyCanonicalJsonl(outputPath) {
     .filter(Boolean)
     .map((line) => JSON.parse(line));
   if (records.length < 5) {
-    throw new Error(`Expected at least five trace spans; captured ${records.length}.`);
+    throw new Error(
+      `Expected at least five trace spans; captured ${records.length}.`,
+    );
   }
   const requiredTopLevelFields = [
     "trace_id",
@@ -429,14 +449,20 @@ async function verifyCanonicalJsonl(outputPath) {
   const bySpanId = new Map(records.map((record) => [record.span_id, record]));
   const roots = records.filter((record) => !record.parent_span_id);
   if (roots.length !== 1) {
-    throw new Error(`Expected exactly one root span; captured ${roots.length}.`);
+    throw new Error(
+      `Expected exactly one root span; captured ${roots.length}.`,
+    );
   }
   for (const record of records) {
     if (record.attributes["agent.name"] !== "failure-report-root") {
-      throw new Error(`Span ${record.name} is missing FailureReport agent identity.`);
+      throw new Error(
+        `Span ${record.name} is missing FailureReport agent identity.`,
+      );
     }
     if (record.parent_span_id && !bySpanId.has(record.parent_span_id)) {
-      throw new Error(`Span ${record.name} has a missing parent ${record.parent_span_id}.`);
+      throw new Error(
+        `Span ${record.name} has a missing parent ${record.parent_span_id}.`,
+      );
     }
     if (record.parent_span_id) {
       const parent = bySpanId.get(record.parent_span_id);
@@ -445,22 +471,35 @@ async function verifyCanonicalJsonl(outputPath) {
       const parentStart = Date.parse(parent.start_time);
       const parentEnd = Date.parse(parent.end_time);
       if (childStart < parentStart || childEnd > parentEnd + 1) {
-        throw new Error(`Span ${record.name} is outside parent time containment.`);
+        throw new Error(
+          `Span ${record.name} is outside parent time containment.`,
+        );
       }
     }
   }
   const names = new Set(records.map((record) => record.name));
-  const expectedNativeSpanNames = ["ai.eve.turn", "invoke_agent", "execute_tool"];
+  const expectedNativeSpanNames = [
+    "ai.eve.turn",
+    "invoke_agent",
+    "execute_tool",
+  ];
   const nativeSpanCoverage = Object.fromEntries(
     expectedNativeSpanNames.map((spanName) => [spanName, names.has(spanName)]),
   );
   const root = roots[0];
   for (const [spanName, present] of Object.entries(nativeSpanCoverage)) {
-    if (root.attributes[`failure_report.native_span_present.${spanName}`] !== present) {
-      throw new Error(`Native span coverage metadata is inconsistent for ${spanName}.`);
+    if (
+      root.attributes[`failure_report.native_span_present.${spanName}`] !==
+      present
+    ) {
+      throw new Error(
+        `Native span coverage metadata is inconsistent for ${spanName}.`,
+      );
     }
   }
-  const llmSpan = records.find((record) => record.name === "failure_report.codex_model_turn");
+  const llmSpan = records.find(
+    (record) => record.name === "failure_report.codex_model_turn",
+  );
   const promptTokens = llmSpan?.attributes["llm.token_count.prompt"];
   const completionTokens = llmSpan?.attributes["llm.token_count.completion"];
   const totalTokens = llmSpan?.attributes["llm.token_count.total"];
