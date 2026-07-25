@@ -37,65 +37,67 @@ async function main() {
 
   const jsonlExporter = new AtomicJsonlSpanExporter(artifactPath);
   const otlpExporter = new StrictExporter(
-  new OTLPTraceExporter({
-    url: otlpEndpoint,
-    headers: process.env.CATALYST_OTLP_TOKEN
-      ? { authorization: `Bearer ${process.env.CATALYST_OTLP_TOKEN}` }
-      : undefined,
-  }),
-  `OTLP export to ${otlpEndpoint}`,
-);
+    new OTLPTraceExporter({
+      url: otlpEndpoint,
+      headers: process.env.CATALYST_OTLP_TOKEN
+        ? { authorization: `Bearer ${process.env.CATALYST_OTLP_TOKEN}` }
+        : undefined,
+    }),
+    `OTLP export to ${otlpEndpoint}`,
+  );
   const provider = new NodeTracerProvider({
     resource: resourceFromAttributes({
-    [SEMRESATTRS_SERVICE_NAME]: "failure-report-eve-root",
-    "service.name": "failure-report-eve-root",
-    "service.version": process.env.CATALYST_SERVICE_VERSION,
-    "deployment.environment": process.env.NODE_ENV ?? "test",
-    "telemetry.sdk.language": "nodejs",
-    "failure_report.trace_guide.url":
-      "https://docs.inference.net/integrations/traces/eve.md",
-    "failure_report.trace_guide.retrieved_at":
-      "2026-07-24T18:21:08.942664+00:00",
-    "failure_report.trace_guide.sha256":
-      "4cb9dcf2e3537f4f1cb7be1644bfb13d07e25754baf8c25cad335cdfd10a5c2e",
-    "failure_report.trace_guide.selection":
-      "Current catalog ranks Vercel Eve Traces for @inference/tracing and eve 0.24.4.",
-  }),
-  spanProcessors: [
-    new SimpleSpanProcessor(new MultiSpanExporter([jsonlExporter, otlpExporter])),
-  ],
-});
+      [SEMRESATTRS_SERVICE_NAME]: "failure-report-eve-root",
+      "service.name": "failure-report-eve-root",
+      "service.version": process.env.CATALYST_SERVICE_VERSION,
+      "deployment.environment": process.env.NODE_ENV ?? "test",
+      "telemetry.sdk.language": "nodejs",
+      "failure_report.trace_guide.url":
+        "https://docs.inference.net/integrations/traces/eve.md",
+      "failure_report.trace_guide.retrieved_at":
+        "2026-07-24T18:21:08.942664+00:00",
+      "failure_report.trace_guide.sha256":
+        "4cb9dcf2e3537f4f1cb7be1644bfb13d07e25754baf8c25cad335cdfd10a5c2e",
+      "failure_report.trace_guide.selection":
+        "Current catalog ranks Vercel Eve Traces for @inference/tracing and eve 0.24.4.",
+    }),
+    spanProcessors: [
+      new SimpleSpanProcessor(new MultiSpanExporter([jsonlExporter, otlpExporter])),
+    ],
+  });
 
-provider.register();
+  provider.register();
 
-const tracer = trace.getTracer("failure-report-halo-smoke", "0.1.0");
+  const tracer = trace.getTracer("failure-report-halo-smoke", "0.1.0");
 
-try {
-  await captureRepresentativeFailureReportFlow(tracer);
-  await provider.forceFlush();
-  await provider.shutdown();
-  const verification = await verifyCanonicalJsonl(artifactPath);
-  console.log(
-    JSON.stringify(
-      {
-        artifact: artifactPath,
-        otlp_endpoint: otlpEndpoint,
-        spans: jsonlExporter.exportedSpanCount,
-        verification,
-      },
-      null,
-      2,
-    ),
-  );
-} catch (error) {
   try {
+    await captureRepresentativeFailureReportFlow(tracer);
+    await provider.forceFlush();
     await provider.shutdown();
-  } catch {
-    // Preserve the original export/capture failure.
+    const verification = await verifyCanonicalJsonl(artifactPath);
+    console.log(
+      JSON.stringify(
+        {
+          artifact: artifactPath,
+          otlp_endpoint: otlpEndpoint,
+          spans: jsonlExporter.exportedSpanCount,
+          verification,
+        },
+        null,
+        2,
+      ),
+    );
+  } catch (error) {
+    try {
+      await provider.shutdown();
+    } catch {
+      // Preserve the original export/capture failure.
+    }
+    console.error(
+      error instanceof Error ? error.stack || error.message : String(error),
+    );
+    process.exitCode = 1;
   }
-  console.error(error instanceof Error ? error.stack || error.message : String(error));
-  process.exitCode = 1;
-}
 }
 
 async function assertNativeInstrumentationFile() {
@@ -279,7 +281,9 @@ class MultiSpanExporter {
               ? { code: 0 }
               : {
                   code: 1,
-                  error: new Error(failures.map((failure) => failure.message).join("; ")),
+                  error: new Error(
+                    failures.map((failure) => failure.message).join("; "),
+                  ),
                 },
           );
         }
@@ -310,7 +314,9 @@ class StrictExporter {
       }
       resultCallback({
         code: 1,
-        error: new Error(`${this.label} failed: ${result.error?.message || "rejected"}`),
+        error: new Error(
+          `${this.label} failed: ${result.error?.message || "rejected"}`,
+        ),
       });
     });
   }
@@ -342,7 +348,8 @@ class AtomicJsonlSpanExporter {
   async shutdown() {
     await mkdir(dirname(this.outputPath), { recursive: true });
     const temporaryPath = `${this.outputPath}.${randomUUID()}.tmp`;
-    const body = this.records.map((record) => JSON.stringify(record)).join("\n") + "\n";
+    const body =
+      this.records.map((record) => JSON.stringify(record)).join("\n") + "\n";
     await writeFile(temporaryPath, body, "utf8");
     await rename(temporaryPath, this.outputPath);
   }
@@ -368,7 +375,10 @@ function toCanonicalRecord(span) {
       attributes: span.resource?.attributes || {},
     },
     scope: {
-      name: span.instrumentationScope?.name || span.instrumentationLibrary?.name || "unknown",
+      name:
+        span.instrumentationScope?.name ||
+        span.instrumentationLibrary?.name ||
+        "unknown",
       version:
         span.instrumentationScope?.version || span.instrumentationLibrary?.version || "",
     },

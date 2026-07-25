@@ -5,7 +5,6 @@ settings:
   excludeLinksFromLockfile: false
 
 importers:
-
   .:
     devDependencies:
       '@opentelemetry/api':
@@ -116,7 +115,6 @@ importers:
         version: 1.20.2
 
 packages:
-
   '@ai-sdk/gateway@4.0.20':
     resolution: {integrity: sha512-m3PdYs0yqSxswsrEhVj64wDLgFs35Zxl8liLNuWGzE7bwBLF6Mhu0E5rPpDNJbIjyQpA4aMKOOWBfjERw2zvPw==}
     engines: {node: '>=22'}
