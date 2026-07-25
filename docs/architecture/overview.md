@@ -26,6 +26,8 @@ Eve is pinned to just-bash for Root orchestration. Its virtual shell is not aske
 
 A target repository has one GitHub Issue: its body remains human-readable and one marked workpad comment stores the complete structured report. `shared_context` contains collaboration binding, while `diagnostic_session` stores the selected domain extensions, backend, active/finalized lifecycle, Root-generated worktree identity/base/HEAD, optional Codex thread id, and optional diagnostic snapshot branch. The host-local worktree path is never part of the public report; Root derives it from the managed runtime root and persisted identity on every use. The report accepts only `target.repository` plus a full immutable `target.revision`; it never stores or accepts a source checkout path. On every active resume Root verifies the host-managed source cache, canonical origin, containment below `.eve/sandbox-cache/`, deterministic path, detached state, base SHA, and saved HEAD. Unsafe or externally changed state requires operator input; the worker never falls back to an arbitrary checkout.
 
+The MCP wrapper separately owns private transport durability. Its on-disk ledger records prepared, delivered, queued, terminal, and cleaned operations per canonical Issue/report session key. Eve exposes the allocated session cursor as soon as a message delivery is accepted, so the wrapper persists that cursor before consuming the long-running terminal stream. Process or caller loss can then reattach to the delivered turn without posting its Root message again. Only one turn is delivered per canonical key at a time; unrelated keys use independent pumps. This ledger is never part of `RootRequest`, `RootResult`, the GitHub workpad, or the diagnostic handoff.
+
 ## Eve Project Layout
 
 ```text

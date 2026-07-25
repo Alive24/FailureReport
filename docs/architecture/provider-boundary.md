@@ -26,6 +26,8 @@ domain extensions    prepare/finalize diagnostic session
 
 Only Root is public, through `eve/agent/channels/eve.ts`. An extension namespace, domain id, worker name, provider id, Git worktree path, or native-skill source is never an MCP or Temporal API field.
 
+The MCP adapter may retain private delivery state for its outer-wrapper responsibility. It persists request ownership and the Eve Channel cursor before waiting for a long Root turn, serializes only requests sharing one canonical Issue/report session key, and reattaches after caller or process loss. It does not add fields to the public Root contract, expose Eve session identifiers, create an alternate Root, or change diagnostic workspace ownership.
+
 ## Responsibility Split
 
 | Layer | Owns | Does not own |
