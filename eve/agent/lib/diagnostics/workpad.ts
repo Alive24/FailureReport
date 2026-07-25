@@ -251,10 +251,7 @@ export class DiagnosticSessionWorkpad {
       current.report,
       state,
     );
-    return this.persistRecoveredDiagnosticSession(
-      current,
-      restored,
-    );
+    return this.persistRecoveredDiagnosticSession(current, restored);
   }
 
   /** Records a Codex App Server thread id once Root observes it. */
@@ -794,10 +791,11 @@ export class DiagnosticSessionWorkpad {
       }
       return {
         status: "missing",
-        recovery_state: this.worktrees.prepareMissingRootDerivedWorktreeRecovery(
-          report,
-          state,
-        ),
+        recovery_state:
+          this.worktrees.prepareMissingRootDerivedWorktreeRecovery(
+            report,
+            state,
+          ),
       };
     }
   }

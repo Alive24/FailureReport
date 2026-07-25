@@ -124,10 +124,7 @@ describe("host-managed diagnostic workspace", () => {
     expect(isChild(expectedCacheRoot, allocated.canonical_path)).toBe(true);
     expect(isChild(expectedWorktreeRoot, allocated.worktree_path)).toBe(true);
     expect(
-      await gitCommand(allocated.worktree_path, [
-        "branch",
-        "--show-current",
-      ]),
+      await gitCommand(allocated.worktree_path, ["branch", "--show-current"]),
     ).toBe("");
     expect(
       await gitCommand(allocated.worktree_path, ["rev-parse", "HEAD"]),
@@ -162,10 +159,7 @@ describe("host-managed diagnostic workspace", () => {
       },
     });
     expect(
-      await gitCommand(allocated.worktree_path, [
-        "branch",
-        "--show-current",
-      ]),
+      await gitCommand(allocated.worktree_path, ["branch", "--show-current"]),
     ).toBe("");
     expect(
       await gitCommand(remote, ["rev-parse", "refs/heads/" + branch]),
@@ -192,10 +186,7 @@ describe("host-managed diagnostic workspace", () => {
 
     expect(reconstructed.worktree_path).toBe(allocated.worktree_path);
     expect(
-      await gitCommand(reconstructed.worktree_path, [
-        "rev-parse",
-        "HEAD",
-      ]),
+      await gitCommand(reconstructed.worktree_path, ["rev-parse", "HEAD"]),
     ).toBe(report.target.revision);
   });
 
@@ -218,8 +209,8 @@ describe("host-managed diagnostic workspace", () => {
     expect((failed as Error).message).toContain(
       "Unable to reconstruct the missing Root-derived diagnostic worktree",
     );
-    expect(JSON.stringify(failed)).not.toContain(root);
-    expect(JSON.stringify(failed)).not.toContain(allocated.worktree_path);
+    expect((failed as Error).message).not.toContain(root);
+    expect((failed as Error).message).not.toContain(allocated.worktree_path);
   });
 });
 

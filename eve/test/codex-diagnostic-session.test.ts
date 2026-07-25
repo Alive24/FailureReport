@@ -115,10 +115,7 @@ describe("Codex diagnostic session", () => {
       harness.report,
       "ckboost-issue-54",
     );
-    const skillLink = nativeSkillLink(
-      allocated.worktree_path,
-      ckbSkillName,
-    );
+    const skillLink = nativeSkillLink(allocated.worktree_path, ckbSkillName);
 
     expect(harness.paths.linkTarget(skillLink)).toBe(ckbSkillSource);
     expect(allocated.state).toMatchObject({
@@ -239,9 +236,9 @@ describe("Codex diagnostic session", () => {
   });
 
   it("strictly rejects legacy path-bearing diagnostic sessions", async () => {
-    await expect(createHarness({ legacyRuntimeWorktree: true })).rejects.toThrow(
-      "Unrecognized key",
-    );
+    await expect(
+      createHarness({ legacyRuntimeWorktree: true }),
+    ).rejects.toThrow("Unrecognized key");
   });
 
   it("refuses path-bearing legacy state before any Git rehydration", async () => {
