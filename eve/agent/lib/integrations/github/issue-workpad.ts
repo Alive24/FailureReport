@@ -1,12 +1,23 @@
 import {
   appendFailureReportWorkpadEntry,
+  createFailureReportWorkpadChunkGroup,
   failureReportSchema,
   githubIssueContextSchema,
+  parseFailureReportWorkpadChunk,
+  parseFailureReportWorkpadManifest,
   parseFailureReportWorkpad,
+  reconstructFailureReportWorkpadManifest,
+  renderFailureReportWorkpadManifest,
   renderFailureReportWorkpad,
+  serializeFailureReportWorkpadEntryPayload,
+  workpadChunkMarker,
+  workpadManifestStartMarker,
   workpadMarker,
   type FailureReport,
+  type FailureReportWorkpadChunk,
+  type FailureReportWorkpadChunkGroup,
   type FailureReportWorkpadEntry,
+  type FailureReportWorkpadManifest,
   type GithubIssueContext,
 } from "@failure-report/protocol";
 
@@ -79,20 +90,44 @@ export type ExistingWorkpad = {
   logical_session_id: string;
   producer: WorkpadProducer;
   predecessor_comment_ref?: string;
+  continuation_kind?: "capacity" | "producer_transition";
+  representation: "entries" | "manifest";
 };
 
-/** A write prepared entirely in memory, with freshness values rechecked at write time. */
-export type IssueWorkpadMutation = {
-  mode: "create" | "append" | "continue";
+type IssueWorkpadMutationBase = {
   expected_issue_updated_at: string;
   expected_workpad_revision: number | null;
   expected_workpad_comment_ref?: string;
-  workpad_comment_body: string;
-  target_comment_ref?: string;
   predecessor_comment_ref?: string;
   entry: FailureReportWorkpadEntry;
   report: FailureReport;
 };
+
+/** A single provider request for the normal entry or successor fast path. */
+export type SingleCommentWorkpadMutation = IssueWorkpadMutationBase & {
+  mode: "create" | "append" | "continue";
+  workpad_comment_body: string;
+  target_comment_ref?: string;
+};
+
+/** One provisional chunk write, optionally resolved to an immutable retry reuse. */
+export type PlannedWorkpadChunk = {
+  chunk: FailureReportWorkpadChunk;
+  workpad_comment_body: string;
+  existing_comment_ref?: string;
+};
+
+/** Multi-request publication whose final manifest is the only lineage mutation. */
+export type ChunkedWorkpadMutation = IssueWorkpadMutationBase & {
+  mode: "chunk";
+  group: FailureReportWorkpadChunkGroup;
+  chunks: PlannedWorkpadChunk[];
+  encoded_byte_budget: number;
+};
+
+/** A provider-bounded write plan prepared entirely in memory. */
+export type IssueWorkpadMutation =
+  SingleCommentWorkpadMutation | ChunkedWorkpadMutation;
 
 type VerifiedWorkpadComment = {
   comment: GithubIssueComment;
@@ -100,7 +135,12 @@ type VerifiedWorkpadComment = {
   logical_session_id: string;
   producer: WorkpadProducer;
   predecessor_comment_ref?: string;
+  continuation_kind?: "capacity" | "producer_transition";
+  representation: "entries" | "manifest";
 };
+
+/** Conservative encoded JSON request budget beneath GitHub's comment limit. */
+export const defaultGithubWorkpadEncodedByteBudget = 60_000;
 
 /**
  * Finds the head of exactly one schema-valid, provenance-verified comment lineage.
@@ -138,6 +178,10 @@ export function findExistingWorkpad(
     ...(head.predecessor_comment_ref
       ? { predecessor_comment_ref: head.predecessor_comment_ref }
       : {}),
+    ...(head.continuation_kind
+      ? { continuation_kind: head.continuation_kind }
+      : {}),
+    representation: head.representation,
   };
 }
 
@@ -189,8 +233,14 @@ export function prepareIssueWorkpadMutation(
   report: FailureReport,
   syncedAt: string,
   producers: WorkpadProducerConfiguration,
+  encodedByteBudget = defaultGithubWorkpadEncodedByteBudget,
 ): IssueWorkpadMutation {
   const configuration = validateProducerConfiguration(producers);
+  if (!Number.isSafeInteger(encodedByteBudget) || encodedByteBudget < 1) {
+    throw new WorkpadNeedsInputError(
+      "FailureReport provider comment budget must be a positive encoded-byte count.",
+    );
+  }
   const current = findExistingWorkpad(issue, configuration);
   const existingContext = report.shared_context;
 
@@ -229,71 +279,308 @@ export function prepareIssueWorkpadMutation(
 
   const sameProducer =
     current?.producer.github_actor_id === configuration.current.github_actor_id;
-  const mode: IssueWorkpadMutation["mode"] = !current
-    ? "create"
-    : sameProducer
-      ? "append"
-      : "continue";
   const revision = current ? current.revision + 1 : 0;
   const logicalSessionId =
     current?.logical_session_id ?? initialLogicalSessionId(issue, report);
-  const predecessorCommentRef =
-    mode === "continue"
-      ? current?.comment.id
-      : current?.predecessor_comment_ref;
   const entryId = logicalSessionId + "/revision-" + String(revision);
-  const targetCommentRef = mode === "append" ? current?.comment.id : undefined;
-  const sharedContext: GithubIssueContext = githubIssueContextSchema.parse({
-    provider: "github_issue",
-    repository: issue.repository,
-    issue_number: issue.issue_number,
-    issue_url: issue.issue_url,
-    workpad_marker: workpadMarker,
-    ...(targetCommentRef ? { workpad_comment_ref: targetCommentRef } : {}),
-    workpad_revision: revision,
-    workpad_logical_session_id: logicalSessionId,
-    workpad_entry_id: entryId,
-    workpad_producer_id: configuration.current.id,
-    ...(predecessorCommentRef
-      ? { workpad_predecessor_comment_ref: predecessorCommentRef }
-      : {}),
-    synced_at: syncedAt,
-  });
-  const nextReport = failureReportSchema.parse({
-    ...report,
-    updated_at: syncedAt,
-    shared_context: sharedContext,
-  });
-  const entry: FailureReportWorkpadEntry = {
-    schema_version: "failure-report-workpad-entry/v2",
-    producer: configuration.current,
-    logical_session_id: logicalSessionId,
-    entry_id: entryId,
-    revision,
-    ...(predecessorCommentRef
-      ? { predecessor_comment_ref: predecessorCommentRef }
-      : {}),
-    report: nextReport,
-  };
-
-  const workpadCommentBody =
-    mode === "append" && current
-      ? appendFailureReportWorkpadEntry(current.comment.body, entry)
-      : renderFailureReportWorkpad(entry);
-
-  return {
-    mode,
+  const common = {
     expected_issue_updated_at: issue.updated_at,
     expected_workpad_revision: current?.revision ?? null,
     ...(current ? { expected_workpad_comment_ref: current.comment.id } : {}),
-    workpad_comment_body: workpadCommentBody,
-    ...(targetCommentRef ? { target_comment_ref: targetCommentRef } : {}),
+  };
+
+  if (current && sameProducer && current.representation === "entries") {
+    const entry = buildWorkpadEntry({
+      issue,
+      report,
+      syncedAt,
+      producer: configuration.current,
+      logicalSessionId,
+      entryId,
+      revision,
+      targetCommentRef: current.comment.id,
+      predecessorCommentRef: current.predecessor_comment_ref,
+      continuationKind: current.continuation_kind,
+    });
+    const body = appendFailureReportWorkpadEntry(current.comment.body, entry);
+    if (encodedWorkpadCommentRequestBytes(body) <= encodedByteBudget) {
+      return {
+        ...common,
+        mode: "append",
+        workpad_comment_body: body,
+        target_comment_ref: current.comment.id,
+        ...(current.predecessor_comment_ref
+          ? { predecessor_comment_ref: current.predecessor_comment_ref }
+          : {}),
+        entry,
+        report: entry.report,
+      };
+    }
+  }
+
+  const predecessorCommentRef = current?.comment.id;
+  const continuationKind = current
+    ? sameProducer
+      ? ("capacity" as const)
+      : ("producer_transition" as const)
+    : undefined;
+  const entry = buildWorkpadEntry({
+    issue,
+    report,
+    syncedAt,
+    producer: configuration.current,
+    logicalSessionId,
+    entryId,
+    revision,
+    predecessorCommentRef,
+    continuationKind,
+  });
+  const body = renderFailureReportWorkpad(entry);
+  if (encodedWorkpadCommentRequestBytes(body) <= encodedByteBudget) {
+    return {
+      ...common,
+      mode: current ? "continue" : "create",
+      workpad_comment_body: body,
+      ...(predecessorCommentRef
+        ? { predecessor_comment_ref: predecessorCommentRef }
+        : {}),
+      entry,
+      report: entry.report,
+    };
+  }
+
+  const chunkByteLength = largestFittingChunkByteLength(
+    entry,
+    encodedByteBudget,
+  );
+  const selected = selectReusableChunkGroup(
+    issue,
+    entry,
+    chunkByteLength,
+    configuration,
+  );
+  return {
+    ...common,
+    mode: "chunk",
     ...(predecessorCommentRef
       ? { predecessor_comment_ref: predecessorCommentRef }
       : {}),
+    group: selected.group,
+    chunks: selected.group.chunks.map((chunk, index) => ({
+      chunk,
+      workpad_comment_body: selected.group.chunk_comment_bodies[index] ?? "",
+      ...(selected.commentRefs[index]
+        ? { existing_comment_ref: selected.commentRefs[index] }
+        : {}),
+    })),
+    encoded_byte_budget: encodedByteBudget,
     entry,
+    report: entry.report,
+  };
+}
+
+type BuildWorkpadEntryInput = {
+  issue: GithubIssueSnapshot;
+  report: FailureReport;
+  syncedAt: string;
+  producer: WorkpadProducer;
+  logicalSessionId: string;
+  entryId: string;
+  revision: number;
+  targetCommentRef?: string;
+  predecessorCommentRef?: string;
+  continuationKind?: "capacity" | "producer_transition";
+};
+
+/** Constructs one entry after the physical target representation is known. */
+function buildWorkpadEntry(
+  input: BuildWorkpadEntryInput,
+): FailureReportWorkpadEntry {
+  const sharedContext: GithubIssueContext = githubIssueContextSchema.parse({
+    provider: "github_issue",
+    repository: input.issue.repository,
+    issue_number: input.issue.issue_number,
+    issue_url: input.issue.issue_url,
+    workpad_marker: workpadMarker,
+    ...(input.targetCommentRef
+      ? { workpad_comment_ref: input.targetCommentRef }
+      : {}),
+    workpad_revision: input.revision,
+    workpad_logical_session_id: input.logicalSessionId,
+    workpad_entry_id: input.entryId,
+    workpad_producer_id: input.producer.id,
+    ...(input.predecessorCommentRef
+      ? { workpad_predecessor_comment_ref: input.predecessorCommentRef }
+      : {}),
+    synced_at: input.syncedAt,
+  });
+  const nextReport = failureReportSchema.parse({
+    ...input.report,
+    updated_at: input.syncedAt,
+    shared_context: sharedContext,
+  });
+  return {
+    schema_version: "failure-report-workpad-entry/v2",
+    producer: input.producer,
+    logical_session_id: input.logicalSessionId,
+    entry_id: input.entryId,
+    revision: input.revision,
+    ...(input.predecessorCommentRef
+      ? { predecessor_comment_ref: input.predecessorCommentRef }
+      : {}),
+    ...(input.continuationKind
+      ? { continuation_kind: input.continuationKind }
+      : {}),
     report: nextReport,
   };
+}
+
+/** Measures the actual UTF-8 JSON request representation used by both gateways. */
+export function encodedWorkpadCommentRequestBytes(body: string): number {
+  return Buffer.byteLength(JSON.stringify({ body }), "utf8");
+}
+
+function largestFittingChunkByteLength(
+  entry: FailureReportWorkpadEntry,
+  encodedByteBudget: number,
+): number {
+  const payloadBytes = Buffer.byteLength(
+    serializeFailureReportWorkpadEntryPayload(entry),
+    "utf8",
+  );
+  let low = 1;
+  let high = payloadBytes;
+  let selected = 0;
+  while (low <= high) {
+    const candidate = Math.floor((low + high) / 2);
+    const group = createFailureReportWorkpadChunkGroup(entry, candidate);
+    const fits = group.chunk_comment_bodies.every(
+      (body) => encodedWorkpadCommentRequestBytes(body) <= encodedByteBudget,
+    );
+    if (fits) {
+      selected = candidate;
+      low = candidate + 1;
+    } else {
+      high = candidate - 1;
+    }
+  }
+  if (selected === 0) {
+    throw new WorkpadNeedsInputError(
+      "FailureReport provider budget is too small for a provisional chunk envelope.",
+    );
+  }
+  return selected;
+}
+
+function selectReusableChunkGroup(
+  issue: GithubIssueSnapshot,
+  entry: FailureReportWorkpadEntry,
+  chunkByteLength: number,
+  configuration: WorkpadProducerConfiguration,
+): {
+  group: FailureReportWorkpadChunkGroup;
+  commentRefs: Array<string | undefined>;
+} {
+  const provisional = issue.comments.filter((comment) =>
+    comment.body.includes(workpadChunkMarker),
+  );
+  for (let attempt = 0; attempt <= provisional.length; attempt += 1) {
+    const group = createFailureReportWorkpadChunkGroup(
+      entry,
+      chunkByteLength,
+      attempt,
+    );
+    const candidates = provisional.flatMap((comment) => {
+      try {
+        const chunk = parseFailureReportWorkpadChunk(comment.body);
+        return chunk.group_id === group.group_id ? [{ comment, chunk }] : [];
+      } catch {
+        return [];
+      }
+    });
+    const refs: Array<string | undefined> = Array.from({
+      length: group.chunks.length,
+    });
+    let reusable = true;
+    for (const candidate of candidates) {
+      const expected = group.chunks[candidate.chunk.chunk_index];
+      if (
+        !expected ||
+        refs[candidate.chunk.chunk_index] ||
+        candidate.comment.author?.id !==
+          configuration.current.github_actor_id ||
+        JSON.stringify(candidate.chunk) !== JSON.stringify(expected) ||
+        candidate.comment.body !==
+          group.chunk_comment_bodies[candidate.chunk.chunk_index]
+      ) {
+        reusable = false;
+        break;
+      }
+      refs[candidate.chunk.chunk_index] = candidate.comment.id;
+    }
+    if (reusable) {
+      return { group, commentRefs: refs };
+    }
+  }
+  throw new WorkpadNeedsInputError(
+    "FailureReport could not allocate an unambiguous provisional chunk group.",
+  );
+}
+
+/**
+ * Rechecks the durable chunk comments and measures the final outbound manifest
+ * only after the provider has assigned every physical comment reference.
+ */
+export function prepareVerifiedWorkpadManifest(
+  issue: GithubIssueSnapshot,
+  mutation: ChunkedWorkpadMutation,
+  commentRefs: readonly string[],
+  configuration: WorkpadProducerConfiguration,
+): string {
+  const validated = validateProducerConfiguration(configuration);
+  if (
+    commentRefs.length !== mutation.chunks.length ||
+    new Set(commentRefs).size !== commentRefs.length
+  ) {
+    throw new WorkpadNeedsInputError(
+      "FailureReport final manifest requires one unique reference per chunk.",
+    );
+  }
+  for (const [index, commentRef] of commentRefs.entries()) {
+    const matches = issue.comments.filter(
+      (comment) => comment.id === commentRef,
+    );
+    const planned = mutation.chunks[index];
+    if (
+      matches.length !== 1 ||
+      !planned ||
+      matches[0]?.body !== planned.workpad_comment_body ||
+      matches[0]?.author?.id !== validated.current.github_actor_id
+    ) {
+      throw new WorkpadNeedsInputError(
+        "FailureReport final manifest cannot verify every planned provisional chunk.",
+      );
+    }
+  }
+  const body = renderFailureReportWorkpadManifest(mutation.group, commentRefs);
+  if (encodedWorkpadCommentRequestBytes(body) > mutation.encoded_byte_budget) {
+    throw new WorkpadNeedsInputError(
+      "FailureReport final manifest exceeds the provider's safe encoded-byte budget.",
+    );
+  }
+  const synthetic = {
+    id: "__pending_manifest__",
+    body,
+    updated_at: issue.updated_at,
+    author: { id: validated.current.github_actor_id },
+  };
+  const verified = verifyManifestComment(issue, synthetic, validated);
+  if (verified.entries[0]?.entry_id !== mutation.entry.entry_id) {
+    throw new WorkpadNeedsInputError(
+      "FailureReport final manifest does not reconstruct the prepared entry.",
+    );
+  }
+  return body;
 }
 
 /** Revalidates a marked comment's content, binding, producer registry, and author. */
@@ -302,6 +589,10 @@ function verifyManagedComment(
   comment: GithubIssueComment,
   configuration: WorkpadProducerConfiguration,
 ): VerifiedWorkpadComment {
+  if (comment.body.includes(workpadManifestStartMarker)) {
+    return verifyManifestComment(issue, comment, configuration);
+  }
+
   let entries: FailureReportWorkpadEntry[];
   try {
     entries = parseFailureReportWorkpad(comment.body).entries;
@@ -349,6 +640,11 @@ function verifyManagedComment(
           " has incompatible predecessor references.",
       );
     }
+    if (entry.continuation_kind !== first.continuation_kind) {
+      throw new WorkpadNeedsInputError(
+        "FailureReport comment " + comment.id + " mixes continuation intents.",
+      );
+    }
     if (entryIds.has(entry.entry_id)) {
       throw new WorkpadNeedsInputError(
         "FailureReport comment " + comment.id + " repeats an entry identity.",
@@ -394,6 +690,98 @@ function verifyManagedComment(
     logical_session_id: first.logical_session_id,
     producer: registered,
     ...(predecessor ? { predecessor_comment_ref: predecessor } : {}),
+    ...(first.continuation_kind
+      ? { continuation_kind: first.continuation_kind }
+      : {}),
+    representation: "entries",
+  };
+}
+
+/** Resolves and verifies a manifest's referenced chunks before exposing its entry. */
+function verifyManifestComment(
+  issue: GithubIssueSnapshot,
+  comment: GithubIssueComment,
+  configuration: WorkpadProducerConfiguration,
+): VerifiedWorkpadComment {
+  let manifest: FailureReportWorkpadManifest;
+  try {
+    manifest = parseFailureReportWorkpadManifest(comment.body);
+  } catch (error) {
+    throw asNeedsInput(
+      "FailureReport marker on comment " +
+        comment.id +
+        " is not a valid final manifest.",
+      error,
+    );
+  }
+  const registered = configuration.producers.find(
+    (producer) => producer.id === manifest.producer.id,
+  );
+  if (
+    !registered ||
+    registered.github_actor_id !== manifest.producer.github_actor_id
+  ) {
+    throw new WorkpadNeedsInputError(
+      "FailureReport manifest " + comment.id + " names an unknown producer.",
+    );
+  }
+  if (!comment.author || comment.author.id !== registered.github_actor_id) {
+    throw new WorkpadNeedsInputError(
+      "FailureReport manifest " +
+        comment.id +
+        " author does not match its recorded producer.",
+    );
+  }
+
+  const referenced = manifest.chunks.map((reference) => {
+    const matches = issue.comments.filter(
+      (candidate) => candidate.id === reference.comment_ref,
+    );
+    if (matches.length !== 1 || matches[0] === comment) {
+      throw new WorkpadNeedsInputError(
+        "FailureReport manifest " +
+          comment.id +
+          " has a missing, duplicated, or self-referential chunk.",
+      );
+    }
+    const chunkComment = matches[0];
+    if (
+      !chunkComment?.author ||
+      chunkComment.author.id !== registered.github_actor_id
+    ) {
+      throw new WorkpadNeedsInputError(
+        "FailureReport manifest " +
+          comment.id +
+          " references a foreign-author chunk.",
+      );
+    }
+    return { comment_ref: reference.comment_ref, body: chunkComment.body };
+  });
+
+  let entry: FailureReportWorkpadEntry;
+  try {
+    entry = reconstructFailureReportWorkpadManifest(manifest, referenced);
+  } catch (error) {
+    throw asNeedsInput(
+      "FailureReport manifest " +
+        comment.id +
+        " cannot reconstruct one verified canonical payload.",
+      error,
+    );
+  }
+  assertEntryBoundToIssue(entry, issue, comment.id);
+  return {
+    comment,
+    entries: [entry],
+    logical_session_id: manifest.logical_session_id,
+    producer: registered,
+    ...(manifest.predecessor_comment_ref
+      ? { predecessor_comment_ref: manifest.predecessor_comment_ref }
+      : {}),
+    ...(manifest.continuation_kind
+      ? { continuation_kind: manifest.continuation_kind }
+      : {}),
+    representation: "manifest",
   };
 }
 
@@ -427,6 +815,11 @@ function selectLinearLineage(
       "FailureReport workpad must have exactly one root comment.",
     );
   }
+  if (roots[0]?.continuation_kind) {
+    throw new WorkpadNeedsInputError(
+      "FailureReport workpad root cannot declare continuation intent.",
+    );
+  }
   const children = new Map<string, VerifiedWorkpadComment>();
   for (const comment of comments) {
     const predecessor = comment.predecessor_comment_ref;
@@ -439,9 +832,20 @@ function selectLinearLineage(
         "FailureReport workpad has a missing or self-referential predecessor.",
       );
     }
-    if (parent.producer.github_actor_id === comment.producer.github_actor_id) {
+    const sameProducer =
+      parent.producer.github_actor_id === comment.producer.github_actor_id;
+    if (sameProducer && comment.continuation_kind !== "capacity") {
       throw new WorkpadNeedsInputError(
-        "FailureReport same-producer continuation must append to its existing comment.",
+        "FailureReport same-producer successor lacks an explicit capacity continuation.",
+      );
+    }
+    if (
+      !sameProducer &&
+      comment.continuation_kind !== undefined &&
+      comment.continuation_kind !== "producer_transition"
+    ) {
+      throw new WorkpadNeedsInputError(
+        "FailureReport configured producer transition has incompatible continuation intent.",
       );
     }
     if (children.has(predecessor)) {
