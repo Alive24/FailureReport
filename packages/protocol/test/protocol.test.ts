@@ -55,7 +55,6 @@ async function finalizedReadyReport(revision = 7): Promise<FailureReport> {
       backend_id: "codex_app_server",
       codex_thread_id: "thread-ready-54",
       worktree: {
-        path: "/root-owned/worktrees/diagnostic-54",
         identity: sessionIdentity,
         base_revision: report.target.revision,
         head_revision: report.target.revision,
@@ -131,7 +130,6 @@ async function activeHumanInputReport(): Promise<FailureReport> {
       backend_id: "codex_app_server",
       codex_thread_id: "thread-human-input-54",
       worktree: {
-        path: "/root-owned/worktrees/diagnostic-human-input-54",
         identity: "diagnostic-human-input-54",
         base_revision: report.target.revision,
         head_revision: report.target.revision,
