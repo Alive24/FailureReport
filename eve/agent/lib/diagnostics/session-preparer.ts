@@ -123,8 +123,9 @@ export function createDiagnosticSessionPreparer(
           native_skill_names: nativeSkillNames,
         },
         // Retry recovery is intentionally limited to the same Root-owned
-        // workpad/worktree identity. `loadForDiagnosticSession` revalidates that
-        // workspace and repairs only a missing Root-selected skill symlink.
+        // workpad/worktree identity. `loadForDiagnosticSession` revalidates the
+        // workspace and may reconstruct only a missing deterministic worktree or
+        // repair only a missing Root-selected skill symlink.
         revalidate_workspace: async () => {
           const restored = await workpad.loadForDiagnosticSession({
             ...envelope,

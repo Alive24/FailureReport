@@ -188,10 +188,11 @@ export class DiagnosticWorktreeManager {
       }
     }
 
-    await this.git({
-      cwd: canonicalPath,
-      args: ["worktree", "add", "--detach", worktreePath, baseRevision],
-    });
+    await this.requiredGit(
+      canonicalPath,
+      ["worktree", "add", "--detach", worktreePath, baseRevision],
+      "Unable to allocate the Root-derived diagnostic worktree; operator input is required.",
+    );
 
     const allocatedStat = await this.paths.lstat(worktreePath);
     if (allocatedStat.isSymbolicLink() || !allocatedStat.isDirectory()) {
@@ -207,10 +208,11 @@ export class DiagnosticWorktreeManager {
       );
     }
     await this.provisionNativeSkills(actualPath, nativeSkills);
-    const headRevision = await this.git({
-      cwd: actualPath,
-      args: ["rev-parse", "HEAD"],
-    });
+    const headRevision = await this.requiredGit(
+      actualPath,
+      ["rev-parse", "HEAD"],
+      "Unable to inspect the allocated diagnostic worktree HEAD; operator input is required.",
+    );
     await this.assertSameOrigin(source.canonical_remote, actualPath);
 
     return {
@@ -367,10 +369,11 @@ export class DiagnosticWorktreeManager {
   ): Promise<VerifiedDiagnosticWorktree> {
     const verified = await this.inspect(report, state, true);
     const worktreePath = verified.worktree_path;
-    const porcelain = await this.git({
-      cwd: worktreePath,
-      args: ["status", "--porcelain", "--untracked-files=all"],
-    });
+    const porcelain = await this.requiredGit(
+      worktreePath,
+      ["status", "--porcelain", "--untracked-files=all"],
+      "Unable to inspect diagnostic worktree status before finalization; operator input is required.",
+    );
     const unexpectedChanges = porcelain
       .split("\n")
       .filter(Boolean)
@@ -402,20 +405,20 @@ export class DiagnosticWorktreeManager {
         );
       }
     } else {
-      await this.git({
-        cwd: worktreePath,
-        args: ["branch", branch, headRevision],
-      });
+      await this.requiredGit(
+        worktreePath,
+        ["branch", branch, headRevision],
+        "Unable to create the diagnostic snapshot branch without force; operator input is required.",
+      );
     }
     try {
       await this.git({
         cwd: worktreePath,
         args: ["push", "origin", remoteRef + ":" + remoteRef],
       });
-    } catch (error) {
+    } catch {
       throw new DiagnosticSafetyError(
-        "Unable to push the diagnostic snapshot branch without force: " +
-          errorMessage(error),
+        "Unable to push the diagnostic snapshot branch without force; operator input is required.",
       );
     }
     const pushedHead = await this.remoteBranchHead(worktreePath, remoteRef);
@@ -523,10 +526,11 @@ export class DiagnosticWorktreeManager {
     }
 
     const topLevel = await this.paths.realpath(
-      await this.git({
-        cwd: worktreePath,
-        args: ["rev-parse", "--show-toplevel"],
-      }),
+      await this.requiredGit(
+        worktreePath,
+        ["rev-parse", "--show-toplevel"],
+        "Unable to inspect the saved diagnostic Git worktree root; operator input is required.",
+      ),
     );
     if (topLevel !== worktreePath) {
       throw new DiagnosticSafetyError(
@@ -534,30 +538,33 @@ export class DiagnosticWorktreeManager {
       );
     }
 
-    const branch = await this.git({
-      cwd: worktreePath,
-      args: ["branch", "--show-current"],
-    });
+    const branch = await this.requiredGit(
+      worktreePath,
+      ["branch", "--show-current"],
+      "Unable to inspect the saved diagnostic branch state; operator input is required.",
+    );
     if (branch) {
       throw new DiagnosticSafetyError(
         "The active diagnostic worktree must remain detached.",
       );
     }
 
-    const headRevision = await this.git({
-      cwd: worktreePath,
-      args: ["rev-parse", "HEAD"],
-    });
+    const headRevision = await this.requiredGit(
+      worktreePath,
+      ["rev-parse", "HEAD"],
+      "Unable to inspect the saved diagnostic HEAD; operator input is required.",
+    );
     if (requireRecordedHead && headRevision !== state.worktree.head_revision) {
       throw new DiagnosticSafetyError(
         "The saved diagnostic HEAD changed outside FailureReport; explicit operator input is required before resume.",
       );
     }
 
-    const mergeBase = await this.git({
-      cwd: worktreePath,
-      args: ["merge-base", state.worktree.base_revision, headRevision],
-    });
+    const mergeBase = await this.requiredGit(
+      worktreePath,
+      ["merge-base", state.worktree.base_revision, headRevision],
+      "Unable to validate the diagnostic worktree ancestry; operator input is required.",
+    );
     if (mergeBase !== state.worktree.base_revision) {
       throw new DiagnosticSafetyError(
         "The diagnostic worktree no longer descends from its recorded base revision.",
@@ -682,8 +689,7 @@ export class DiagnosticWorktreeManager {
         throw error;
       }
       throw new DiagnosticSafetyError(
-        "Unable to provision the Root-owned native diagnostic skill: " +
-          errorMessage(error),
+        "Unable to provision the Root-owned native diagnostic skill; operator input is required.",
       );
     }
   }
@@ -896,10 +902,9 @@ export class DiagnosticWorktreeManager {
         cwd: worktreePath,
         args: ["ls-remote", "--heads", "origin", remoteRef],
       });
-    } catch (error) {
+    } catch {
       throw new DiagnosticSafetyError(
-        "Unable to inspect the remote diagnostic snapshot branch: " +
-          errorMessage(error),
+        "Unable to inspect the remote diagnostic snapshot branch; operator input is required.",
       );
     }
     if (!output) {
@@ -923,6 +928,21 @@ export class DiagnosticWorktreeManager {
       throw new DiagnosticSafetyError(
         "Diagnostic branch slug must be a non-empty safe Issue-title slug.",
       );
+    }
+  }
+
+  private async requiredGit(
+    cwd: string,
+    args: string[],
+    safeMessage: string,
+  ): Promise<string> {
+    try {
+      return await this.git({ cwd, args });
+    } catch (error) {
+      if (error instanceof DiagnosticSafetyError) {
+        throw error;
+      }
+      throw new DiagnosticSafetyError(safeMessage);
     }
   }
 }
@@ -1007,9 +1027,4 @@ function isNotFoundError(error: unknown): boolean {
     "code" in error &&
     error.code === "ENOENT"
   );
-}
-
-/** Converts a caught setup error into bounded operator-facing diagnostic context. */
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "unknown filesystem error";
 }

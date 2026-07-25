@@ -179,7 +179,121 @@ describe("host-managed diagnostic workspace", () => {
       },
     });
   });
+
+  it("reconstructs a missing registered worktree with one bounded force", async () => {
+    const { report, worktrees } = await createRealGitHarness(57);
+    const allocated = await worktrees.allocate(report, "stale-registration");
+    await rm(allocated.worktree_path, { force: true, recursive: true });
+
+    const reconstructed = await worktrees.reconstructMissingRootDerivedWorktree(
+      report,
+      allocated.state,
+    );
+
+    expect(reconstructed.worktree_path).toBe(allocated.worktree_path);
+    expect(
+      await gitCommand(reconstructed.worktree_path, [
+        "rev-parse",
+        "HEAD",
+      ]),
+    ).toBe(report.target.revision);
+  });
+
+  it("keeps a locked stale worktree registration failed closed and pathless", async () => {
+    const { root, report, worktrees } = await createRealGitHarness(58);
+    const allocated = await worktrees.allocate(report, "locked-registration");
+    await rm(allocated.worktree_path, { force: true, recursive: true });
+    await gitCommand(allocated.canonical_path, [
+      "worktree",
+      "lock",
+      "--reason",
+      "operator-owned lock",
+      allocated.worktree_path,
+    ]);
+
+    const failed = await worktrees
+      .reconstructMissingRootDerivedWorktree(report, allocated.state)
+      .catch((error: unknown) => error);
+    expect(failed).toBeInstanceOf(Error);
+    expect((failed as Error).message).toContain(
+      "Unable to reconstruct the missing Root-derived diagnostic worktree",
+    );
+    expect(JSON.stringify(failed)).not.toContain(root);
+    expect(JSON.stringify(failed)).not.toContain(allocated.worktree_path);
+  });
 });
+
+async function createRealGitHarness(issueNumber: number) {
+  const root = await mkdtemp(join(tmpdir(), "failure-report-host-runtime-"));
+  temporaryRoots.push(root);
+  const remote = join(root, "remote.git");
+  const seed = join(root, "seed");
+  await gitCommand(root, ["init", "--bare", remote]);
+  await gitCommand(root, ["init", seed]);
+  await gitCommand(seed, [
+    "config",
+    "user.email",
+    "failure-report@example.test",
+  ]);
+  await gitCommand(seed, ["config", "user.name", "FailureReport test"]);
+  await writeFile(join(seed, "README.md"), "diagnostic fixture\n", "utf8");
+  await gitCommand(seed, ["add", "README.md"]);
+  await gitCommand(seed, ["commit", "-m", "fixture"]);
+  const revision = await gitCommand(seed, ["rev-parse", "HEAD"]);
+  await gitCommand(seed, ["remote", "add", "origin", remote]);
+  await gitCommand(seed, ["push", "origin", "HEAD:main"]);
+  const skillRoot = fileURLToPath(
+    new URL("../../packages/ckb-domain-pack", import.meta.url),
+  );
+  const skillDirectory = join(
+    skillRoot,
+    "extension",
+    "skills",
+    "failure-report-ckb-debugging",
+  );
+  const extension: DomainExtension = {
+    id: "ckb",
+    native_skills: [
+      {
+        name: "failure-report-ckb-debugging",
+        source_root: skillRoot,
+        source_directory: skillDirectory,
+      },
+    ],
+  };
+  const sourceCache = new DiagnosticSourceCacheManager({
+    runtimeRoot: root,
+    git,
+    paths,
+    remoteForRepository: () => remote,
+  });
+  const worktrees = new DiagnosticWorktreeManager({
+    domainExtensions: [extension],
+    backendId: "codex_app_server",
+    runtimeRoot: root,
+    sourceCache,
+    git,
+    paths,
+  });
+  const report = failureReportSchema.parse({
+    ...fixtureReport(),
+    id: "ckboost-issue-" + issueNumber,
+    target: {
+      ...fixtureReport().target,
+      repository: "Alive24/CKBoost",
+      revision,
+    },
+    shared_context: {
+      provider: "github_issue",
+      repository: "Alive24/CKBoost",
+      issue_number: issueNumber,
+      issue_url: "https://github.com/Alive24/CKBoost/issues/" + issueNumber,
+      workpad_marker: "<!-- failure-report-workpad -->",
+      workpad_revision: 0,
+    },
+  });
+  return { root, report, worktrees };
+}
 
 function fixtureReport() {
   return failureReportSchema.parse({
