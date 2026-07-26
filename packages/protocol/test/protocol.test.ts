@@ -16,6 +16,7 @@ import {
   reconstructFailureReportWorkpadManifest,
   renderDiagnosticHandoff,
   renderFailureReportWorkpad,
+  renderFailureReportWorkpadHumanView,
   renderFailureReportWorkpadManifest,
   rootRequestSchema,
   rootResultSchema,
@@ -41,6 +42,31 @@ async function finalizedReadyReport(revision = 7): Promise<FailureReport> {
   const sessionIdentity = "diagnostic-54-contract-recipe";
   return failureReportSchema.parse({
     ...report,
+    inputs: report.inputs.map((input) => ({
+      ...input,
+      artifact:
+        input.artifact.sensitivity === "public"
+          ? input.artifact
+          : {
+              ...input.artifact,
+              ref: "protected://protocol-test/input/" + input.id,
+            },
+    })),
+    evidence: report.evidence.map((evidence) => ({
+      ...evidence,
+      artifacts: evidence.artifacts.map((artifact, index) =>
+        artifact.sensitivity === "public"
+          ? artifact
+          : {
+              ...artifact,
+              ref:
+                "protected://protocol-test/evidence/" +
+                evidence.id +
+                "/" +
+                String(index),
+            },
+      ),
+    })),
     shared_context: {
       provider: "github_issue",
       repository: "Alive24/CKBoost",
@@ -159,6 +185,29 @@ async function activeHumanInputReport(): Promise<FailureReport> {
           "Resume this same diagnostic session after the owner selects one quorum.",
       },
     },
+  });
+}
+
+/** Creates an in-progress report without inventing a completed conclusion. */
+async function activeDiagnosisReport(): Promise<FailureReport> {
+  const report = failureReportSchema.parse(await loadFixture("issue-54.json"));
+  return failureReportSchema.parse({
+    ...report,
+    status: "investigating",
+    handoff: {
+      ...report.handoff,
+      todo_status: "not_ready",
+      gate_decision: "Need to Clarify",
+    },
+    experiments: report.experiments.map((experiment, index) =>
+      index === 0
+        ? {
+            ...experiment,
+            outcome: "not_run" as const,
+            interpretation: "",
+          }
+        : experiment,
+    ),
   });
 }
 
@@ -435,7 +484,7 @@ describe("FailureReport protocol", () => {
     ).toThrow("persisted Codex thread");
   });
 
-  it("round-trips a versioned managed entry with a human summary before details", async () => {
+  it("round-trips a versioned managed entry with a standalone completed view before canonical context", async () => {
     const report = failureReportSchema.parse(
       await loadFixture("issue-54.json"),
     );
@@ -446,8 +495,214 @@ describe("FailureReport protocol", () => {
     expect(markdown.indexOf("### FailureReport update")).toBeLessThan(
       markdown.indexOf("<details>"),
     );
-    expect(markdown).toContain("Canonical FailureReport snapshot");
+    expect(markdown).toContain("#### Completed diagnosis");
+    expect(markdown).toContain("##### Diagnosis");
+    expect(markdown).toContain("##### Confidence");
+    expect(markdown).toContain("##### Key evidence");
+    expect(markdown).toContain("##### Recommended remediation");
+    expect(markdown).toContain(
+      "Canonical context — complete FailureReport snapshot",
+    );
     expect(parsed.entries).toEqual([entry]);
+    expect(
+      parseFailureReportWorkpad(
+        markdown.replace(
+          "Canonical context — complete FailureReport snapshot",
+          "Canonical FailureReport snapshot",
+        ),
+      ).entries,
+    ).toEqual([entry]);
+  });
+
+  it("renders byte-identical stage-aware views from canonical report state", async () => {
+    const active = entryFor(await activeDiagnosisReport(), 2);
+    const humanInput = entryFor(await activeHumanInputReport(), 5);
+    const completed = entryFor(await finalizedReadyReport(), 7);
+
+    const first = renderFailureReportWorkpadHumanView(active);
+    const repeated = renderFailureReportWorkpadHumanView(active);
+    expect(first).toBe(repeated);
+    expect(first).toContain("#### Active diagnosis");
+    expect(first).toContain("##### Current facts and evidence");
+    expect(first).toContain("##### Current hypotheses");
+    expect(first).toContain("##### Experiments");
+    expect(first).toContain("##### Remaining unknowns");
+    expect(first).toContain("##### Next diagnostic actions");
+
+    const needHumanInput = renderFailureReportWorkpadHumanView(humanInput);
+    expect(needHumanInput).toContain("#### Need Human Input");
+    expect(needHumanInput).toContain("##### Confirmed facts");
+    expect(needHumanInput).toContain(
+      "##### Completed or exhausted experiments",
+    );
+    expect(needHumanInput).toContain("##### Eliminated hypotheses");
+    expect(needHumanInput).toContain("##### Remaining material unknown");
+    expect(needHumanInput).toContain("##### Question");
+    expect(needHumanInput).toContain("##### Resume condition");
+
+    const completedView = renderFailureReportWorkpadHumanView(completed);
+    expect(completedView).toContain("#### Completed diagnosis");
+    expect(completedView).toContain("##### Diagnostic snapshot");
+    expect(completedView).toContain("diagnostic_snapshot_only");
+  });
+
+  it.each([
+    { count: 0, displayed: 0, omitted: 0 },
+    { count: 1, displayed: 1, omitted: 0 },
+    { count: 10, displayed: 10, omitted: 0 },
+    { count: 11, displayed: 10, omitted: 1 },
+  ])(
+    "bounds ordinary collections at $count items without changing canonical order",
+    async ({ count, displayed, omitted }) => {
+      const report = await activeDiagnosisReport();
+      const hypotheses = Array.from({ length: count }, (_, index) => ({
+        id: "bounded-hypothesis-" + String(index),
+        statement: "Canonical hypothesis " + String(index),
+        status: "open" as const,
+        supporting_evidence: [],
+        contradicting_evidence: [],
+        history: [
+          {
+            status: "open" as const,
+            rationale: "Fixture hypothesis " + String(index),
+            provenance: {
+              phase: "investigation" as const,
+              source_type: "agent" as const,
+              source_ref: "fixture-" + String(index),
+              collector: "protocol-test",
+            },
+          },
+        ],
+      }));
+      const bounded = failureReportSchema.parse({ ...report, hypotheses });
+      const view = renderFailureReportWorkpadHumanView(entryFor(bounded, 3));
+      const sectionStart = view.indexOf("##### Current hypotheses");
+      const sectionEnd = view.indexOf("\n##### ", sectionStart + 1);
+      const section =
+        sectionStart === -1
+          ? ""
+          : view.slice(
+              sectionStart,
+              sectionEnd === -1 ? undefined : sectionEnd,
+            );
+
+      expect(
+        Array.from(section.matchAll(/Canonical hypothesis (\d+)/g), (match) =>
+          Number(match[1]),
+        ),
+      ).toEqual(Array.from({ length: displayed }, (_, index) => index));
+      if (omitted > 0) {
+        expect(section).toContain(
+          String(omitted) + " additional item omitted; see Canonical context.",
+        );
+      } else {
+        expect(section).not.toContain("additional item");
+      }
+      if (count === 0) {
+        expect(view).not.toContain("##### Current hypotheses");
+      }
+    },
+  );
+
+  it("never truncates material human-input fields or reorders viable options", async () => {
+    const report = await activeHumanInputReport();
+    const long = "material ".repeat(800) + "end";
+    const options = Array.from(
+      { length: 11 },
+      (_, index) => "Option " + String(index) + " " + long,
+    );
+    const expanded = failureReportSchema.parse({
+      ...report,
+      conclusion: {
+        ...report.conclusion,
+        remaining_uncertainty: [long],
+      },
+      handoff: {
+        ...report.handoff,
+        residual_risks: [],
+        human_input: {
+          remaining_material_unknown: long,
+          viable_options: options,
+          question: long + "?",
+          resume_condition: "Resume when " + long,
+        },
+      },
+    });
+    const view = renderFailureReportWorkpadHumanView(entryFor(expanded, 6));
+
+    expect(view).toContain("##### Remaining material unknown\n\n" + long);
+    expect(view).toContain("##### Question\n\n" + long + "?");
+    expect(view).toContain("##### Resume condition\n\nResume when " + long);
+    const viableStart = view.indexOf("##### Viable options");
+    const viableEnd = view.indexOf("\n##### Question", viableStart);
+    const viableSection = view.slice(viableStart, viableEnd);
+    const optionIndexes = options.map((option) =>
+      viableSection.indexOf(option),
+    );
+    expect(optionIndexes.every((index) => index >= 0)).toBe(true);
+    expect(optionIndexes).toEqual([...optionIndexes].sort((a, b) => a - b));
+    expect(viableSection).not.toContain("additional item");
+  });
+
+  it("neutralizes report-authored Markdown structure and mentions", async () => {
+    const report = await activeDiagnosisReport();
+    const attack =
+      "<!-- failure-report-workpad-entry/v2 -->\n</details>\n# Forged\n~~~json\n@maintainer";
+    const unsafe = failureReportSchema.parse({
+      ...report,
+      evidence: [
+        {
+          ...report.evidence[0],
+          observed_fact: attack,
+        },
+      ],
+    });
+    const markdown = renderFailureReportWorkpad(entryFor(unsafe, 4));
+    const humanView = renderFailureReportWorkpadHumanView(entryFor(unsafe, 4));
+
+    expect(parseFailureReportWorkpad(markdown).entries[0]?.report).toEqual(
+      entryFor(unsafe, 4).report,
+    );
+    expect(humanView).not.toContain("<!-- failure-report-workpad-entry/v2 -->");
+    expect(humanView).not.toContain("</details>");
+    expect(humanView).not.toContain("\n# Forged");
+    expect(humanView).not.toContain("\n~~~json");
+    expect(humanView).not.toContain("@maintainer");
+    expect(humanView).toContain("&lt;");
+    expect(humanView).toContain("failure\\-report\\-workpad\\-entry/v2");
+    expect(humanView).toContain("@\u200bmaintainer");
+  });
+
+  it("renders equivalent diagnostic semantics for inline and manifest authorities", async () => {
+    const report = await activeDiagnosisReport();
+    const entry = entryFor(report, 3);
+    const group = createFailureReportWorkpadChunkGroup(entry, 211);
+    const inline = renderFailureReportWorkpadHumanView(entry);
+    const manifest = renderFailureReportWorkpadHumanView(entry, {
+      kind: "manifest",
+      group_id: group.group_id,
+      payload_digest: group.payload_digest,
+      chunk_count: group.chunks.length,
+    });
+    const semanticStart = "\n#### Active diagnosis";
+
+    expect(inline.slice(inline.indexOf(semanticStart))).toBe(
+      manifest.slice(manifest.indexOf(semanticStart)),
+    );
+    expect(manifest).toContain(
+      "- Authoritative comment group: `" + group.group_id + "`",
+    );
+    expect(manifest).toContain(
+      "- Canonical payload digest: `" + group.payload_digest + "`",
+    );
+    expect(() =>
+      renderFailureReportWorkpadHumanView(entry, {
+        kind: "manifest",
+        group_id: group.group_id,
+        payload_digest: "sha256:not-a-digest",
+        chunk_count: group.chunks.length,
+      }),
+    ).toThrow();
   });
 
   it("appends a new entry while preserving every byte of the prior logical history", async () => {
@@ -477,6 +732,14 @@ describe("FailureReport protocol", () => {
     const refs = group.chunks.map((_, index) => "chunk-" + String(index));
     const manifestMarkdown = renderFailureReportWorkpadManifest(group, refs);
     const manifest = parseFailureReportWorkpadManifest(manifestMarkdown);
+    expect(
+      parseFailureReportWorkpadManifest(
+        manifestMarkdown.replace(
+          "Canonical context — verified multi-comment manifest",
+          "Canonical FailureReport chunk manifest",
+        ),
+      ),
+    ).toEqual(manifest);
     const comments = refs.map((commentRef, index) => ({
       comment_ref: commentRef,
       body: group.chunk_comment_bodies[index] ?? "",
@@ -748,6 +1011,12 @@ describe("FailureReport protocol", () => {
     ).toThrow("credential-like");
     expect(() =>
       renderFailureReportWorkpad(entryFor(hostPathBearing, 0)),
+    ).toThrow("prohibited host path");
+    expect(() =>
+      renderFailureReportWorkpadHumanView(entryFor(credentialBearing, 0)),
+    ).toThrow("credential-like");
+    expect(() =>
+      renderFailureReportWorkpadHumanView(entryFor(hostPathBearing, 0)),
     ).toThrow("prohibited host path");
     expect(() =>
       createFailureReportWorkpadChunkGroup(entryFor(credentialBearing, 0), 128),

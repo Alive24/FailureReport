@@ -155,6 +155,11 @@ describe("Octokit Issue gateway", () => {
     expect(first.workpad_comment_ref).toBe("101");
     expect(second.workpad_comment_ref).toBe("101");
     expect(second.workpad_revision).toBe(1);
+    expect(fake.comments[0]?.body).toContain("#### Completed diagnosis");
+    expect(fake.comments[0]?.body).toContain("##### Key evidence");
+    expect(fake.comments[0]?.body).toContain(
+      "Canonical context — complete FailureReport snapshot",
+    );
   });
 
   it("creates a linked successor when a different configured producer continues", async () => {
@@ -250,7 +255,7 @@ describe("Octokit Issue gateway", () => {
   it("publishes oversized state as bounded provisional chunks and one authoritative manifest", async () => {
     const report = await loadReport();
     const fake = createMutableOctokit();
-    const budget = 5_000;
+    const budget = 15_000;
     const gateway = new OctokitIssueGateway(
       fake.octokit as unknown as Octokit,
       rootGh,
@@ -275,6 +280,11 @@ describe("Octokit Issue gateway", () => {
     ).toBe(true);
     expect(fake.octokit.rest.issues.update).not.toHaveBeenCalled();
     expect(fake.octokit.rest.issues.updateComment).not.toHaveBeenCalled();
+    expect(latest?.comment.body).toContain("#### Completed diagnosis");
+    expect(latest?.comment.body).toContain("##### Diagnosis");
+    expect(latest?.comment.body).toContain(
+      "Canonical context — verified multi-comment manifest",
+    );
     expect(latest).toMatchObject({
       representation: "manifest",
       revision: 0,
@@ -290,7 +300,7 @@ describe("Octokit Issue gateway", () => {
     const gateway = new OctokitIssueGateway(
       fake.octokit as unknown as Octokit,
       rootGh,
-      5_000,
+      15_000,
     );
 
     await expect(
@@ -320,7 +330,7 @@ describe("Octokit Issue gateway", () => {
     const gateway = new OctokitIssueGateway(
       fake.octokit as unknown as Octokit,
       rootGh,
-      5_000,
+      15_000,
     );
 
     await expect(

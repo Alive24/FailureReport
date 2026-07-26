@@ -6,6 +6,10 @@ import {
   humanInputRequestSchema,
   implementationHandoffSchema,
 } from "./handoff.js";
+import {
+  renderFailureReportWorkpadHumanView as renderWorkpadHumanView,
+  type FailureReportWorkpadAuthority,
+} from "./workpad-human-view.js";
 
 export {
   HandoffNeedsInputError,
@@ -16,6 +20,7 @@ export {
   type HumanInputRequest,
   type ImplementationHandoff,
 } from "./handoff.js";
+export type { FailureReportWorkpadAuthority } from "./workpad-human-view.js";
 
 /**
  * Canonical runtime and persistence contract for FailureReport.
@@ -1222,14 +1227,13 @@ export function renderFailureReportWorkpadEntry(
 
   return [
     workpadEntryStartMarker,
-    "### FailureReport update",
-    "- Report: `" + payload.failure_report.id + "`",
-    "- Status: `" + payload.failure_report.status + "`",
-    "- Severity: `" + payload.failure_report.severity + "`",
-    "- Revision: `" + String(payload.entry.revision) + "`",
+    renderWorkpadHumanView(
+      { ...payload.entry, report: payload.failure_report },
+      { kind: "inline" },
+    ),
     "",
     "<details>",
-    "<summary>Canonical FailureReport snapshot</summary>",
+    "<summary>Canonical context — complete FailureReport snapshot</summary>",
     "",
     "~~~json",
     JSON.stringify(payload, null, 2),
@@ -1237,6 +1241,40 @@ export function renderFailureReportWorkpadEntry(
     "</details>",
     workpadEntryEndMarker,
   ].join("\n");
+}
+
+/**
+ * Public pure renderer for the human view shared by inline and manifest workpads.
+ *
+ * The entry is parsed through the same canonical schemas and public-content
+ * guard used by persistence before any report-authored text is projected.
+ */
+export function renderFailureReportWorkpadHumanView(
+  entry: FailureReportWorkpadEntry,
+  authority: FailureReportWorkpadAuthority = { kind: "inline" },
+): string {
+  const payload = failureReportWorkpadPayloadSchema.parse({
+    entry: withoutReport(entry),
+    failure_report: entry.report,
+  });
+  assertPublicWorkpadPayload(payload.failure_report);
+  const parsedAuthority = z
+    .discriminatedUnion("kind", [
+      z.object({ kind: z.literal("inline") }).strict(),
+      z
+        .object({
+          kind: z.literal("manifest"),
+          group_id: identifierSchema,
+          payload_digest: sha256DigestSchema,
+          chunk_count: z.number().int().positive(),
+        })
+        .strict(),
+    ])
+    .parse(authority);
+  return renderWorkpadHumanView(
+    { ...payload.entry, report: payload.failure_report },
+    parsedAuthority,
+  );
 }
 
 /**
@@ -1260,8 +1298,11 @@ export function parseFailureReportWorkpad(
   }
 
   const entries: FailureReportWorkpadEntry[] = [];
-  const startMarkers = countOccurrences(markdown, workpadEntryStartMarker);
-  const endMarkers = countOccurrences(markdown, workpadEntryEndMarker);
+  const startMarkers = countStandaloneMarkers(
+    markdown,
+    workpadEntryStartMarker,
+  );
+  const endMarkers = countStandaloneMarkers(markdown, workpadEntryEndMarker);
   if (startMarkers !== endMarkers) {
     throw new Error("FailureReport workpad has an unclosed or stray v2 entry.");
   }
@@ -1271,9 +1312,11 @@ export function parseFailureReportWorkpad(
     );
   }
   const entryPattern = new RegExp(
-    escapeRegExp(workpadEntryStartMarker) +
-      "\\s*([\\s\\S]*?)\\s*" +
-      escapeRegExp(workpadEntryEndMarker),
+    "(?:^|\\r?\\n)[ \\t]*" +
+      escapeRegExp(workpadEntryStartMarker) +
+      "[ \\t]*\\r?\\n([\\s\\S]*?)\\r?\\n[ \\t]*" +
+      escapeRegExp(workpadEntryEndMarker) +
+      "[ \\t]*(?=\\r?\\n|$)",
     "g",
   );
   let match: RegExpExecArray | null;
@@ -1284,24 +1327,30 @@ export function parseFailureReportWorkpad(
     }
     const summary = body.indexOf("### FailureReport update");
     const details = body.indexOf("<details>");
+    // Accept the #32 fold while reading append-only history; new entries use
+    // the standalone #33 human view before their canonical context.
+    const hasCanonicalSummary =
+      body.includes(
+        "<summary>Canonical context — complete FailureReport snapshot</summary>",
+      ) || body.includes("<summary>Canonical FailureReport snapshot</summary>");
     if (
       summary === -1 ||
       details === -1 ||
       summary > details ||
-      !body.includes("<summary>Canonical FailureReport snapshot</summary>") ||
+      !hasCanonicalSummary ||
       !body.includes("</details>")
     ) {
       throw new Error(
         "FailureReport workpad entry is missing its required public summary or folded snapshot.",
       );
     }
-    const payload = body.match(/~~~json\s*([\s\S]*?)\s*~~~/);
-    if (!payload?.[1]) {
+    const payload = extractStandaloneJsonFence(body);
+    if (!payload) {
       throw new Error(
         "FailureReport workpad entry is missing its JSON snapshot.",
       );
     }
-    entries.push(parseFailureReportWorkpadPayload(payload[1]));
+    entries.push(parseFailureReportWorkpadPayload(payload));
   }
 
   if (entries.length === 0) {
@@ -1462,14 +1511,14 @@ export function parseFailureReportWorkpadChunk(
       "FailureReport provisional comment mixes incompatible transport representations.",
     );
   }
-  const payload = markdown.match(/~~~json\s*([\s\S]*?)\s*~~~/);
-  if (!payload?.[1]) {
+  const payload = extractStandaloneJsonFence(markdown);
+  if (!payload) {
     throw new Error(
       "FailureReport provisional chunk is missing its JSON envelope.",
     );
   }
   const chunk = failureReportWorkpadChunkEnvelopeSchema.parse(
-    JSON.parse(payload[1]),
+    JSON.parse(payload),
   );
   const bytes = decodeCanonicalBase64(chunk.content_base64);
   if (
@@ -1517,15 +1566,17 @@ export function renderFailureReportWorkpadManifest(
   return [
     workpadMarker,
     workpadManifestStartMarker,
-    "### FailureReport update",
-    "- Report: `" + group.entry.report.id + "`",
-    "- Status: `" + group.entry.report.status + "`",
-    "- Severity: `" + group.entry.report.severity + "`",
-    "- Revision: `" + String(group.entry.revision) + "`",
-    "- Transport: `verified multi-comment manifest`",
+    renderFailureReportWorkpadHumanView(group.entry, {
+      kind: "manifest",
+      group_id: manifest.group_id,
+      payload_digest: manifest.payload_digest,
+      chunk_count: manifest.chunks.length,
+    }),
     "",
     "<details>",
-    "<summary>Canonical FailureReport chunk manifest</summary>",
+    "<summary>Canonical context — verified multi-comment manifest</summary>",
+    "",
+    "Reconstruction: concatenate the referenced chunks in `chunk_index` order, decode each canonical base64 payload as UTF-8, verify every chunk digest and the complete payload digest, then parse the `failure-report-workpad-entry/v2` payload.",
     "",
     "~~~json",
     JSON.stringify(manifest, null, 2),
@@ -1563,22 +1614,24 @@ export function parseFailureReportWorkpadManifest(
     );
   }
   const body = markdown.slice(start, end);
-  if (
-    !body.includes("### FailureReport update") ||
-    !body.includes("<summary>Canonical FailureReport chunk manifest</summary>")
-  ) {
+  const hasCanonicalSummary =
+    body.includes(
+      "<summary>Canonical context — verified multi-comment manifest</summary>",
+    ) ||
+    body.includes("<summary>Canonical FailureReport chunk manifest</summary>");
+  if (!body.includes("### FailureReport update") || !hasCanonicalSummary) {
     throw new Error(
       "FailureReport workpad manifest is missing its public summary.",
     );
   }
-  const payload = body.match(/~~~json\s*([\s\S]*?)\s*~~~/);
-  if (!payload?.[1]) {
+  const payload = extractStandaloneJsonFence(body);
+  if (!payload) {
     throw new Error(
       "FailureReport workpad manifest is missing its JSON envelope.",
     );
   }
   const manifest = failureReportWorkpadManifestEnvelopeSchema.parse(
-    JSON.parse(payload[1]),
+    JSON.parse(payload),
   );
   assertManifestOrdering(manifest);
   return manifest;
@@ -1740,6 +1793,13 @@ function countOccurrences(text: string, value: string): number {
 
 function countStandaloneMarkers(text: string, value: string): number {
   return text.split(/\r?\n/).filter((line) => line.trim() === value).length;
+}
+
+/** Extracts only renderer-owned standalone fences, never fence text in JSON strings. */
+function extractStandaloneJsonFence(text: string): string | undefined {
+  return text.match(
+    /(?:^|\r?\n)[ \t]*~~~json[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*~~~[ \t]*(?=\r?\n|$)/,
+  )?.[1];
 }
 
 /**
