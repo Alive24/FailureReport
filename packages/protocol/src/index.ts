@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { z } from "zod";
 
 import {
@@ -29,6 +31,14 @@ export const workpadEntryStartMarker =
   "<!-- failure-report-workpad-entry/v2 -->";
 /** Closing delimiter for a managed v2 workpad entry. */
 export const workpadEntryEndMarker = "<!-- /failure-report-workpad-entry -->";
+/** Marker used only for a folded, non-authoritative provisional chunk. */
+export const workpadChunkMarker = "<!-- failure-report-workpad-chunk/v1 -->";
+/** Delimiter around the authoritative commit record for a chunk group. */
+export const workpadManifestStartMarker =
+  "<!-- failure-report-workpad-manifest/v1 -->";
+/** Closing delimiter for a managed chunk-group manifest. */
+export const workpadManifestEndMarker =
+  "<!-- /failure-report-workpad-manifest -->";
 
 /** Shared primitive for IDs that may safely appear in report and transport keys. */
 const identifierSchema = z
@@ -1079,6 +1089,7 @@ export const failureReportWorkpadEntryEnvelopeSchema = z
     entry_id: identifierSchema,
     revision: z.number().int().nonnegative(),
     predecessor_comment_ref: z.string().min(1).optional(),
+    continuation_kind: z.enum(["capacity", "producer_transition"]).optional(),
   })
   .strict();
 
@@ -1100,6 +1111,75 @@ const failureReportWorkpadPayloadSchema = z
     failure_report: failureReportSchema,
   })
   .strict();
+
+const sha256DigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
+
+/**
+ * Provider-transport envelope for one immutable slice of a canonical entry.
+ *
+ * This schema is deliberately not referenced by RootRequest or FailureReport:
+ * physical comment layout remains private to the GitHub provider boundary.
+ */
+export const failureReportWorkpadChunkEnvelopeSchema = z
+  .object({
+    schema_version: z.literal("failure-report-workpad-chunk/v1"),
+    producer: failureReportWorkpadProducerSchema,
+    logical_session_id: identifierSchema,
+    entry_id: identifierSchema,
+    revision: z.number().int().nonnegative(),
+    group_id: identifierSchema,
+    chunk_index: z.number().int().nonnegative(),
+    chunk_count: z.number().int().positive(),
+    chunk_digest: sha256DigestSchema,
+    payload_digest: sha256DigestSchema,
+    content_base64: z
+      .string()
+      .regex(
+        /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
+      ),
+  })
+  .strict();
+
+export type FailureReportWorkpadChunk = z.infer<
+  typeof failureReportWorkpadChunkEnvelopeSchema
+>;
+
+const failureReportWorkpadManifestChunkSchema = z
+  .object({
+    comment_ref: z.string().min(1),
+    chunk_index: z.number().int().nonnegative(),
+    chunk_digest: sha256DigestSchema,
+  })
+  .strict();
+
+/** Final authoritative commit record for one provider-bounded chunk group. */
+export const failureReportWorkpadManifestEnvelopeSchema = z
+  .object({
+    schema_version: z.literal("failure-report-workpad-manifest/v1"),
+    producer: failureReportWorkpadProducerSchema,
+    logical_session_id: identifierSchema,
+    entry_id: identifierSchema,
+    revision: z.number().int().nonnegative(),
+    group_id: identifierSchema,
+    payload_digest: sha256DigestSchema,
+    predecessor_comment_ref: z.string().min(1).optional(),
+    continuation_kind: z.enum(["capacity", "producer_transition"]).optional(),
+    chunks: z.array(failureReportWorkpadManifestChunkSchema).min(1),
+  })
+  .strict();
+
+export type FailureReportWorkpadManifest = z.infer<
+  typeof failureReportWorkpadManifestEnvelopeSchema
+>;
+
+/** Fully rendered provisional group plus the entry it losslessly encodes. */
+export type FailureReportWorkpadChunkGroup = {
+  group_id: string;
+  payload_digest: string;
+  entry: FailureReportWorkpadEntry;
+  chunks: FailureReportWorkpadChunk[];
+  chunk_comment_bodies: string[];
+};
 
 /**
  * Renders one managed comment containing its first immutable entry. Later entries
@@ -1167,8 +1247,16 @@ export function renderFailureReportWorkpadEntry(
 export function parseFailureReportWorkpad(
   markdown: string,
 ): FailureReportWorkpad {
-  if (!markdown.includes(workpadMarker)) {
+  if (countStandaloneMarkers(markdown, workpadMarker) !== 1) {
     throw new Error("Missing FailureReport workpad marker.");
+  }
+  if (
+    markdown.includes(workpadManifestStartMarker) ||
+    markdown.includes(workpadChunkMarker)
+  ) {
+    throw new Error(
+      "FailureReport entry comment mixes incompatible transport representations.",
+    );
   }
 
   const entries: FailureReportWorkpadEntry[] = [];
@@ -1213,33 +1301,7 @@ export function parseFailureReportWorkpad(
         "FailureReport workpad entry is missing its JSON snapshot.",
       );
     }
-    const decoded: unknown = JSON.parse(payload[1]);
-    const parsed = failureReportWorkpadPayloadSchema.parse(decoded);
-    if (
-      parsed.failure_report.shared_context?.workpad_revision !==
-      parsed.entry.revision
-    ) {
-      throw new Error(
-        "FailureReport workpad entry revision does not match shared context.",
-      );
-    }
-    if (
-      parsed.failure_report.shared_context?.workpad_entry_id !==
-      parsed.entry.entry_id
-    ) {
-      throw new Error(
-        "FailureReport workpad entry id does not match shared context.",
-      );
-    }
-    if (
-      parsed.failure_report.shared_context?.workpad_logical_session_id !==
-      parsed.entry.logical_session_id
-    ) {
-      throw new Error(
-        "FailureReport workpad logical session does not match shared context.",
-      );
-    }
-    entries.push({ ...parsed.entry, report: parsed.failure_report });
+    entries.push(parseFailureReportWorkpadPayload(payload[1]));
   }
 
   if (entries.length === 0) {
@@ -1251,6 +1313,406 @@ export function parseFailureReportWorkpad(
     throw new Error("FailureReport workpad has an unparsable v2 entry.");
   }
   return { entries };
+}
+
+/** Returns the exact canonical JSON bytes used by a multi-comment transaction. */
+export function serializeFailureReportWorkpadEntryPayload(
+  entry: FailureReportWorkpadEntry,
+): string {
+  const payload = failureReportWorkpadPayloadSchema.parse({
+    entry: withoutReport(entry),
+    failure_report: entry.report,
+  });
+  assertPublicWorkpadPayload(payload.failure_report);
+  return JSON.stringify(payload);
+}
+
+/**
+ * Splits one schema-valid canonical payload into immutable content-addressed
+ * envelopes. The caller chooses only a raw-byte slice size; provider request
+ * sizing remains outside the public FailureReport schema.
+ */
+export function createFailureReportWorkpadChunkGroup(
+  entry: FailureReportWorkpadEntry,
+  chunkByteLength: number,
+  attempt = 0,
+): FailureReportWorkpadChunkGroup {
+  if (!Number.isSafeInteger(chunkByteLength) || chunkByteLength < 1) {
+    throw new Error(
+      "FailureReport chunk byte length must be a positive integer.",
+    );
+  }
+  if (!Number.isSafeInteger(attempt) || attempt < 0) {
+    throw new Error("FailureReport chunk-group attempt must be nonnegative.");
+  }
+
+  const canonicalPayload = serializeFailureReportWorkpadEntryPayload(entry);
+  const payloadBytes = Buffer.from(canonicalPayload, "utf8");
+  const payloadDigest = digestBytes(payloadBytes);
+  const slices: Buffer[] = [];
+  for (
+    let offset = 0;
+    offset < payloadBytes.length;
+    offset += chunkByteLength
+  ) {
+    slices.push(payloadBytes.subarray(offset, offset + chunkByteLength));
+  }
+  if (slices.length === 0) {
+    throw new Error(
+      "FailureReport canonical workpad payload is unexpectedly empty.",
+    );
+  }
+  const chunkDigests = slices.map(digestBytes);
+  const groupDigest = digestText(
+    JSON.stringify({
+      schema_version: "failure-report-workpad-group/v1",
+      producer: entry.producer,
+      logical_session_id: entry.logical_session_id,
+      entry_id: entry.entry_id,
+      revision: entry.revision,
+      predecessor_comment_ref: entry.predecessor_comment_ref,
+      continuation_kind: entry.continuation_kind,
+      payload_digest: payloadDigest,
+      chunk_digests: chunkDigests,
+      attempt,
+    }),
+  );
+  const groupId =
+    "workpad-group/" +
+    groupDigest.slice("sha256:".length) +
+    "/attempt-" +
+    String(attempt).padStart(10, "0");
+  const chunks = slices.map((slice, chunkIndex) =>
+    failureReportWorkpadChunkEnvelopeSchema.parse({
+      schema_version: "failure-report-workpad-chunk/v1",
+      producer: entry.producer,
+      logical_session_id: entry.logical_session_id,
+      entry_id: entry.entry_id,
+      revision: entry.revision,
+      group_id: groupId,
+      chunk_index: chunkIndex,
+      chunk_count: slices.length,
+      chunk_digest: chunkDigests[chunkIndex],
+      payload_digest: payloadDigest,
+      content_base64: slice.toString("base64"),
+    }),
+  );
+  return {
+    group_id: groupId,
+    payload_digest: payloadDigest,
+    entry,
+    chunks,
+    chunk_comment_bodies: chunks.map(renderFailureReportWorkpadChunk),
+  };
+}
+
+/** Renders a provisional chunk as folded, explicitly non-authoritative data. */
+export function renderFailureReportWorkpadChunk(
+  input: FailureReportWorkpadChunk,
+): string {
+  const chunk = failureReportWorkpadChunkEnvelopeSchema.parse(input);
+  const bytes = decodeCanonicalBase64(chunk.content_base64);
+  if (digestBytes(bytes) !== chunk.chunk_digest) {
+    throw new Error(
+      "FailureReport provisional chunk digest does not match its content.",
+    );
+  }
+  if (chunk.chunk_index >= chunk.chunk_count) {
+    throw new Error(
+      "FailureReport provisional chunk index exceeds its declared count.",
+    );
+  }
+  return [
+    workpadChunkMarker,
+    "> **Provisional FailureReport transport chunk — non-authoritative until referenced by a verified final manifest.**",
+    "",
+    "<details>",
+    "<summary>Folded provisional chunk " +
+      String(chunk.chunk_index + 1) +
+      " of " +
+      String(chunk.chunk_count) +
+      "</summary>",
+    "",
+    "~~~json",
+    JSON.stringify(chunk),
+    "~~~",
+    "</details>",
+    "",
+  ].join("\n");
+}
+
+/** Parses one provisional chunk without making it authoritative runtime state. */
+export function parseFailureReportWorkpadChunk(
+  markdown: string,
+): FailureReportWorkpadChunk {
+  if (!markdown.includes(workpadChunkMarker)) {
+    throw new Error("Missing FailureReport provisional chunk marker.");
+  }
+  if (countOccurrences(markdown, workpadChunkMarker) !== 1) {
+    throw new Error(
+      "FailureReport provisional comment has duplicated chunk markers.",
+    );
+  }
+  if (
+    markdown.includes(workpadMarker) ||
+    markdown.includes(workpadManifestStartMarker) ||
+    markdown.includes(workpadEntryStartMarker)
+  ) {
+    throw new Error(
+      "FailureReport provisional comment mixes incompatible transport representations.",
+    );
+  }
+  const payload = markdown.match(/~~~json\s*([\s\S]*?)\s*~~~/);
+  if (!payload?.[1]) {
+    throw new Error(
+      "FailureReport provisional chunk is missing its JSON envelope.",
+    );
+  }
+  const chunk = failureReportWorkpadChunkEnvelopeSchema.parse(
+    JSON.parse(payload[1]),
+  );
+  const bytes = decodeCanonicalBase64(chunk.content_base64);
+  if (
+    digestBytes(bytes) !== chunk.chunk_digest ||
+    chunk.chunk_index >= chunk.chunk_count
+  ) {
+    throw new Error(
+      "FailureReport provisional chunk has invalid ordering or content digest.",
+    );
+  }
+  return chunk;
+}
+
+/** Builds the final visibility-boundary record after GitHub assigns chunk IDs. */
+export function renderFailureReportWorkpadManifest(
+  group: FailureReportWorkpadChunkGroup,
+  commentRefs: readonly string[],
+): string {
+  if (commentRefs.length !== group.chunks.length) {
+    throw new Error(
+      "FailureReport manifest must reference every provisional chunk.",
+    );
+  }
+  const manifest = failureReportWorkpadManifestEnvelopeSchema.parse({
+    schema_version: "failure-report-workpad-manifest/v1",
+    producer: group.entry.producer,
+    logical_session_id: group.entry.logical_session_id,
+    entry_id: group.entry.entry_id,
+    revision: group.entry.revision,
+    group_id: group.group_id,
+    payload_digest: group.payload_digest,
+    ...(group.entry.predecessor_comment_ref
+      ? { predecessor_comment_ref: group.entry.predecessor_comment_ref }
+      : {}),
+    ...(group.entry.continuation_kind
+      ? { continuation_kind: group.entry.continuation_kind }
+      : {}),
+    chunks: group.chunks.map((chunk, index) => ({
+      comment_ref: commentRefs[index],
+      chunk_index: chunk.chunk_index,
+      chunk_digest: chunk.chunk_digest,
+    })),
+  });
+  assertManifestOrdering(manifest);
+  return [
+    workpadMarker,
+    workpadManifestStartMarker,
+    "### FailureReport update",
+    "- Report: `" + group.entry.report.id + "`",
+    "- Status: `" + group.entry.report.status + "`",
+    "- Severity: `" + group.entry.report.severity + "`",
+    "- Revision: `" + String(group.entry.revision) + "`",
+    "- Transport: `verified multi-comment manifest`",
+    "",
+    "<details>",
+    "<summary>Canonical FailureReport chunk manifest</summary>",
+    "",
+    "~~~json",
+    JSON.stringify(manifest, null, 2),
+    "~~~",
+    "</details>",
+    workpadManifestEndMarker,
+    "",
+  ].join("\n");
+}
+
+/** Parses a final manifest record without trusting or resolving its chunks. */
+export function parseFailureReportWorkpadManifest(
+  markdown: string,
+): FailureReportWorkpadManifest {
+  if (
+    countOccurrences(markdown, workpadManifestStartMarker) !== 1 ||
+    countOccurrences(markdown, workpadManifestEndMarker) !== 1 ||
+    countStandaloneMarkers(markdown, workpadMarker) !== 1
+  ) {
+    throw new Error("FailureReport workpad manifest has invalid delimiters.");
+  }
+  const start = markdown.indexOf(workpadManifestStartMarker);
+  const end = markdown.indexOf(workpadManifestEndMarker);
+  if (!markdown.includes(workpadMarker) || start < 0 || end <= start) {
+    throw new Error(
+      "FailureReport workpad manifest is missing its managed marker.",
+    );
+  }
+  if (
+    markdown.includes(workpadEntryStartMarker) ||
+    markdown.includes(workpadChunkMarker)
+  ) {
+    throw new Error(
+      "FailureReport manifest mixes incompatible transport representations.",
+    );
+  }
+  const body = markdown.slice(start, end);
+  if (
+    !body.includes("### FailureReport update") ||
+    !body.includes("<summary>Canonical FailureReport chunk manifest</summary>")
+  ) {
+    throw new Error(
+      "FailureReport workpad manifest is missing its public summary.",
+    );
+  }
+  const payload = body.match(/~~~json\s*([\s\S]*?)\s*~~~/);
+  if (!payload?.[1]) {
+    throw new Error(
+      "FailureReport workpad manifest is missing its JSON envelope.",
+    );
+  }
+  const manifest = failureReportWorkpadManifestEnvelopeSchema.parse(
+    JSON.parse(payload[1]),
+  );
+  assertManifestOrdering(manifest);
+  return manifest;
+}
+
+/**
+ * Independently verifies every referenced chunk and only then parses the exact
+ * reconstructed bytes through the canonical FailureReport payload schema.
+ */
+export function reconstructFailureReportWorkpadManifest(
+  manifest: FailureReportWorkpadManifest,
+  comments: readonly { comment_ref: string; body: string }[],
+): FailureReportWorkpadEntry {
+  const parsedManifest =
+    failureReportWorkpadManifestEnvelopeSchema.parse(manifest);
+  assertManifestOrdering(parsedManifest);
+  const byRef = new Map<string, string>();
+  for (const comment of comments) {
+    if (byRef.has(comment.comment_ref)) {
+      throw new Error(
+        "FailureReport manifest reconstruction received a duplicated chunk comment.",
+      );
+    }
+    byRef.set(comment.comment_ref, comment.body);
+  }
+  if (byRef.size !== parsedManifest.chunks.length) {
+    throw new Error(
+      "FailureReport manifest is missing or has extra referenced chunks.",
+    );
+  }
+
+  const payloadParts = parsedManifest.chunks.map((reference) => {
+    const body = byRef.get(reference.comment_ref);
+    if (!body) {
+      throw new Error(
+        "FailureReport manifest references a missing provisional chunk.",
+      );
+    }
+    const chunk = parseFailureReportWorkpadChunk(body);
+    if (
+      chunk.schema_version !== "failure-report-workpad-chunk/v1" ||
+      chunk.producer.id !== parsedManifest.producer.id ||
+      chunk.producer.github_actor_id !==
+        parsedManifest.producer.github_actor_id ||
+      chunk.logical_session_id !== parsedManifest.logical_session_id ||
+      chunk.entry_id !== parsedManifest.entry_id ||
+      chunk.revision !== parsedManifest.revision ||
+      chunk.group_id !== parsedManifest.group_id ||
+      chunk.payload_digest !== parsedManifest.payload_digest ||
+      chunk.chunk_count !== parsedManifest.chunks.length ||
+      chunk.chunk_index !== reference.chunk_index ||
+      chunk.chunk_digest !== reference.chunk_digest
+    ) {
+      throw new Error(
+        "FailureReport manifest references an incompatible provisional chunk.",
+      );
+    }
+    return decodeCanonicalBase64(chunk.content_base64);
+  });
+  const payload = Buffer.concat(payloadParts);
+  if (digestBytes(payload) !== parsedManifest.payload_digest) {
+    throw new Error(
+      "FailureReport reconstructed payload digest does not match its manifest.",
+    );
+  }
+  const entry = parseFailureReportWorkpadPayload(payload.toString("utf8"));
+  if (
+    entry.producer.id !== parsedManifest.producer.id ||
+    entry.producer.github_actor_id !==
+      parsedManifest.producer.github_actor_id ||
+    entry.logical_session_id !== parsedManifest.logical_session_id ||
+    entry.entry_id !== parsedManifest.entry_id ||
+    entry.revision !== parsedManifest.revision ||
+    entry.predecessor_comment_ref !== parsedManifest.predecessor_comment_ref ||
+    entry.continuation_kind !== parsedManifest.continuation_kind
+  ) {
+    throw new Error(
+      "FailureReport manifest metadata does not match its canonical payload.",
+    );
+  }
+  return entry;
+}
+
+function parseFailureReportWorkpadPayload(
+  serialized: string,
+): FailureReportWorkpadEntry {
+  const parsed = failureReportWorkpadPayloadSchema.parse(
+    JSON.parse(serialized),
+  );
+  const context = parsed.failure_report.shared_context;
+  if (
+    context?.workpad_revision !== parsed.entry.revision ||
+    context.workpad_entry_id !== parsed.entry.entry_id ||
+    context.workpad_logical_session_id !== parsed.entry.logical_session_id ||
+    context.workpad_producer_id !== parsed.entry.producer.id ||
+    context.workpad_predecessor_comment_ref !==
+      parsed.entry.predecessor_comment_ref
+  ) {
+    throw new Error(
+      "FailureReport workpad entry metadata does not match shared context.",
+    );
+  }
+  assertPublicWorkpadPayload(parsed.failure_report);
+  return { ...parsed.entry, report: parsed.failure_report };
+}
+
+function assertManifestOrdering(manifest: FailureReportWorkpadManifest): void {
+  const refs = new Set<string>();
+  for (const [index, chunk] of manifest.chunks.entries()) {
+    if (chunk.chunk_index !== index || refs.has(chunk.comment_ref)) {
+      throw new Error(
+        "FailureReport manifest chunk references must be unique and contiguous.",
+      );
+    }
+    refs.add(chunk.comment_ref);
+  }
+}
+
+function decodeCanonicalBase64(value: string): Buffer {
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.toString("base64") !== value) {
+    throw new Error(
+      "FailureReport provisional chunk uses non-canonical base64.",
+    );
+  }
+  return decoded;
+}
+
+function digestBytes(value: Uint8Array): string {
+  return "sha256:" + createHash("sha256").update(value).digest("hex");
+}
+
+function digestText(value: string): string {
+  return digestBytes(Buffer.from(value, "utf8"));
 }
 
 /** Drops the convenience `report` property before serializing the schema envelope. */
@@ -1274,6 +1736,10 @@ function countOccurrences(text: string, value: string): number {
     index = text.indexOf(value, index + value.length);
   }
   return count;
+}
+
+function countStandaloneMarkers(text: string, value: string): number {
+  return text.split(/\r?\n/).filter((line) => line.trim() === value).length;
 }
 
 /**

@@ -22,8 +22,9 @@ export class OctokitIssueGateway extends IssueWorkpadGateway {
   constructor(
     private readonly octokit: Octokit,
     producers?: WorkpadProducerConfiguration,
+    encodedByteBudget?: number,
   ) {
-    super(producers);
+    super(producers, encodedByteBudget);
   }
 
   /** Reads the Issue body and paginates all comments before constructing a snapshot. */
