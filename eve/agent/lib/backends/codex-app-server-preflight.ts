@@ -254,7 +254,6 @@ function validateWorkspace(
 ): CodexAppServerPreflightFailureCategory | undefined {
   if (
     !isAbsolute(workspace.path) ||
-    workspace.native_skill_names.length === 0 ||
     workspace.native_skill_names.some(
       (name, index) =>
         !/^[a-z][a-z0-9-]*$/.test(name) ||

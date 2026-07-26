@@ -236,7 +236,6 @@ export const diagnosticBranchSchema = z
  */
 export const diagnosticDomainExtensionsSchema = z
   .array(identifierSchema)
-  .min(1)
   .superRefine((extensions, context) => {
     for (let index = 0; index < extensions.length; index += 1) {
       const current = extensions[index];

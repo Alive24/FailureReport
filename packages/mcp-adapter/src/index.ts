@@ -22,6 +22,9 @@ export {
   type EveChannelRootTurn,
   type EveChannelRootPendingTurnConsumer,
   type McpRootCompositionOptions,
+  type RootOperationRetentionOptions,
+  type RootOperationStore,
+  type RootSessionOperationLedger,
   type RootSessionStore,
 } from "./eve-channel-root-invoker.js";
 
@@ -102,6 +105,18 @@ export function createFailureReportMcpServer(invoker: RootInvoker): McpServer {
 export async function runFailureReportMcpServer(
   invoker: RootInvoker,
 ): Promise<void> {
+  if (hasPendingOperationRecovery(invoker)) {
+    await invoker.resumePendingOperations();
+  }
   const server = createFailureReportMcpServer(invoker);
   await server.connect(new StdioServerTransport());
+}
+
+function hasPendingOperationRecovery(
+  invoker: RootInvoker,
+): invoker is RootInvoker & { resumePendingOperations(): Promise<void> } {
+  return (
+    "resumePendingOperations" in invoker &&
+    typeof invoker.resumePendingOperations === "function"
+  );
 }

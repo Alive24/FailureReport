@@ -50,11 +50,6 @@ export function getDomainExtensions(
 export function canonicalizeDomainExtensionIds(
   extensionIds: readonly string[],
 ): readonly string[] {
-  if (extensionIds.length === 0) {
-    throw new DomainExtensionRegistryError(
-      "At least one diagnostic domain extension must be selected.",
-    );
-  }
   for (const extensionId of extensionIds) {
     if (!/^[a-z][a-z0-9_-]*$/.test(extensionId)) {
       throw new DomainExtensionRegistryError(
