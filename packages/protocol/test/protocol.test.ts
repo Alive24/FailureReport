@@ -831,7 +831,7 @@ describe("FailureReport protocol", () => {
     }
   });
 
-  it("requires canonical extension sets and complete remote metadata for finalized diagnostics", async () => {
+  it("allows generic diagnostics while requiring canonical extension sets and complete finalized metadata", async () => {
     const report = failureReportSchema.parse(
       await loadFixture("issue-54.json"),
     );
@@ -840,6 +840,19 @@ describe("FailureReport protocol", () => {
       base_revision: report.target.revision,
       head_revision: report.target.revision,
     };
+
+    expect(
+      failureReportSchema.parse({
+        ...report,
+        diagnostic_session: {
+          lifecycle: "active",
+          domain_extensions: [],
+          backend_id: "codex_app_server",
+          worktree,
+          diagnostic_branch_slug: "generic-issue-54",
+        },
+      }).diagnostic_session?.domain_extensions,
+    ).toEqual([]);
 
     expect(() =>
       failureReportSchema.parse({

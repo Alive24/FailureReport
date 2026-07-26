@@ -20,7 +20,10 @@ import {
   diagnosticSessionEnvelopeSchema,
   diagnosticSessionPreparationEnvelopeSchema,
 } from "../agent/lib/diagnostics/envelope.js";
-import type { DomainExtension } from "../agent/lib/diagnostics/domain-extensions.js";
+import {
+  getDomainExtensions,
+  type DomainExtension,
+} from "../agent/lib/diagnostics/domain-extensions.js";
 import {
   DiagnosticSessionWorkpad,
   diagnosticBranchSlugFor,
@@ -222,6 +225,38 @@ describe("Codex diagnostic session", () => {
       "ckb",
       "evm",
     ]);
+  });
+
+  it("prepares and restores a generic diagnostic session without domain skills", async () => {
+    expect(getDomainExtensions([])).toEqual([]);
+    const harness = await createHarness({ domainExtensions: [] });
+    const prepared = await harness.workpad.prepare(preparationFor(harness));
+
+    expect(prepared.diagnostic_session.state.domain_extensions).toEqual([]);
+    expect(harness.manager.nativeSkillNames()).toEqual([]);
+    expect(prepared.delegation_message).toContain(
+      "No domain extension was selected.",
+    );
+    expect(prepared.delegation_message).not.toContain("$failure-report-");
+    expect(
+      harness.calls.some(
+        (call) =>
+          call.args[0] === "worktree" &&
+          call.args[1] === "add" &&
+          call.args[2] === "--detach",
+      ),
+    ).toBe(true);
+    await expect(
+      harness.manager.restore(
+        harness.report,
+        prepared.diagnostic_session.state,
+      ),
+    ).resolves.toMatchObject({
+      state: {
+        lifecycle: "active",
+        domain_extensions: [],
+      },
+    });
   });
 
   it("derives a safe, stable diagnostic branch slug from the target Issue title", () => {

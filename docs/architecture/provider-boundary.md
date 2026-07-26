@@ -43,7 +43,7 @@ This respects [Eve extension boundaries](https://eve.dev/docs/extensions): exten
 `prepare_diagnostic_session` accepts only:
 
 - report id and GitHub Issue identity;
-- a non-empty Root-selected `domain_extensions` set; and
+- a Root-selected `domain_extensions` set, which may be empty for generic diagnosis; and
 - a bounded diagnostic request.
 
 It never accepts model-provided `cwd`, branch, backend, skill path, cache path, source checkout path, or host directory. The report target must contain only a repository identity and full immutable Git SHA. Root derives the canonical remote from the matching Root-published Issue, then uses host Git to create or verify the fixed local hierarchy:
@@ -54,7 +54,7 @@ It never accepts model-provided `cwd`, branch, backend, skill path, cache path, 
   worktrees/<diagnostic-session>
 ```
 
-The fixed domain-extension registry resolves every selected installed native skill source, then Root creates or restores one deterministic detached diagnostic worktree under that hierarchy. Before Codex runs, Root writes the durable state to the Issue workpad and materializes:
+The fixed domain-extension registry resolves every selected installed native skill source, then Root creates or restores one deterministic detached diagnostic worktree under that hierarchy. An empty set is a first-class generic session and does not create a placeholder skill directory. When an extension is selected, Root writes the durable state to the Issue workpad before Codex runs and materializes:
 
 ```text
 <diagnostic-worktree>/.agents/skills/failure-report-ckb-debugging
@@ -110,7 +110,7 @@ One revision that cannot fit an empty comment is encoded as ordered, content-add
 
 ## Codex Native Skill and Worker
 
-The prepared delegation begins with every selected `$failure-report-…` native skill before the revision-bound diagnostic-session envelope. Codex's native skill discovery finds the worktree-local `.agents/skills` symlinks, so the worker uses native `$skill`, shell, Git, and MCP rather than Eve's `load_skill` tool or a copied global skill.
+When extensions are selected, the prepared delegation begins with every selected `$failure-report-…` native skill before the revision-bound diagnostic-session envelope. Codex's native skill discovery finds the worktree-local `.agents/skills` symlinks. With no selected extension, the delegation explicitly directs the same worker to repository instructions and standard diagnostic capabilities without inferring a domain skill. In both modes the worker uses shell, Git, and MCP rather than Eve's `load_skill` tool or a copied global skill.
 
 Eve is pinned to its just-bash backend for Root orchestration. just-bash has a virtual filesystem and no real Git or package-manager binaries, so it is not a substitute for the controlled host workspace. Root's authored diagnostics adapters inspect and manage the fixed host workspace; the direct Codex App Server transport is launched only after Root validates the envelope and workpad. It sends:
 

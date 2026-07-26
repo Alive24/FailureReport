@@ -578,11 +578,6 @@ export class DiagnosticWorktreeManager {
       names.add(skill.name);
       resolved.push(await this.resolveNativeSkillSource(skill));
     }
-    if (resolved.length === 0) {
-      throw new DiagnosticSafetyError(
-        "The Root-owned domain extension set does not provide a native diagnostic skill.",
-      );
-    }
     return resolved;
   }
 
@@ -642,6 +637,9 @@ export class DiagnosticWorktreeManager {
     worktreePath: string,
     skills: readonly ResolvedNativeSkill[],
   ): Promise<void> {
+    if (skills.length === 0) {
+      return;
+    }
     const agentsDirectory = join(worktreePath, ".agents");
     const skillsDirectory = join(agentsDirectory, "skills");
     try {
@@ -806,7 +804,6 @@ export class DiagnosticWorktreeManager {
   private assertDomainExtensions(): void {
     const ids = this.domainExtensionIds();
     if (
-      ids.length === 0 ||
       ids.some(
         (id, index) =>
           !/^[a-z][a-z0-9_-]*$/.test(id) ||
@@ -814,7 +811,7 @@ export class DiagnosticWorktreeManager {
       )
     ) {
       throw new DiagnosticSafetyError(
-        "Root-owned domain extensions must be non-empty, unique, and sorted.",
+        "Root-owned domain extensions must be unique, valid, and sorted.",
       );
     }
   }
