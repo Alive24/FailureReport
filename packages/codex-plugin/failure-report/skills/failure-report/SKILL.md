@@ -13,4 +13,6 @@ Treat the target repository GitHub Issue as the shared source of truth. Its body
 
 For `render_handoff`, send the latest persisted report binding. Root rejects stale revisions and returns exactly one versioned output: a finalized `implementation_handoff`, or a `human_input_request` that keeps the same diagnosis active. Do not treat a diagnostic snapshot as an implementation branch or PR source, and do not infer that rendering changed a tracker or started a coding workflow.
 
+Use `deliver_handoff` only when the caller wants the configured delivery side effect. It takes the same persisted report binding; no request may select a template, Project, field, or state. A configured Root creates a new human-readable Issue comment with folded canonical JSON, then moves the tracker only to its configured `Backlog` or `Todo` destination. `Todo` means Shea Symphony or another downstream implementation system may claim the Issue; it does not mean FailureReport completed implementation or review.
+
 When Root returns an implementation handoff, use its scope, guardrails, outcomes, verification, UAT, immutable references, and residual risks rather than recreating an ungrounded implementation request. When it returns a human-input request, answer its one precise question so Root can resume the same durable workpad and diagnostic session.

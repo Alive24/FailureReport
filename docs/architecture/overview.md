@@ -18,6 +18,8 @@ After Root determines the diagnosis is complete, `finalize_diagnostic_session` v
 
 `render_handoff` is the consumer-neutral boundary after diagnosis. It reads the latest managed workpad twice around a pure render, rejects stale caller revisions or concurrent lineage changes, and performs no write. A report is renderable as an implementation handoff only when its target revision, completion lineage, finalized worktree HEAD, and diagnostic-only remote snapshot agree and the gate is exactly `Ready`. The versioned handoff identifies the report, Issue, workpad entry/revision, immutable target, completion records, snapshot, and evidence refs, then carries only implementation goal, scope, guardrails, required outcomes, verification, UAT, and residual risks. Canonical key and set ordering plus SHA-256 identity derivation make equivalent durable input byte-identical.
 
+An optional deployment-owned delivery policy adds two Root-only mutation boundaries without changing that renderer. `begin_failure_report` resolves a configured GitHub Project v2 and moves accepted intake to its `Failure Report` status; the status option must exist in the Project but is intentionally absent from Shea Symphony's workflow mapping. `deliver_handoff` reuses the pure renderer, resolves a template beneath the Eve application root, creates or reuses one deterministic marker-bound human-readable comment, and moves the Project item only to configured `Backlog` or `Todo` after readback. A folded canonical handoff plus delivery intent is always appended independently of the presentation template. `Backlog` stops for manual promotion, while `Todo` is the downstream Shea entry. FailureReport does not own any later implementation, review, merge, or terminal state.
+
 Material uncertainty takes the other mutually exclusive result path. Root returns a versioned human-input request containing confirmed facts, completed or exhausted experiments, eliminated hypotheses, one remaining material unknown, viable options, exactly one question, and a resume condition. That path requires the same diagnostic session to remain `active`, with its worktree and Codex thread persisted and no diagnostic branch. The durable workpad remains the full evidence source in both cases.
 
 Eve is pinned to just-bash for Root orchestration. Its virtual shell is not asked to clone, fetch, run Git, or execute Codex. Root's host-side diagnostics adapters perform the controlled workspace lifecycle and inspection. The one Codex worker validates the prepared envelope, restores the persisted thread, and runs Codex App Server directly on the host with the session worktree as `cwd`, reusing the user's existing Codex Home, plugins, skills, MCP configuration, authentication, Git credentials, and model configuration. It defaults to evidence, hypotheses, experiments, and recommendations. `workspace-write` is available for focused tests, caches, and ephemeral debugging artifacts; it is not permission for business-code changes, commits, pushes, pull requests, or diagnostic finalization.
@@ -38,9 +40,11 @@ eve/
     channels/eve.ts              only public Eve entry
     instructions.md              Root policy
     tools/
+      begin_failure_report.ts
       prepare_diagnostic_session.ts
       finalize_diagnostic_session.ts
       render_handoff.ts
+      deliver_handoff.ts
     extensions/
       ckb.ts                     pure CKB capability mount
     subagents/
@@ -48,7 +52,8 @@ eve/
     lib/
       diagnostics/               Root session, extension registry, worktree, envelope
       backends/                  Codex App Server adapter
-      integrations/github/       Root-owned workpad gateway
+      delivery/                  configured intake and handoff delivery
+      integrations/github/       Root-owned workpad and Project gateways
   config/                        Root and worker configuration
   evals/                         immutable eval fixtures
 .eve/

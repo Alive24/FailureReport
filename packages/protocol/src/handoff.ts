@@ -16,9 +16,13 @@ const stringListSchema = z.array(z.string().min(1));
 const implementationHandoffIdSchema = z
   .string()
   .regex(/^failure-report\/implementation-handoff\/sha256\/[0-9a-f]{64}$/);
+const handoffDeliveryIdSchema = z
+  .string()
+  .regex(/^failure-report\/handoff-delivery\/sha256\/[0-9a-f]{64}$/);
 const humanInputRequestIdSchema = z
   .string()
   .regex(/^failure-report\/human-input-request\/sha256\/[0-9a-f]{64}$/);
+const sha256DigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
 
 const workpadReferenceSchema = z
   .object({
@@ -175,8 +179,47 @@ export const humanInputRequestSchema = z
   })
   .strict();
 
+/**
+ * Durable provider acknowledgement returned after a rendered handoff comment
+ * and its configured tracker destination have both been read back.
+ *
+ * This receipt deliberately describes only FailureReport's delivery boundary.
+ * It does not claim that a downstream implementation or review workflow ran.
+ */
+export const handoffDeliveryReceiptSchema = z
+  .object({
+    schema_version: z.literal("failure-report/handoff-delivery/v1"),
+    delivery_id: handoffDeliveryIdSchema,
+    handoff_id: implementationHandoffIdSchema,
+    report: reportReferenceSchema,
+    template: z
+      .object({
+        content_digest: sha256DigestSchema,
+      })
+      .strict(),
+    comment: z
+      .object({
+        ref: z.string().min(1),
+      })
+      .strict(),
+    tracker: z
+      .object({
+        kind: z.literal("github_project_v2"),
+        project_owner: z.string().min(1),
+        project_owner_type: z.enum(["organization", "user"]),
+        project_number: z.number().int().positive(),
+        status_field: z.string().min(1),
+        state: z.enum(["Backlog", "Todo"]),
+      })
+      .strict(),
+  })
+  .strict();
+
 export type ImplementationHandoff = z.infer<typeof implementationHandoffSchema>;
 export type HumanInputRequest = z.infer<typeof humanInputRequestSchema>;
+export type HandoffDeliveryReceipt = z.infer<
+  typeof handoffDeliveryReceiptSchema
+>;
 export type DiagnosticHandoff = ImplementationHandoff | HumanInputRequest;
 
 /** A fail-closed lifecycle or identity decision at the read-only handoff boundary. */

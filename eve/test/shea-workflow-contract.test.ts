@@ -32,6 +32,7 @@ describe("FailureReport Shea workflow contract", () => {
     expect(workflow).toContain("- pnpm check");
     expect(workflow).toContain("- pnpm test");
     expect(workflow).toContain("- pnpm format:check");
+    expect(workflow).not.toContain("Failure Report");
     expect(workflow).not.toMatch(/\/(?:Users|Volumes)\//);
   });
 

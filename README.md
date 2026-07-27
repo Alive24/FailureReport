@@ -1,6 +1,6 @@
 # FailureReport
 
-FailureReport is an Eve-supervised Failure in the Loop system. It turns an incomplete software failure into a durable, evidence-backed report whose shared context lives in one GitHub Issue from intake through Todo promotion.
+FailureReport is an Eve-supervised Failure in the Loop system. It turns an incomplete software failure into a durable, evidence-backed report and routes its human-readable implementation handoff to a configured Backlog or Todo destination in the same GitHub Issue.
 
 > **Provider boundary:** FailureReport is local-first by default: Root runs Eve with `experimental_chatgpt()` from the local Codex/ChatGPT session. The mounted CKB extension supplies domain capability, while Root prepares a durable diagnostic worktree for the one consumer-owned Codex worker. See [provider boundary](docs/architecture/provider-boundary.md) for the contract.
 
@@ -27,6 +27,7 @@ flowchart TD
 - `prepare_diagnostic_session` accepts a report bound to a repository and full immutable Git SHA, resolves a Root-selected `domain_extensions` set, and manages the source cache plus detached diagnostic worktree only under the repository's `.eve/sandbox-cache/`. The set may be empty: the one generic `codex` worker then uses repository instructions and standard diagnostic capabilities without a synthetic core skill. When extensions are selected, Root places their native skills under `.agents/skills/`. Root persists only portable worktree identity/HEAD/Codex-thread state before delegation; the host path remains Root-private runtime state. After a worker finish, Root—not Codex—reconciles one immutable completion record through a bounded read–merge–write–readback transaction. Codex decides how to use selected skills; extensions never select a backend. Reachable deployment credentials and network policy, rather than a Root approval loop, control access to external systems.
 - `finalize_diagnostic_session` creates and pushes `diagnostic/<target-issue-number>-<issue-title-slug>` only after the diagnostic worktree is clean. It does not check the branch out or force-move an existing ref. The workpad labels it a diagnostic-only snapshot: future coding must use a separate implementation worktree/branch and must not open a PR directly from the snapshot.
 - `render_handoff` is a read-only, revision-bound operation. Root reloads the latest provenance-verified workpad and returns either a deterministic `failure-report/implementation-handoff/v1` for a finalized fully Ready diagnosis, or a `failure-report/human-input-request/v1` that preserves the active worktree and diagnostic thread. It never publishes, changes tracker state, creates a branch, or starts an implementation workflow.
+- Tracker routing is optional deployment policy. For a configured repository, `begin_failure_report` moves an accepted intake into the Project's `Failure Report` state. `deliver_handoff` preserves the canonical structured handoff, renders a configurable human view, creates or reuses one new marker-bound Issue comment, and moves the Project item to the configured `Backlog` or `Todo` destination only after readback. `Backlog` stops for manual promotion; `Todo` hands ownership to a downstream implementation system such as Shea Symphony. FailureReport never skips directly to `Agent Review` or `Human Review`.
 - A target-repository GitHub Issue is shared context: FailureReport never edits its body or a foreign comment. A managed comment is trusted only when its marker, v2 entry envelope, configured producer identity, and live immutable GitHub author identity agree.
 - Root owns GitHub as an internal integration. Octokit is the default API transport; by default it reuses the active local `gh auth login` identity once per process, then performs Issue and comment calls through the SDK.
 - The workpad records an append-only logical lineage. The same verified producer appends while the provider-private encoded request remains within its safe budget, then creates an explicit capacity successor without modifying its predecessor. A different configured producer creates an explicit transition successor. An oversized revision is published as folded provisional content-addressed chunks and becomes visible only through a final manifest that independently verifies their IDs, ordering, digests, producer, live author, logical session, revision, and predecessor. Incomplete groups never become runtime state. Any copied marker, malformed entry, unknown producer, conflicting lineage, chunk mismatch, or fork becomes `needs_input`.
@@ -145,8 +146,44 @@ Runtime configuration is optional for that common path. These alternatives are a
 | `FAILURE_REPORT_GITHUB_HOST`, `FAILURE_REPORT_GITHUB_API_URL` | Select a `gh` host and/or GitHub Enterprise API base URL. |
 | `FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ID` + `FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ACTOR_ID` | Required together to identify Root's current managed-comment producer with GitHub's immutable numeric actor ID. |
 | `FAILURE_REPORT_GITHUB_WORKPAD_PRODUCERS` | Optional JSON object mapping every approved producer ID to its immutable GitHub actor ID, for example `{"root-gh":"101","root-app":"202"}`. |
+| `FAILURE_REPORT_HANDOFF_DELIVERY_POLICY` | Optional repository-to-template and GitHub Project v2 routing policy. Without it, diagnosis and read-only handoff rendering remain available but no tracker state is changed. |
 
 All credentials belong in runtime environment/secret management only. FailureReport does not put tokens, App private keys, credential output, host-local paths, or raw private evidence into the public workpad, prompts, logs, or fixtures. Non-public evidence must be retained outside GitHub and referenced only through an opaque handle.
+
+### Tracker routing and handoff delivery
+
+Create a `Failure Report` option in the target GitHub Project's `Status` field before enabling routing. This diagnostic state belongs to the tracker, not Shea Symphony's workflow `state_map`: Shea claims only its own downstream states such as `Todo` and `Rework`.
+
+The delivery policy is deployment-owned JSON. Root requests and models provide only an Issue identity and revision binding; they cannot choose a template, Project, field, or destination.
+
+```bash
+export FAILURE_REPORT_HANDOFF_DELIVERY_POLICY='{
+  "schema_version": "failure-report/handoff-delivery-policy/v1",
+  "repositories": [
+    {
+      "repository": "Acme/Application",
+      "template": {
+        "path": "config/root/handoffs/implementation.md"
+      },
+      "tracker": {
+        "kind": "github_project_v2",
+        "project_owner": "Acme",
+        "project_owner_type": "organization",
+        "project_number": 12,
+        "status_field": "Status",
+        "intake_state": "Failure Report",
+        "ready_destination": "Backlog"
+      }
+    }
+  ]
+}'
+```
+
+Set `ready_destination` to `Backlog` when a person should promote the completed report manually, or to `Todo` when a downstream system may claim it immediately. `Agent Review`, `Human Review`, `Merging`, and `Done` are intentionally invalid destinations because they require real downstream work and evidence.
+
+The template path is relative to the Eve application root. FailureReport canonicalizes it, requires a regular file inside that root, and rejects traversal or symlink escape. `eve/config/root/handoffs/implementation.md` is the default example. It controls only the human-readable part of the new comment; FailureReport always appends the full versioned structured handoff and delivery intent in a folded JSON block. Template variables are validated, and the machine-readable `failure-report/implementation-handoff/v1` schema never changes with presentation.
+
+The active GitHub credential needs Issue comment write access and GitHub Project v2 read/write access for every configured Project. A missing Project, status field, `Failure Report`/`Backlog`/`Todo` option, or insufficient credential fails closed. Handoff-comment retry uses a deterministic marker and never edits another user's comment; tracker mutation is accepted only after status readback.
 
 ## Team-authorized GitHub Issue Channel
 

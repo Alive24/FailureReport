@@ -29,6 +29,12 @@ export type PublishedSharedContext = {
   workpad_revision: number;
 };
 
+/** Provider readback for one idempotently published handoff comment. */
+export type PublishedHandoffComment = {
+  issue: GithubIssueSnapshot;
+  comment_ref: string;
+};
+
 /**
  * A verified optimistic-concurrency race. Root may reload logical state and
  * make one bounded retry; callers must never treat it as permission to replay a
@@ -76,6 +82,12 @@ export interface GithubIssueGateway {
     report: FailureReport,
     syncedAt: string,
   ): Promise<PublishedSharedContext>;
+  publishHandoffComment(
+    repository: string,
+    issueNumber: number,
+    marker: string,
+    body: string,
+  ): Promise<PublishedHandoffComment>;
   getWorkpadProducerConfiguration(): WorkpadProducerConfiguration;
 }
 
@@ -105,6 +117,75 @@ export abstract class IssueWorkpadGateway implements GithubIssueGateway {
     repository: string,
     issueNumber: number,
   ): Promise<GithubIssueSnapshot>;
+
+  /**
+   * Creates a new human-readable handoff comment without modifying an existing
+   * comment. A stable marker makes process-loss retry idempotent; conflicting
+   * or duplicated markers fail closed instead of guessing which delivery won.
+   */
+  async publishHandoffComment(
+    repository: string,
+    issueNumber: number,
+    marker: string,
+    body: string,
+  ): Promise<PublishedHandoffComment> {
+    if (
+      !marker.startsWith("<!-- failure-report-handoff-delivery/v1 ") ||
+      !marker.endsWith(" -->") ||
+      !body.startsWith(marker + "\n")
+    ) {
+      throw new WorkpadNeedsInputError(
+        "FailureReport handoff delivery requires its exact versioned marker at the start of the comment.",
+      );
+    }
+    const producers = this.getWorkpadProducerConfiguration();
+    const actor = await this.readAuthenticatedActor();
+    if (actor.id !== producers.current.github_actor_id) {
+      throw new WorkpadNeedsInputError(
+        "Configured FailureReport producer does not match the authenticated GitHub actor.",
+      );
+    }
+
+    const existing = await this.readIssue(repository, issueNumber);
+    const reusable = findHandoffComments(existing, marker);
+    if (reusable.length > 1) {
+      throw new WorkpadNeedsInputError(
+        "FailureReport handoff delivery found duplicate provider markers and requires operator resolution.",
+      );
+    }
+    const prior = reusable[0];
+    if (prior) {
+      assertReusableHandoffComment(prior, body, actor.id);
+      return { issue: existing, comment_ref: prior.id };
+    }
+
+    const latest = await this.readIssue(repository, issueNumber);
+    const raced = findHandoffComments(latest, marker);
+    if (raced.length > 1) {
+      throw new WorkpadNeedsInputError(
+        "FailureReport handoff delivery found duplicate provider markers and requires operator resolution.",
+      );
+    }
+    if (raced[0]) {
+      assertReusableHandoffComment(raced[0], body, actor.id);
+      return { issue: latest, comment_ref: raced[0].id };
+    }
+
+    const commentRef = await this.createIssueComment(
+      repository,
+      issueNumber,
+      body,
+    );
+    const readback = await this.readIssue(repository, issueNumber);
+    const persisted = findHandoffComments(readback, marker);
+    if (persisted.length !== 1 || persisted[0]?.id !== commentRef) {
+      throw new WorkpadPostWriteReadbackError(
+        "FailureReport could not verify one unique handoff comment after publication.",
+      );
+    }
+    assertReusableHandoffComment(persisted[0], body, actor.id);
+    return { issue: readback, comment_ref: commentRef };
+  }
 
   async publishSharedContext(
     repository: string,
@@ -179,7 +260,7 @@ export abstract class IssueWorkpadGateway implements GithubIssueGateway {
   /** Reads the immutable GitHub identity used by the active transport credentials. */
   protected abstract readAuthenticatedActor(): Promise<GithubActorIdentity>;
 
-  protected abstract createWorkpadComment(
+  protected abstract createIssueComment(
     repository: string,
     issueNumber: number,
     body: string,
@@ -220,7 +301,7 @@ export abstract class IssueWorkpadGateway implements GithubIssueGateway {
           continue;
         }
 
-        const created = await this.createWorkpadComment(
+        const created = await this.createIssueComment(
           repository,
           issueNumber,
           planned.workpad_comment_body,
@@ -259,11 +340,11 @@ export abstract class IssueWorkpadGateway implements GithubIssueGateway {
         producers,
       );
       // This create is the sole visibility boundary for the logical revision.
-      return this.createWorkpadComment(repository, issueNumber, manifestBody);
+      return this.createIssueComment(repository, issueNumber, manifestBody);
     }
 
     if (mutation.mode === "create" || mutation.mode === "continue") {
-      return this.createWorkpadComment(
+      return this.createIssueComment(
         repository,
         issueNumber,
         mutation.workpad_comment_body,
@@ -280,6 +361,27 @@ export abstract class IssueWorkpadGateway implements GithubIssueGateway {
       repository,
       commentRef,
       mutation.workpad_comment_body,
+    );
+  }
+}
+
+function findHandoffComments(
+  issue: GithubIssueSnapshot,
+  marker: string,
+): GithubIssueSnapshot["comments"] {
+  return issue.comments.filter((comment) =>
+    comment.body.split(/\r?\n/u).includes(marker),
+  );
+}
+
+function assertReusableHandoffComment(
+  comment: GithubIssueSnapshot["comments"][number],
+  expectedBody: string,
+  expectedActorId: string,
+): void {
+  if (comment.body !== expectedBody || comment.author?.id !== expectedActorId) {
+    throw new WorkpadNeedsInputError(
+      "FailureReport handoff delivery marker conflicts with the configured template, handoff, or producer.",
     );
   }
 }

@@ -157,6 +157,36 @@ describe("Octokit Issue gateway", () => {
     expect(second.workpad_revision).toBe(1);
   });
 
+  it("creates one new handoff comment and reuses it without editing on retry", async () => {
+    const fake = createMutableOctokit();
+    const gateway = new OctokitIssueGateway(
+      fake.octokit as unknown as Octokit,
+      rootGh,
+    );
+    const marker =
+      '<!-- failure-report-handoff-delivery/v1 id="delivery-54" -->';
+    const body = `${marker}\n# Human-readable handoff\n`;
+
+    const first = await gateway.publishHandoffComment(
+      repository,
+      issueNumber,
+      marker,
+      body,
+    );
+    const retry = await gateway.publishHandoffComment(
+      repository,
+      issueNumber,
+      marker,
+      body,
+    );
+
+    expect(first.comment_ref).toBe("101");
+    expect(retry.comment_ref).toBe("101");
+    expect(fake.comments).toHaveLength(1);
+    expect(fake.octokit.rest.issues.createComment).toHaveBeenCalledTimes(1);
+    expect(fake.octokit.rest.issues.updateComment).not.toHaveBeenCalled();
+  });
+
   it("creates a linked successor when a different configured producer continues", async () => {
     const report = await loadReport();
     const fake = createMutableOctokit();

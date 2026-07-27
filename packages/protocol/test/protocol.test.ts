@@ -259,26 +259,28 @@ describe("FailureReport protocol", () => {
     ).toThrow("every remaining uncertainty must be classified");
   });
 
-  it("requires a revision-bound persisted report for render_handoff requests", async () => {
+  it("requires a revision-bound persisted report for render and delivery requests", async () => {
     const report = await finalizedReadyReport();
 
-    expect(
-      rootRequestSchema.parse({
-        request_id: "render-ready-report",
-        operation: "render_handoff",
-        report,
-      }).report,
-    ).toEqual(report);
-    expect(() =>
-      rootRequestSchema.parse({
-        request_id: "render-without-report",
-        operation: "render_handoff",
-        issue_selector: {
-          repository: "Alive24/CKBoost",
-          issue_number: 54,
-        },
-      }),
-    ).toThrow("persisted report binding");
+    for (const operation of ["render_handoff", "deliver_handoff"] as const) {
+      expect(
+        rootRequestSchema.parse({
+          request_id: operation + "-ready-report",
+          operation,
+          report,
+        }).report,
+      ).toEqual(report);
+      expect(() =>
+        rootRequestSchema.parse({
+          request_id: operation + "-without-report",
+          operation,
+          issue_selector: {
+            repository: "Alive24/CKBoost",
+            issue_number: 54,
+          },
+        }),
+      ).toThrow("persisted report binding");
+    }
   });
 
   it("renders byte-identical canonical implementation handoffs and revision-bound identities", async () => {
@@ -380,6 +382,46 @@ describe("FailureReport protocol", () => {
         handoff_markdown: "# Unstructured",
       }),
     ).toThrow();
+
+    if (
+      implementation.schema_version !==
+      "failure-report/implementation-handoff/v1"
+    ) {
+      throw new Error("Fixture must render an implementation handoff.");
+    }
+    const delivery = {
+      schema_version: "failure-report/handoff-delivery/v1",
+      delivery_id: "failure-report/handoff-delivery/sha256/" + "c".repeat(64),
+      handoff_id: implementation.handoff_id,
+      report: implementation.report,
+      template: { content_digest: "sha256:" + "d".repeat(64) },
+      comment: { ref: "9001" },
+      tracker: {
+        kind: "github_project_v2",
+        project_owner: "Alive24",
+        project_owner_type: "user",
+        project_number: 10,
+        status_field: "Status",
+        state: "Todo",
+      },
+    };
+    expect(
+      rootResultSchema.parse({
+        request_id: "deliver-ready-54",
+        status: "completed",
+        summary: "Delivered to Todo.",
+        implementation_handoff: implementation,
+        handoff_delivery: delivery,
+      }).handoff_delivery,
+    ).toEqual(delivery);
+    expect(() =>
+      rootResultSchema.parse({
+        request_id: "delivery-without-handoff",
+        status: "completed",
+        summary: "Invalid delivery.",
+        handoff_delivery: delivery,
+      }),
+    ).toThrow("requires the matching implementation_handoff");
   });
 
   it("persists a typed Root-owned diagnostic completion with session bindings", async () => {
