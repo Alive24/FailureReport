@@ -11,7 +11,7 @@
     "test": "vitest run --exclude '**/.eve/**'",
     "dev:preflight": "pnpm --filter @failure-report/protocol --filter @failure-report/ckb-domain-pack run build",
     "predev": "pnpm run dev:preflight",
-    "dev": "eve dev --no-ui",
+    "dev": "node ./scripts/dev.mjs",
     "eve:info": "eve info",
     "eval": "eve eval"
   },

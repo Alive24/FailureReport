@@ -66,14 +66,16 @@ export function prepareHandoffDelivery(input: {
     delivery_id: deliveryId,
     handoff_id: input.handoff.handoff_id,
     template: { content_digest: templateDigest },
-    tracker: {
-      kind: input.policy.tracker.kind,
-      project_owner: input.policy.tracker.project_owner,
-      project_owner_type: input.policy.tracker.project_owner_type,
-      project_number: input.policy.tracker.project_number,
-      status_field: input.policy.tracker.status_field,
-      state: input.policy.tracker.ready_destination,
-    },
+    tracker: input.policy.tracker
+      ? {
+          kind: input.policy.tracker.kind,
+          project_owner: input.policy.tracker.project_owner,
+          project_owner_type: input.policy.tracker.project_owner_type,
+          project_number: input.policy.tracker.project_number,
+          status_field: input.policy.tracker.status_field,
+          state: input.policy.tracker.ready_destination,
+        }
+      : null,
   };
   return {
     delivery_id: deliveryId,
@@ -120,14 +122,16 @@ export function createHandoffDeliveryReceipt(input: {
     comment: {
       ref: input.comment_ref,
     },
-    tracker: {
-      kind: input.policy.tracker.kind,
-      project_owner: input.policy.tracker.project_owner,
-      project_owner_type: input.policy.tracker.project_owner_type,
-      project_number: input.policy.tracker.project_number,
-      status_field: input.policy.tracker.status_field,
-      state: input.policy.tracker.ready_destination,
-    },
+    tracker: input.policy.tracker
+      ? {
+          kind: input.policy.tracker.kind,
+          project_owner: input.policy.tracker.project_owner,
+          project_owner_type: input.policy.tracker.project_owner_type,
+          project_number: input.policy.tracker.project_number,
+          status_field: input.policy.tracker.status_field,
+          state: input.policy.tracker.ready_destination,
+        }
+      : null,
   });
 }
 

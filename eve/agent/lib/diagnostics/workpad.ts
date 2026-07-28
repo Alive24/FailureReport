@@ -215,7 +215,10 @@ export class DiagnosticSessionWorkpad {
       report,
       workpad_revision: workpadRevision,
       diagnostic_session: diagnosticSession,
-      delegation_message: renderDiagnosticSessionEnvelope(preparedEnvelope),
+      delegation_message: renderDiagnosticSessionEnvelope(
+        preparedEnvelope,
+        diagnosticSession.diagnostic_prompt,
+      ),
     };
   }
 

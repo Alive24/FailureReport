@@ -29,7 +29,7 @@ import {
   diagnosticBranchSlugFor,
   type DiagnosticSessionIssueGateway,
 } from "../agent/lib/diagnostics/workpad.js";
-import type { DiagnosticSourceResolver } from "../agent/lib/diagnostics/source-cache.js";
+import type { DiagnosticSourceResolver } from "../agent/lib/diagnostics/target-workspace.js";
 import {
   DiagnosticWorktreeManager,
   type GitCommandRunner,
@@ -46,8 +46,8 @@ import sandbox from "../agent/sandbox.js";
 
 const canonicalPath = "/canonical/CKBoost";
 const canonicalRemote = "https://github.com/Alive24/CKBoost.git";
-const runtimeRoot = "/sandbox/failure-report";
-const worktreeRoot = join(runtimeRoot, ".eve", "sandbox-cache", "worktrees");
+const untrustedHostPath = "/untrusted/host-path";
+const worktreeRoot = join(canonicalPath, ".shea", "worktrees", "failureReport");
 const ckbSkillRoot = "/extensions/ckb-domain-pack";
 const ckbSkillSource =
   ckbSkillRoot + "/extension/skills/failure-report-ckb-debugging";
@@ -171,7 +171,9 @@ describe("Codex diagnostic session", () => {
     expect(
       harness.currentReport().diagnostic_session?.worktree,
     ).not.toHaveProperty("path");
-    expect(JSON.stringify(harness.currentReport())).not.toContain(runtimeRoot);
+    expect(JSON.stringify(harness.currentReport())).not.toContain(
+      untrustedHostPath,
+    );
     expect(
       harness.calls.filter(
         (call) => call.args[0] === "worktree" && call.args[1] === "add",
@@ -194,7 +196,7 @@ describe("Codex diagnostic session", () => {
     await expect(
       harness.manager.allocate(harness.report, "ckboost-issue-54"),
     ).rejects.toThrow(
-      "`.eve/sandbox-cache/worktrees` directory cannot be resolved safely",
+      "FailureReport `.shea` workspace cannot be resolved safely",
     );
     expect(
       harness.calls.some(
@@ -220,6 +222,9 @@ describe("Codex diagnostic session", () => {
 
     expect(prepared.delegation_message).toMatch(
       /^\$failure-report-ckb-debugging \$failure-report-evm-debugging/m,
+    );
+    expect(prepared.delegation_message).toContain(
+      "Target-owned FailureReport guidance:\n# Target intake\n\n# Target synthesis",
     );
     expect(prepared.diagnostic_session.state.domain_extensions).toEqual([
       "ckb",
@@ -712,7 +717,7 @@ async function createHarness(
     }
     throw new Error("Unexpected git command: " + input.cwd + " git " + command);
   };
-  const sourceCache: DiagnosticSourceResolver = {
+  const sourceResolver: DiagnosticSourceResolver = {
     async acquire() {
       return {
         canonical_path: canonicalPath,
@@ -731,10 +736,32 @@ async function createHarness(
   const manager = new DiagnosticWorktreeManager({
     domainExtensions,
     backendId: "codex_app_server",
-    runtimeRoot,
-    sourceCache,
+    sourceResolver,
     git,
     paths,
+    prepareTargetShea: async () => {
+      const stat = await paths.lstat(worktreeRoot);
+      const resolvedRoot = await paths.realpath(worktreeRoot);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error("unsafe target worktree root");
+      }
+      return {
+        canonical_checkout: canonicalPath,
+        shea_root: join(canonicalPath, ".shea"),
+        worktree_root: resolvedRoot,
+        prompts: {
+          intake: "# Target intake",
+          synthesis: "# Target synthesis",
+        },
+        handoff_template_path: join(
+          canonicalPath,
+          ".shea",
+          "template",
+          "failureReport",
+          "implementation.md",
+        ),
+      };
+    },
   });
   const gateway = createIssueGateway(report);
   let second = 2;
@@ -981,7 +1008,7 @@ function createIssueGateway(
 /** In-memory filesystem with symlink visibility and no implicit overwrites. */
 class FakePathOperations implements WorktreePathOperations {
   private readonly directories = new Set<string>([
-    runtimeRoot,
+    untrustedHostPath,
     canonicalPath,
     worktreeRoot,
     ckbSkillRoot,

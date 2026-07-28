@@ -13,7 +13,8 @@ import type { DomainExtension } from "../agent/lib/diagnostics/domain-extensions
 import type { PreparedDiagnosticSession } from "../agent/lib/diagnostics/workpad.js";
 import { DiagnosticSafetyError } from "../agent/lib/diagnostics/worktree.js";
 
-const worktreePath = "/root/.eve/sandbox-cache/worktrees/diagnostic-report";
+const worktreePath =
+  "/canonical/target/.shea/worktrees/failureReport/diagnostic-report";
 const skillName = "failure-report-ckb-debugging";
 const configuredCodex = "/configured/bin/codex";
 
@@ -539,7 +540,7 @@ function preparedSession(
     workpad_revision: 7,
     delegation_message: "delegation",
     diagnostic_session: {
-      canonical_path: "/root/.eve/sandbox-cache/sources/ckboost",
+      canonical_path: "/bound/CKBoost",
       path: worktreePath,
       state: {
         lifecycle: "active",

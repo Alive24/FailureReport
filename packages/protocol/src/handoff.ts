@@ -181,7 +181,7 @@ export const humanInputRequestSchema = z
 
 /**
  * Durable provider acknowledgement returned after a rendered handoff comment
- * and its configured tracker destination have both been read back.
+ * and, when configured, the target repository's tracker destination are read back.
  *
  * This receipt deliberately describes only FailureReport's delivery boundary.
  * It does not claim that a downstream implementation or review workflow ran.
@@ -211,7 +211,8 @@ export const handoffDeliveryReceiptSchema = z
         status_field: z.string().min(1),
         state: z.enum(["Backlog", "Todo"]),
       })
-      .strict(),
+      .strict()
+      .nullable(),
   })
   .strict();
 

@@ -6,12 +6,12 @@ import { createFailureReportIntakeRouter } from "../lib/delivery/intake-router.j
 const routeIntake = createFailureReportIntakeRouter();
 
 /**
- * Root-only configured tracker entry. The model identifies only the Issue;
- * project coordinates and the `Failure Report` option come from deployment.
+ * Root-only optional tracker entry. The model identifies only the Issue;
+ * target Project coordinates and `Failure Report` come from deployment.
  */
 export default defineTool({
   description:
-    "Route one accepted GitHub Issue into its configured Failure Report tracker state without accepting a caller-selected Project or state.",
+    "Route one accepted GitHub Issue into its target repository's configured Failure Report tracker state, or preserve tracker-free intake when none is configured.",
   inputSchema: z
     .object({
       repository: z.string().regex(/^[^/\s]+\/[^/\s]+$/),

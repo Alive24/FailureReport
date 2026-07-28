@@ -15,8 +15,8 @@ import {
 import {
   findRepositoryHandoffDeliveryPolicy,
   loadHandoffTemplate,
+  loadTargetHandoffTemplate,
   readHandoffDeliveryPolicy,
-  resolveEveApplicationRoot,
   type HandoffDeliveryEnvironment,
   type HandoffDeliveryPolicy,
   type RepositoryHandoffDeliveryPolicy,
@@ -122,10 +122,16 @@ export function createDiagnosticHandoffDelivery(
         );
       }
 
-      const template = await (options.templateLoader ?? loadHandoffTemplate)(
-        options.applicationRoot ?? (await resolveEveApplicationRoot()),
-        repositoryPolicy.template.path,
-      );
+      const template = options.templateLoader
+        ? await options.templateLoader(
+            options.applicationRoot ?? "/unused-test-seam",
+            repositoryPolicy.template.path,
+          )
+        : await loadTargetHandoffTemplate({
+            repository: input.repository,
+            revision: input.expected_target_revision,
+            configuredPath: repositoryPolicy.template.path,
+          });
       const prepared = prepareHandoffDelivery({
         handoff: rendered.implementation_handoff,
         policy: repositoryPolicy,
@@ -149,21 +155,23 @@ export function createDiagnosticHandoffDelivery(
           "Managed workpad changed before tracker delivery; reload the latest revision before retrying.",
         );
       }
-      const tracker = await Promise.resolve(
-        options.tracker ?? getDefaultGithubProjectTracker(),
-      );
-      await tracker.setIssueState({
-        repository: input.repository,
-        issue_number: input.issue_number,
-        tracker: trackerCoordinates(repositoryPolicy),
-        state: repositoryPolicy.tracker.ready_destination,
-        allowed_previous_states: [
-          null,
-          repositoryPolicy.tracker.intake_state,
-          "Need Human Input",
-          repositoryPolicy.tracker.ready_destination,
-        ],
-      });
+      if (repositoryPolicy.tracker) {
+        const tracker = await Promise.resolve(
+          options.tracker ?? getDefaultGithubProjectTracker(),
+        );
+        await tracker.setIssueState({
+          repository: input.repository,
+          issue_number: input.issue_number,
+          tracker: trackerCoordinates(repositoryPolicy.tracker),
+          state: repositoryPolicy.tracker.ready_destination,
+          allowed_previous_states: [
+            null,
+            repositoryPolicy.tracker.intake_state,
+            "Need Human Input",
+            repositoryPolicy.tracker.ready_destination,
+          ],
+        });
+      }
       return {
         status: "completed",
         report_id: input.report_id,
@@ -187,17 +195,19 @@ export function createDiagnosticHandoffDelivery(
   };
 }
 
-function trackerCoordinates(policy: RepositoryHandoffDeliveryPolicy): {
+function trackerCoordinates(
+  tracker: NonNullable<RepositoryHandoffDeliveryPolicy["tracker"]>,
+): {
   project_owner: string;
   project_owner_type: "organization" | "user";
   project_number: number;
   status_field: string;
 } {
   return {
-    project_owner: policy.tracker.project_owner,
-    project_owner_type: policy.tracker.project_owner_type,
-    project_number: policy.tracker.project_number,
-    status_field: policy.tracker.status_field,
+    project_owner: tracker.project_owner,
+    project_owner_type: tracker.project_owner_type,
+    project_number: tracker.project_number,
+    status_field: tracker.status_field,
   };
 }
 

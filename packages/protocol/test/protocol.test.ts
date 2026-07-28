@@ -414,6 +414,15 @@ describe("FailureReport protocol", () => {
         handoff_delivery: delivery,
       }).handoff_delivery,
     ).toEqual(delivery);
+    expect(
+      rootResultSchema.parse({
+        request_id: "deliver-without-tracker-54",
+        status: "completed",
+        summary: "Delivered as an Issue comment.",
+        implementation_handoff: implementation,
+        handoff_delivery: { ...delivery, tracker: null },
+      }).handoff_delivery?.tracker,
+    ).toBeNull();
     expect(() =>
       rootResultSchema.parse({
         request_id: "delivery-without-handoff",

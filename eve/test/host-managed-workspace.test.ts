@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { failureReportSchema } from "@failure-report/protocol";
 
 import type { DomainExtension } from "../agent/lib/diagnostics/domain-extensions.js";
-import { DiagnosticSourceCacheManager } from "../agent/lib/diagnostics/source-cache.js";
+import { DiagnosticTargetWorkspaceManager } from "../agent/lib/diagnostics/target-workspace.js";
 import {
   DiagnosticWorktreeManager,
   type GitCommandRunner,
@@ -36,7 +36,7 @@ afterEach(async () => {
 });
 
 describe("host-managed diagnostic workspace", () => {
-  it("clones and restores a detached worktree only below .eve/sandbox-cache", async () => {
+  it("uses the bound target and places the detached worktree in target .shea", async () => {
     const root = await mkdtemp(join(tmpdir(), "failure-report-host-runtime-"));
     temporaryRoots.push(root);
     const remote = join(root, "remote.git");
@@ -75,8 +75,8 @@ describe("host-managed diagnostic workspace", () => {
         },
       ],
     };
-    const sourceCache = new DiagnosticSourceCacheManager({
-      runtimeRoot: root,
+    const sourceResolver = new DiagnosticTargetWorkspaceManager({
+      targetWorkspace: seed,
       git,
       paths,
       remoteForRepository: () => remote,
@@ -84,8 +84,7 @@ describe("host-managed diagnostic workspace", () => {
     const worktrees = new DiagnosticWorktreeManager({
       domainExtensions: [extension],
       backendId: "codex_app_server",
-      runtimeRoot: root,
-      sourceCache,
+      sourceResolver,
       git,
       paths,
     });
@@ -107,21 +106,14 @@ describe("host-managed diagnostic workspace", () => {
     });
 
     const allocated = await worktrees.allocate(report, "host-runtime-fixture");
-    const canonicalRoot = await realpath(root);
-    const expectedCacheRoot = join(
-      canonicalRoot,
-      ".eve",
-      "sandbox-cache",
-      "sources",
-    );
     const expectedWorktreeRoot = join(
-      canonicalRoot,
-      ".eve",
-      "sandbox-cache",
+      allocated.canonical_path,
+      ".shea",
       "worktrees",
+      "failureReport",
     );
 
-    expect(isChild(expectedCacheRoot, allocated.canonical_path)).toBe(true);
+    expect(allocated.canonical_path).toBe(await realpath(seed));
     expect(isChild(expectedWorktreeRoot, allocated.path)).toBe(true);
     expect(await gitCommand(allocated.path, ["branch", "--show-current"])).toBe(
       "",

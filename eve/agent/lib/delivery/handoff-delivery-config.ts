@@ -1,10 +1,22 @@
 import { realpath, readFile, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
 
-/** Deployment-owned policy for publishing a ready handoff into one tracker. */
+import {
+  DiagnosticTargetWorkspaceManager,
+  type DiagnosticSourceResolver,
+} from "../diagnostics/target-workspace.js";
+import { prepareTargetSheaWorkspace } from "../diagnostics/target-shea.js";
+import {
+  hostWorktreePathOperations,
+  runHostGit,
+} from "../diagnostics/worktree.js";
+
+export const defaultTargetHandoffTemplatePath =
+  ".shea/template/failureReport/implementation.md";
+
+/** Deployment-owned policy for target handoff presentation and optional routing. */
 export const handoffDeliveryPolicySchema = z
   .object({
     schema_version: z.literal("failure-report/handoff-delivery-policy/v1"),
@@ -20,9 +32,11 @@ export const handoffDeliveryPolicySchema = z
                   .min(1)
                   .refine((path) => !isAbsolute(path), {
                     message: "handoff template path must be relative",
-                  }),
+                  })
+                  .default(defaultTargetHandoffTemplatePath),
               })
-              .strict(),
+              .strict()
+              .default({ path: defaultTargetHandoffTemplatePath }),
             tracker: z
               .object({
                 kind: z.literal("github_project_v2"),
@@ -33,7 +47,9 @@ export const handoffDeliveryPolicySchema = z
                 intake_state: z.literal("Failure Report"),
                 ready_destination: z.enum(["Backlog", "Todo"]),
               })
-              .strict(),
+              .strict()
+              .nullable()
+              .default(null),
           })
           .strict(),
       )
@@ -103,45 +119,14 @@ export function findRepositoryHandoffDeliveryPolicy(
 }
 
 /**
- * Finds the Eve application root from normal source, compiled, repository-root,
- * or package-root launch locations without accepting a caller path.
- */
-export async function resolveEveApplicationRoot(
-  workingDirectory = process.cwd(),
-): Promise<string> {
-  const moduleDirectory = fileURLToPath(new URL(".", import.meta.url));
-  const candidates = [
-    workingDirectory,
-    resolve(workingDirectory, "eve"),
-    resolve(moduleDirectory, "../../.."),
-    resolve(moduleDirectory, "../../../.."),
-  ];
-  for (const candidate of new Set(candidates)) {
-    try {
-      const packageJson = JSON.parse(
-        await readFile(resolve(candidate, "package.json"), "utf8"),
-      ) as { name?: unknown };
-      if (packageJson.name === "@Alive24/FailureReport") {
-        return realpath(candidate);
-      }
-    } catch {
-      // Try the next bounded application-owned candidate.
-    }
-  }
-  throw new Error(
-    "FailureReport could not resolve its Eve application root for handoff templates.",
-  );
-}
-
-/**
- * Loads a configured Markdown template only from inside the Eve application
- * root. Canonical containment rejects traversal and symlink escapes.
+ * Loads a configured Markdown template only from inside the target canonical
+ * checkout. Canonical containment rejects traversal and symlink escapes.
  */
 export async function loadHandoffTemplate(
-  applicationRoot: string,
+  canonicalCheckout: string,
   configuredPath: string,
 ): Promise<{ content: string; canonical_path: string }> {
-  const canonicalRoot = await realpath(applicationRoot);
+  const canonicalRoot = await realpath(canonicalCheckout);
   const candidate = resolve(canonicalRoot, configuredPath);
   const canonicalPath = await realpath(candidate);
   const fromRoot = relative(canonicalRoot, canonicalPath);
@@ -152,7 +137,7 @@ export async function loadHandoffTemplate(
     isAbsolute(fromRoot)
   ) {
     throw new Error(
-      "Configured handoff template must resolve to a file inside the Eve application root.",
+      "Configured handoff template must resolve to a file inside the target canonical checkout.",
     );
   }
   if (!(await stat(canonicalPath)).isFile()) {
@@ -163,4 +148,38 @@ export async function loadHandoffTemplate(
     throw new Error("Configured handoff template must not be empty.");
   }
   return { content, canonical_path: canonicalPath };
+}
+
+/**
+ * Acquires the Root-resolved target checkout, bootstraps missing defaults, and
+ * loads the target-owned handoff template. No caller can supply a host path.
+ */
+export async function loadTargetHandoffTemplate(input: {
+  repository: string;
+  revision: string;
+  configuredPath?: string;
+  sourceResolver?: DiagnosticSourceResolver;
+}): Promise<{ content: string; canonical_path: string }> {
+  const sourceResolver =
+    input.sourceResolver ??
+    new DiagnosticTargetWorkspaceManager({
+      git: runHostGit,
+      paths: hostWorktreePathOperations,
+    });
+  const source = await sourceResolver.acquire({
+    target: {
+      repository: input.repository,
+      revision: input.revision,
+    },
+    shared_context: {
+      repository: input.repository,
+    },
+  });
+  await prepareTargetSheaWorkspace({
+    canonicalCheckout: source.canonical_path,
+  });
+  return loadHandoffTemplate(
+    source.canonical_path,
+    input.configuredPath ?? defaultTargetHandoffTemplatePath,
+  );
 }

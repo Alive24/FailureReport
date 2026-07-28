@@ -68,7 +68,7 @@ export function createGithubIssueChannel(
 
 /**
  * Replaces Eve's default `turn.started` checkout handler. Root alone owns the
- * source cache and diagnostic worktree, so this preserves only the harmless
+ * target binding and diagnostic worktree, so this preserves only the harmless
  * acknowledgement reaction and never asks Eve for a sandbox.
  */
 export function createRootCompatibleTurnStartedHandler(

@@ -52,7 +52,9 @@ function policy(
     repositories: [
       {
         repository: "Alive24/CKBoost",
-        template: { path: "config/root/handoffs/implementation.md" },
+        template: {
+          path: ".shea/template/failureReport/implementation.md",
+        },
         tracker: {
           kind: "github_project_v2",
           project_owner: "Alive24",
@@ -64,6 +66,13 @@ function policy(
         },
       },
     ],
+  });
+}
+
+function trackerlessPolicy(): HandoffDeliveryPolicy {
+  return handoffDeliveryPolicySchema.parse({
+    schema_version: "failure-report/handoff-delivery-policy/v1",
+    repositories: [{ repository: "Alive24/CKBoost" }],
   });
 }
 
@@ -166,6 +175,12 @@ describe("handoff delivery policy and template", () => {
         ],
       }),
     ).toThrow();
+    expect(trackerlessPolicy().repositories[0]).toMatchObject({
+      template: {
+        path: ".shea/template/failureReport/implementation.md",
+      },
+      tracker: null,
+    });
   });
 
   it("renders a deterministic human view and always appends canonical folded JSON", () => {
@@ -260,6 +275,21 @@ describe("configured tracker routing and delivery", () => {
     } satisfies GithubProjectTracker;
     const route = createFailureReportIntakeRouter({
       environment: {},
+      tracker,
+    });
+
+    await expect(
+      route({ repository: "Alive24/CKBoost", issue_number: 56 }),
+    ).resolves.toEqual({ status: "not_configured" });
+    expect(tracker.setIssueState).not.toHaveBeenCalled();
+  });
+
+  it("keeps intake tracker-free when the target repository configures only handoff delivery", async () => {
+    const tracker = {
+      setIssueState: vi.fn(),
+    } satisfies GithubProjectTracker;
+    const route = createFailureReportIntakeRouter({
+      policy: trackerlessPolicy(),
       tracker,
     });
 
@@ -371,6 +401,46 @@ describe("configured tracker routing and delivery", () => {
     await expect(deliver(request)).resolves.toMatchObject({
       status: "needs_input",
       reason: expect.stringContaining("changed before tracker delivery"),
+    });
+    expect(publishHandoffComment).toHaveBeenCalledOnce();
+    expect(tracker.setIssueState).not.toHaveBeenCalled();
+  });
+
+  it("publishes a target-owned handoff without adding the Issue to any Project", async () => {
+    const publishHandoffComment = vi.fn().mockResolvedValue({
+      issue: {},
+      comment_ref: "9002",
+    });
+    const gateway = {
+      publishHandoffComment,
+    } as unknown as GithubIssueGateway;
+    const tracker = {
+      setIssueState: vi.fn(),
+    } satisfies GithubProjectTracker;
+    const implementationHandoff = handoff();
+    const renderer = vi.fn().mockResolvedValue({
+      status: "completed",
+      report_id: "ckboost-56",
+      implementation_handoff: implementationHandoff,
+    });
+    const deliver = createDiagnosticHandoffDelivery({
+      applicationRoot: "/unused",
+      gateway,
+      policy: trackerlessPolicy(),
+      renderer,
+      templateLoader: vi.fn().mockResolvedValue({
+        content: template,
+        canonical_path: "/unused/template.md",
+      }),
+      tracker,
+    });
+
+    await expect(deliver(request)).resolves.toMatchObject({
+      status: "completed",
+      handoff_delivery: {
+        comment: { ref: "9002" },
+        tracker: null,
+      },
     });
     expect(publishHandoffComment).toHaveBeenCalledOnce();
     expect(tracker.setIssueState).not.toHaveBeenCalled();
