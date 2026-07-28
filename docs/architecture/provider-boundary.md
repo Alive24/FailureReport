@@ -26,12 +26,14 @@ domain extensions    prepare/finalize diagnostic session
 
 Only Root is public, through `eve/agent/channels/eve.ts`. An extension namespace, domain id, worker name, provider id, Git worktree path, or native-skill source is never an MCP or Temporal API field.
 
+The MCP adapter may retain private delivery state for its outer-wrapper responsibility. It persists request ownership and the Eve Channel cursor before waiting for a long Root turn, serializes only requests sharing one canonical Issue/report session key, and reattaches after caller or process loss. It does not add fields to the public Root contract, expose Eve session identifiers, create an alternate Root, or change diagnostic workspace ownership.
+
 ## Responsibility Split
 
 | Layer | Owns | Does not own |
 | --- | --- | --- |
 | CKB extension | CKB instructions, `failure-report-ckb-debugging`, deterministic `ckb__recommend_log` | sandbox, worktree, provider config, session preparation, subagent |
-| FailureReport Root | domain-extension registry, host-managed source cache, detached worktree allocation, remote snapshot finalization, workpad/session/thread journal, delegation | extension skill content, global Codex configuration, target implementation or PR workflow |
+| FailureReport Root | domain-extension registry, process-bound target verification, detached worktree allocation, remote snapshot finalization, workpad/session/thread journal, delegation | extension skill content, global Codex configuration, target implementation or PR workflow |
 | Codex worker | shell/Git/MCP diagnosis in Root-provided `cwd`, focused tests, and ephemeral diagnostic evidence | selecting `cwd`, checkout, branch, skill path, GitHub workpad writes, business-code changes, commits, pushes, PRs, or diagnostic finalization |
 
 This respects [Eve extension boundaries](https://eve.dev/docs/extensions): extensions contribute capabilities but cannot define an agent, sandbox, schedule, or nested subagent.
@@ -41,18 +43,19 @@ This respects [Eve extension boundaries](https://eve.dev/docs/extensions): exten
 `prepare_diagnostic_session` accepts only:
 
 - report id and GitHub Issue identity;
-- a non-empty Root-selected `domain_extensions` set; and
+- a Root-selected `domain_extensions` set, which may be empty for generic diagnosis; and
 - a bounded diagnostic request.
 
-It never accepts model-provided `cwd`, branch, backend, skill path, cache path, source checkout path, or host directory. The report target must contain only a repository identity and full immutable Git SHA. Root derives the canonical remote from the matching Root-published Issue, then uses host Git to create or verify the fixed local hierarchy:
+It never accepts model-provided `cwd`, branch, backend, skill path, cache path, source checkout path, or host directory. The report target must contain only a repository identity and full immutable Git SHA. The host binds the FailureReport process to one canonical target checkout at startup. Root derives the canonical remote from the matching Root-published Issue, verifies that binding, then uses host Git to create or restore this bounded hierarchy:
 
 ```text
-<FailureReport>/.eve/sandbox-cache/
-  sources/<canonical-repository-cache>
-  worktrees/<diagnostic-session>
+<target-canonical-checkout>/.shea/
+  prompts/failureReport/
+  template/failureReport/
+  worktrees/failureReport/<diagnostic-session>
 ```
 
-The fixed domain-extension registry resolves every selected installed native skill source, then Root creates or restores one deterministic detached diagnostic worktree under that hierarchy. Before Codex runs, Root writes the durable state to the Issue workpad and materializes:
+The fixed domain-extension registry resolves every selected installed native skill source, then Root creates or restores one deterministic detached diagnostic worktree under that hierarchy. An empty set is a first-class generic session and does not create a placeholder skill directory. When an extension is selected, Root writes the durable state to the Issue workpad before Codex runs and materializes:
 
 ```text
 <diagnostic-worktree>/.agents/skills/failure-report-ckb-debugging
@@ -92,15 +95,27 @@ type DiagnosticSession = {
 };
 ```
 
-`target` contains only the repository identity and a full immutable Git SHA; it has no local checkout path or selector. Root derives the canonical remote from the Root-published GitHub Issue context and creates or verifies a persistent source cache under `.eve/sandbox-cache/sources/`. Source-cache and worktree paths are Root-private runtime details: the public workpad persists only worktree identity, base revision, HEAD, and lifecycle state. Root derives the deterministic path from its managed runtime root and that identity, then validates canonical origin, containment, detached state, base revision, and HEAD before resume. External HEAD mutation becomes `needs_input`, never an implicit fallback to an arbitrary checkout. After finalization of a clean session, Root creates and pushes `diagnostic/<target-issue-number>-<issue-title-slug>` at the final HEAD without checking it out or force-moving a ref. The workpad persists its `origin` ref and URL. That ref is a diagnostic-only snapshot: a future coding agent must use a separate implementation worktree/branch and must not create a PR from this snapshot.
+`target` contains only the repository identity and a full immutable Git SHA; it has no local checkout path or selector. Root derives the canonical remote from the Root-published GitHub Issue context. The Host Runtime binds one absolute canonical checkout through `--target-workspace` (or the equivalent process environment) before Eve starts. That path can never come from a request, model, Channel, Issue, workpad, extension, or wrapper. Root requires a real, non-symlink Git top-level directory with the expected origin and rejects every other repository for the lifetime of the process. Root copies only missing defaults from authored `eve/config/failure-report/` assets into the target checkout, never overwrites target customization, and creates deterministic detached worktrees only under `.shea/worktrees/failureReport/`. FailureReport's own repository-root `.shea/` remains Shea Symphony development state and is never a product-default source. Checkout and worktree paths remain Root-private: the public workpad persists only worktree identity, base revision, HEAD, and lifecycle state. Root re-derives the path from the bound checkout and that identity, then validates canonical origin, containment, detached state, base revision, and HEAD before resume. External HEAD mutation becomes `needs_input`, never an implicit fallback to an arbitrary checkout. After finalization of a clean session, Root creates and pushes `diagnostic/<target-issue-number>-<issue-title-slug>` at the final HEAD without checking it out or force-moving a ref. The workpad persists its `origin` ref and URL. That ref is a diagnostic-only snapshot: a future coding agent must use a separate implementation worktree/branch and must not create a PR from this snapshot.
+
+The target `.shea/.../failureReport` paths are a shared convention rather than a dependency on the Shea Symphony runtime. FailureReport can operate on them independently; downstream Shea workflows may later consume the same target-owned handoff and configuration.
 
 ## Deterministic Handoff Boundary
 
 Root handles public `render_handoff` requests through a read-only gateway path. The caller must supply its persisted report binding, including expected workpad lineage/revision and immutable target revision, but Root renders only after rehydrating the latest provenance-verified entry. A stale or mismatched caller, invalid lineage, concurrent second-read change, incomplete finalization, conflicting snapshot ref, or target/completion/HEAD mismatch returns `needs_input`.
 
-The fully Ready path returns `failure-report/implementation-handoff/v1`. Its identity is a SHA-256 digest of canonical immutable references and the normalized implementation contract. It deliberately contains no Shea Symphony Project field, tracker status, lane, Forge action, coding-agent instruction, publication acknowledgement, or implementation-workspace identity. A future promotion adapter is a separate consumer and must acknowledge its own publication separately.
+The fully Ready path returns `failure-report/implementation-handoff/v1`. Its identity is a SHA-256 digest of canonical immutable references and the normalized implementation contract. It deliberately contains no Shea Symphony Project field, tracker status, lane, Forge action, coding-agent instruction, publication acknowledgement, or implementation-workspace identity.
 
 The material-uncertainty path returns `failure-report/human-input-request/v1`. It requires an active session with a persisted thread and no snapshot branch, and records one precise question and a condition for Root to resume that same workpad/session. Neither result path writes GitHub, changes a Project, finalizes a session, starts Codex, or creates an implementation branch or PR.
+
+## Configured Tracker and Delivery Boundary
+
+`render_handoff` remains pure. A separate public `deliver_handoff` operation accepts the same persisted report and immutable revision bindings, then resolves all mutation authority from `FAILURE_REPORT_HANDOFF_DELIVERY_POLICY`; no request, Channel, wrapper, model, extension, or worker may select a template, Project, field, intake state, or ready destination.
+
+Each configured repository receives a target-owned Markdown template and may optionally bind its own GitHub Project v2. Without a tracker binding, `begin_failure_report` remains tracker-free and delivery publishes only the Issue comment; the Issue is never added to FailureReport's Project. With a tracker binding, `begin_failure_report` moves accepted intake to the exact configured `Failure Report` option. That option is Project configuration, not a Shea Symphony workflow state: Shea does not claim it. The intake transition permits only unset, `Failure Report`, `Need Human Input`, `Backlog`, or `Todo`; an active downstream state fails closed rather than being regressed.
+
+For a fully Ready report, delivery first performs the revision-bound render. It bootstraps the default target template when missing, canonicalizes the configured path beneath the target checkout, validates known and required variables, and renders only the human-facing view. FailureReport then appends the complete `failure-report/implementation-handoff/v1` and deterministic delivery intent in a folded JSON block. The structured contract and its identity never depend on the template.
+
+The GitHub gateway creates a new comment and never edits an existing handoff comment. A deterministic delivery marker allows an identical process-loss retry to reuse its own verified comment; duplicate, foreign-actor, or content-conflicting markers require input. When a tracker is configured, the Project adapter runs only after comment readback: it adds the Issue item if necessary, resolves one exact configured status field and option, changes only to `Backlog` or `Todo`, and requires readback. A tracker-free delivery performs no Project mutation. `failure-report/handoff-delivery/v1` acknowledges the comment and either the verified target tracker destination or `null`. It makes no claim about downstream implementation or review: `Backlog` waits for manual promotion and `Todo` is merely eligible for Shea Symphony to claim.
 
 GitHub's Issue body and comments remain shared collaboration context. Root never modifies the Issue body or a foreign comment. It accepts a managed workpad comment only when its versioned transport envelope, configured producer registry, and the live immutable GitHub comment author all agree. The GitHub integration measures the UTF-8 JSON request representation against a provider-private safe budget before every mutation: same-producer revisions append while they fit, then use an explicit capacity successor; a configured producer change uses a distinct transition successor. Neither continuation modifies its predecessor.
 
@@ -110,9 +125,9 @@ One revision that cannot fit an empty comment is encoded as ordered, content-add
 
 ## Codex Native Skill and Worker
 
-The prepared delegation begins with every selected `$failure-report-…` native skill before the revision-bound diagnostic-session envelope. Codex's native skill discovery finds the worktree-local `.agents/skills` symlinks, so the worker uses native `$skill`, shell, Git, and MCP rather than Eve's `load_skill` tool or a copied global skill.
+When extensions are selected, the prepared delegation begins with every selected `$failure-report-…` native skill before the revision-bound diagnostic-session envelope. Codex's native skill discovery finds the worktree-local `.agents/skills` symlinks. With no selected extension, the delegation explicitly directs the same worker to repository instructions and standard diagnostic capabilities without inferring a domain skill. In both modes the worker uses shell, Git, and MCP rather than Eve's `load_skill` tool or a copied global skill.
 
-Eve is pinned to its just-bash backend for Root orchestration. just-bash has a virtual filesystem and no real Git or package-manager binaries, so it is not a substitute for the controlled host workspace. Root's authored diagnostics adapters inspect and manage the fixed host workspace; the direct Codex App Server transport is launched only after Root validates the envelope and workpad. It sends:
+Eve is pinned to its just-bash backend for Root orchestration. just-bash has a virtual filesystem and no real Git or package-manager binaries, so it is not a substitute for the controlled host workspace. Root's authored diagnostics adapters inspect and manage the trusted canonical checkout and target `.shea` workspace; the direct Codex App Server transport is launched only after Root validates the envelope and workpad. It sends:
 
 ```text
 thread/start or thread/resume
@@ -133,7 +148,7 @@ Codex runs directly in the user's existing host environment, retaining `~/.codex
 
 ### Native approval lifecycle
 
-Managed diagnostic backends may receive native, server-initiated approval requests while a turn is live. The internal `NativeApprovalBroker` owns at most one such request for one Root-validated report, backend, persisted thread, live turn, and managed worktree. A future App Server transport adapter normalizes only the request kind, transient provider request id, and `threadId`/`turnId` binding; it retains raw command text, cwd, arguments, tokens, and connection state on the live transport side.
+Managed diagnostic backends may receive native, server-initiated approval requests while a turn is live. The internal `NativeApprovalBroker` owns at most one such request for one Root-validated report, backend, persisted thread, live turn, and managed worktree. The direct App Server transport adapter normalizes only the request kind, transient provider request id, and `threadId`/`turnId` binding; it retains raw command text, cwd, arguments, tokens, and connection state on the live transport side.
 
 The broker accepts only one normalized `approve` or `deny` response and records a sanitized terminal result (`resolved`, `denied`, `cancelled`, `timed_out`, or `interrupted`). Its durable evidence contains a broker-generated approval id, backend/session identity, safe turn id, outcome, and timestamp. It never contains a provider request id or raw request payload. Duplicate, stale, mismatched, cancelled, timed-out, and process-interrupted requests fail closed. Process loss is terminal: the next process must not replay the former connection-bound request.
 

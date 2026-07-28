@@ -13,7 +13,8 @@ import type { DomainExtension } from "../agent/lib/diagnostics/domain-extensions
 import type { PreparedDiagnosticSession } from "../agent/lib/diagnostics/workpad.js";
 import { DiagnosticSafetyError } from "../agent/lib/diagnostics/worktree.js";
 
-const worktreePath = "/root/.eve/sandbox-cache/worktrees/diagnostic-report";
+const worktreePath =
+  "/canonical/target/.shea/worktrees/failureReport/diagnostic-report";
 const skillName = "failure-report-ckb-debugging";
 const configuredCodex = "/configured/bin/codex";
 
@@ -45,6 +46,32 @@ describe("Codex App Server host-runtime preflight", () => {
       "thread/start",
     );
     expect(process.disposeCount).toBe(1);
+  });
+
+  it("accepts a generic worktree with no Root-selected project skills", async () => {
+    const process = new FakeProcess({
+      initialize: {},
+      "skills/list": skillsResponse([]),
+    });
+    const runtime = new FakeHostRuntime([process]);
+    const preflight = createCodexAppServerPreflight({ host_runtime: runtime });
+
+    await expect(
+      preflight({
+        ...preflightInput(),
+        workspace: {
+          path: worktreePath,
+          native_skill_names: [],
+        },
+      }),
+    ).resolves.toEqual({
+      status: "ready",
+      attempts: 1,
+    });
+    expect(process.requests).toContainEqual({
+      method: "skills/list",
+      params: { cwds: [worktreePath], forceReload: true },
+    });
   });
 
   it("returns a sanitized needs_input result when the configured executable is unavailable", async () => {
@@ -274,6 +301,55 @@ describe("Codex App Server host-runtime preflight", () => {
     ]);
   });
 
+  it("prepares a generic session without resolving or requiring domain skills", async () => {
+    const prepared = preparedSession([]);
+    const workpad = fakeWorkpad(prepared);
+    const preflightInputs: unknown[] = [];
+    const preparer = createDiagnosticSessionPreparer({
+      backend_id: "codex_app_server",
+      codex_path: configuredCodex,
+      dependencies: {
+        resolve_domain_extensions: (ids) => {
+          expect(ids).toEqual([]);
+          return [];
+        },
+        create_workpad: ({ domain_extensions }) => {
+          expect(domain_extensions).toEqual([]);
+          return workpad;
+        },
+        preflight: async (input) => {
+          preflightInputs.push(input);
+          return { status: "ready", attempts: 1 };
+        },
+      },
+    });
+
+    await expect(
+      preparer({
+        domain_extensions: [],
+        report_id: "report-1",
+        repository: "Alive24/CKBoost",
+        issue_number: 54,
+        request: "Inspect the first failing boundary.",
+      }),
+    ).resolves.toEqual({
+      status: "prepared",
+      domain_extensions: [],
+      report_id: "report-1",
+      workpad_revision: 7,
+      delegation_message: "delegation",
+    });
+    expect(preflightInputs).toEqual([
+      expect.objectContaining({
+        executable: configuredCodex,
+        workspace: {
+          path: worktreePath,
+          native_skill_names: [],
+        },
+      }),
+    ]);
+  });
+
   it("does not start App Server preflight when worktree containment validation fails", async () => {
     let preflightCalls = 0;
     const workpad: DiagnosticSessionPreparationWorkpad = {
@@ -456,17 +532,19 @@ const ckbExtension: DomainExtension = {
   ],
 };
 
-function preparedSession(): PreparedDiagnosticSession {
+function preparedSession(
+  domainExtensions: readonly string[] = ["ckb"],
+): PreparedDiagnosticSession {
   return {
     report: { id: "report-1" },
     workpad_revision: 7,
     delegation_message: "delegation",
     diagnostic_session: {
-      canonical_path: "/root/.eve/sandbox-cache/sources/ckboost",
+      canonical_path: "/bound/CKBoost",
       path: worktreePath,
       state: {
         lifecycle: "active",
-        domain_extensions: ["ckb"],
+        domain_extensions: domainExtensions,
         backend_id: "codex_app_server",
         worktree: {
           identity: "diagnostic-report",

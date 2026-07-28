@@ -20,6 +20,11 @@ describe("Eve Channel Root invoker", () => {
     const transport: EveChannelRootTransport = {
       async run(input) {
         seen.push(input);
+        await input.onDelivered({
+          continuationToken: "eve:issue-54",
+          sessionId: "ses_issue_54",
+          streamIndex: input.sessionState?.streamIndex ?? 0,
+        });
         return {
           data: {
             request_id: responseIds[seen.length - 1],
@@ -65,11 +70,18 @@ describe("Eve Channel Root invoker", () => {
 
   it("returns a typed failure when Eve does not satisfy the result schema", async () => {
     const transport: EveChannelRootTransport = {
-      async run() {
+      async run(input) {
+        await input.onDelivered({
+          sessionId: "session-invalid-result",
+          streamIndex: 0,
+        });
         return {
           data: { unexpected: true },
           status: "completed",
-          sessionState: { streamIndex: 0 },
+          sessionState: {
+            sessionId: "session-invalid-result",
+            streamIndex: 1,
+          },
         };
       },
     };
@@ -131,6 +143,11 @@ describe("Eve Channel Root invoker", () => {
         transport: {
           async run(input) {
             seen.push(input);
+            await input.onDelivered({
+              continuationToken: "eve:issue-56:delivered",
+              sessionId: "session-existing-issue-retry",
+              streamIndex: input.sessionState?.streamIndex ?? 0,
+            });
             // A timed-out prior adapter invocation completed after its caller
             // disconnected. The retry has already been delivered, but Eve's
             // first stream cursor still ends at this older result.
@@ -237,7 +254,11 @@ describe("Eve Channel Root invoker", () => {
 
   it("rejects a successful selector turn that omits the rehydrated Issue context", async () => {
     const transport: EveChannelRootTransport = {
-      async run() {
+      async run(input) {
+        await input.onDelivered({
+          sessionId: "session-selector-without-context",
+          streamIndex: 0,
+        });
         return {
           data: {
             request_id: "selector-without-context",
@@ -245,7 +266,10 @@ describe("Eve Channel Root invoker", () => {
             summary: "Root accepted the selector.",
           },
           status: "completed",
-          sessionState: { streamIndex: 1 },
+          sessionState: {
+            sessionId: "session-selector-without-context",
+            streamIndex: 1,
+          },
         };
       },
     };
@@ -266,7 +290,11 @@ describe("Eve Channel Root invoker", () => {
 
   it("does not treat an unmatched result as current when no pending turn can be consumed", async () => {
     const transport: EveChannelRootTransport = {
-      async run() {
+      async run(input) {
+        await input.onDelivered({
+          sessionId: "session-unrelated",
+          streamIndex: 0,
+        });
         return {
           data: {
             request_id: "unrelated-root-request",
@@ -315,6 +343,11 @@ function transportForSelectorTurn(
   return {
     async run(input) {
       seen.push(input);
+      await input.onDelivered({
+        continuationToken,
+        sessionId: "session-" + requestId,
+        streamIndex: input.sessionState?.streamIndex ?? 0,
+      });
       return {
         data: {
           request_id: requestId,

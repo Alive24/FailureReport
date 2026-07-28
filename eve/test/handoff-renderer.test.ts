@@ -216,15 +216,20 @@ function rendererHarness(reads: GithubIssueSnapshot[]) {
   const publishSharedContext = vi.fn(async () => {
     throw new Error("read-only renderer must never publish");
   });
+  const publishHandoffComment = vi.fn(async () => {
+    throw new Error("read-only renderer must never publish");
+  });
   const gateway = {
     readIssue,
     publishSharedContext,
+    publishHandoffComment,
     getWorkpadProducerConfiguration: () => producer,
   } satisfies GithubIssueGateway;
   return {
     render: createDiagnosticHandoffRenderer({ gateway }),
     readIssue,
     publishSharedContext,
+    publishHandoffComment,
   };
 }
 

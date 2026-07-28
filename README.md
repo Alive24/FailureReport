@@ -1,6 +1,6 @@
 # FailureReport
 
-FailureReport is an Eve-supervised Failure in the Loop system. It turns an incomplete software failure into a durable, evidence-backed report whose shared context lives in one GitHub Issue from intake through Todo promotion.
+FailureReport is an Eve-supervised Failure in the Loop system. It turns an incomplete software failure into a durable, evidence-backed report and publishes its human-readable implementation handoff in the same GitHub Issue, optionally routing that target repository's own Project item to Backlog or Todo.
 
 > **Provider boundary:** FailureReport is local-first by default: Root runs Eve with `experimental_chatgpt()` from the local Codex/ChatGPT session. The mounted CKB extension supplies domain capability, while Root prepares a durable diagnostic worktree for the one consumer-owned Codex worker. See [provider boundary](docs/architecture/provider-boundary.md) for the contract.
 
@@ -16,7 +16,7 @@ flowchart TD
   E --> I["GitHub Issue managed-comment workpad"]
   E --> D["Root prepare / finalize diagnostic session"]
   E --> B["Eve just-bash orchestration sandbox"]
-  D --> W["Host-managed .eve/sandbox-cache source + detached worktree"]
+  D --> W["Trusted target canonical checkout + .shea FailureReport workspace"]
   W --> C["Consumer-owned Codex worker"]
   C --> A["Host Codex App Server + existing Codex Home"]
 ```
@@ -24,9 +24,10 @@ flowchart TD
 - Eve Root is the only public supervisor. Its primary public entry is Eve's built-in HTTP channel, declared at `eve/agent/channels/eve.ts` and exposed as `/eve/v1/session*`.
 - Root uses a **tool-capable** AI SDK model so Eve can retain Issue, routing, and declared-subagent tools. The MVP runs locally by default, using Eve's `experimental_chatgpt()` helper with the signed-in Codex/ChatGPT session; this is the product default, not a test-only convenience. A remote host may opt into another tool-capable provider later.
 - CKB is the first mounted Eve extension, never a public API target. It provides CKB instructions, the `failure-report-ckb-debugging` native skill, and deterministic `ckb__recommend_log`; it does not own a worktree, sandbox, or subagent.
-- `prepare_diagnostic_session` accepts a report bound to a repository and full immutable Git SHA, resolves a Root-selected non-empty `domain_extensions` set, and manages the source cache plus detached diagnostic worktree only under the repository's `.eve/sandbox-cache/`. It places every selected native skill under `.agents/skills/` and persists only portable worktree identity/HEAD/Codex-thread state before delegating to the one `codex` worker; the host path remains Root-private runtime state. After a worker finish, Root—not Codex—reconciles one immutable completion record through a bounded read–merge–write–readback transaction. Codex decides how to use the loaded skills; extensions never select a backend. Reachable deployment credentials and network policy, rather than a Root approval loop, control access to external systems.
+- One FailureReport process binds one canonical target checkout through the host-only `--target-workspace` startup option. `prepare_diagnostic_session` accepts only a report repository plus full immutable Git SHA and a Root-selected `domain_extensions` set; it verifies that the report matches the bound checkout, copies only missing authored defaults from `eve/config/failure-report/` into the target checkout's `.shea`, preserves every target customization, and creates the detached diagnostic worktree beneath `.shea/worktrees/failureReport/`. The set may be empty: the one generic `codex` worker then uses repository instructions and standard diagnostic capabilities without a synthetic core skill. When extensions are selected, Root places their native skills under `.agents/skills/`. Root persists only portable worktree identity/HEAD/Codex-thread state before delegation; the host path remains Root-private runtime state. After a worker finish, Root—not Codex—reconciles one immutable completion record through a bounded read–merge–write–readback transaction. Codex decides how to use selected skills; extensions never select a backend. Reachable deployment credentials and network policy, rather than a Root approval loop, control access to external systems.
 - `finalize_diagnostic_session` creates and pushes `diagnostic/<target-issue-number>-<issue-title-slug>` only after the diagnostic worktree is clean. It does not check the branch out or force-move an existing ref. The workpad labels it a diagnostic-only snapshot: future coding must use a separate implementation worktree/branch and must not open a PR directly from the snapshot.
 - `render_handoff` is a read-only, revision-bound operation. Root reloads the latest provenance-verified workpad and returns either a deterministic `failure-report/implementation-handoff/v1` for a finalized fully Ready diagnosis, or a `failure-report/human-input-request/v1` that preserves the active worktree and diagnostic thread. It never publishes, changes tracker state, creates a branch, or starts an implementation workflow.
+- Tracker routing is optional deployment policy. A repository may configure Issue-comment handoff delivery without any Project; in that case `begin_failure_report` remains tracker-free and `deliver_handoff` never adds the Issue to a Project. When the target repository explicitly configures its own Project, intake moves to `Failure Report` and delivery may move only to `Backlog` or `Todo` after readback. `Backlog` stops for manual promotion; `Todo` hands ownership to a downstream implementation system such as Shea Symphony. FailureReport never skips directly to `Agent Review` or `Human Review`.
 - A target-repository GitHub Issue is shared context: FailureReport never edits its body or a foreign comment. A managed comment is trusted only when its marker, v2 entry envelope, configured producer identity, and live immutable GitHub author identity agree.
 - Every authoritative workpad revision starts with a deterministic, stage-aware human view derived from that revision's schema-validated report. Active diagnoses show current evidence, hypotheses, experiments, unknowns, and pending diagnostic actions; `Need Human Input` revisions preserve the complete question, material unknown, options, and resume condition; completed diagnoses show the diagnosis, confidence, evidence, residual uncertainty, remediation, and finalized diagnostic snapshot when present. Ordinary collections retain canonical order and show at most 10 items with an exact omitted count.
 - Root owns GitHub as an internal integration. Octokit is the default API transport; by default it reuses the active local `gh auth login` identity once per process, then performs Issue and comment calls through the SDK.
@@ -47,10 +48,11 @@ packages/mcp-adapter      MCP stdio wrapper that calls the default Eve Channel
 packages/temporal-adapter Deterministic Temporal workflow and activities
 packages/codex-plugin/failure-report  Installable Codex plugin and Eve-backed MCP configuration
 examples/                 Extension and host examples
-.eve/sandbox-cache/       Root-owned host source caches and detached diagnostic worktrees (runtime state)
+eve/config/failure-report/     Authored default prompts, templates, and target ignore rule
+.shea/                         Shea Symphony configuration for developing FailureReport itself
 ```
 
-`eve/agent/` is intentionally limited to Eve's filesystem slots: `agent.ts`, `instructions.md`, `tools/`, `skills/`, `extensions/`, `lib/` when shared authored code is needed, and declared `subagents/`. The Root runtime, generic diagnostic-session helpers, and GitHub integration now live under `agent/lib/`: they are import-only authored code and are never mounted into a worker workspace. Product configuration and evaluation material remain alongside `agent/`.
+`eve/agent/` is intentionally limited to Eve's filesystem slots: `agent.ts`, `instructions.md`, `tools/`, `skills/`, `extensions/`, `lib/` when shared authored code is needed, and declared `subagents/`. The Root runtime, generic diagnostic-session helpers, and GitHub integration now live under `agent/lib/`: they are import-only authored code and are never mounted into a worker workspace. Product configuration and evaluation material remain alongside `agent/`. FailureReport's repository-root `.shea/` is exclusively for Shea Symphony to develop this repository; the product never treats it as a source of runtime defaults.
 
 ## Development
 
@@ -69,10 +71,10 @@ A fresh checkout needs no manually inferred whole-workspace build before startin
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm --filter @Alive24/FailureReport dev
+pnpm --filter @Alive24/FailureReport dev --target-workspace /absolute/path/to/target-checkout
 ```
 
-`dev` first runs its `dev:preflight`, which builds only `@failure-report/protocol` and `@failure-report/ckb-domain-pack`: the direct workspace packages Eve imports through generated `dist/` exports. It then runs `eve dev --no-ui`. This is deliberately narrower than `pnpm build` and needs no separate developer action.
+`dev` first runs its `dev:preflight`, which builds only `@failure-report/protocol` and `@failure-report/ckb-domain-pack`: the direct workspace packages Eve imports through generated `dist/` exports. It then validates the target binding, exports it to the host runtime as `FAILURE_REPORT_TARGET_WORKSPACE`, and runs `eve dev --no-ui`. This is deliberately narrower than `pnpm build` and needs no separate developer action.
 
 The preflight may create ignored `dist/` output, and Eve may create ignored `.eve/` runtime-cache state. Neither is a dependency installation. Root is explicitly pinned to the declared `just-bash` dependency with automatic installation disabled, so this path must never run `pnpm add`, rewrite a package manifest or lockfile, or provision a Docker/microsandbox image or VM. Image or VM provisioning belongs only to an explicitly selected future sandbox backend; it is separate from build output and never a reason to mutate dependencies.
 
@@ -97,22 +99,29 @@ FailureReport's MVP is a local product runtime. It uses the same `codex login` c
 To use the public Root MCP surface through Codex, start Eve (and therefore its default Channel) in one terminal:
 
 ```bash
-pnpm --filter @Alive24/FailureReport dev
+pnpm --filter @Alive24/FailureReport dev --target-workspace /absolute/path/to/target-checkout
 ```
 
 The command above runs `eve dev --no-ui`; when `FAILURE_REPORT_EVE_HOST` is unset, the adapter-owned local default is `http://127.0.0.1:2000`. This fallback is only for that local development path. Then load the repository-local Codex plugin at `packages/codex-plugin/failure-report`. Its `.mcp.json` starts the external `@failure-report/mcp-adapter` wrapper, which exposes the single `failure_report` tool and calls the default Eve Channel. `FAILURE_REPORT_EVE_HOST` can point the wrapper at a deployed Root, and `FAILURE_REPORT_EVE_BEARER_TOKEN` remains optional for Channels that require bearer auth.
 
-The local MCP wrapper persists only Eve's serialized session cursor in a user-private state file, so an existing-Issue retry can resume after the wrapper process restarts. Set `FAILURE_REPORT_MCP_SESSION_STORE` to place that file on a managed state volume; it contains continuation tokens and should remain readable only by the operating user. The public request contract never accepts a session-store path.
+The local MCP wrapper keeps an adapter-private durable operation ledger beside Eve's serialized session cursor. Before it sends a Root turn, it records the canonical Issue/report session key, `request_id`, request fingerprint, and delivery owner; immediately after Eve accepts the turn, it records the allocated session cursor before waiting for the terminal stream event. A retry with the same `request_id` drains that delivered turn instead of sending again, while different requests for the same canonical key remain durably queued. Independent keys still run concurrently. Ambiguous or corrupt ownership fails closed rather than risking a second Root run.
 
-For a local diagnosis, Root accepts only a repository identity and a full immutable Git SHA. It never accepts a source checkout path, cache path, worktree path, branch, or Codex `cwd`. Root derives the canonical remote, then manages this fixed host-owned hierarchy inside the FailureReport checkout:
+Terminal records are compacted in bounded stages: by default, each canonical session retains 32 full request-bearing terminal records and 128 result-bearing cleaned records, then a fixed-size retired-request filter prevents an older cleaned `request_id` from being delivered again after its result is discarded. An embedding host can lower or raise those limits through `operation_retention`; full terminal retention may be zero, while cleaned-result retention must remain at least one so the completing caller can read its result. The stdio host uses the defaults. Version 1 cursor-only files migrate on their first write. Set `FAILURE_REPORT_MCP_SESSION_STORE` to place this private ledger on a managed state volume; it contains requests, results, Eve session IDs, continuation tokens, and adapter ownership metadata, so it must remain readable only by the operating user. The public Root request never accepts a ledger path or any of that private state.
+
+For a local diagnosis, Root accepts only a repository identity and a full immutable Git SHA. It never accepts a source checkout path, cache path, worktree path, branch, or Codex `cwd`. The operator binds one canonical checkout when the FailureReport process starts; that binding is not part of a Root request, Channel payload, Issue, workpad, MCP call, extension, or model turn. Root verifies the binding is an absolute real Git top-level directory whose `origin` matches the report repository, fetches the requested immutable revision, and then bootstraps this target-owned hierarchy without overwriting existing files:
 
 ```text
-.eve/sandbox-cache/
-  sources/<canonical-repository-cache>
-  worktrees/<diagnostic-session>
+<target-canonical-checkout>/.shea/
+  prompts/failureReport/{intake.md,synthesis.md}
+  template/failureReport/implementation.md
+  worktrees/failureReport/<diagnostic-session>
 ```
 
-The actual `git clone`, `git fetch`, `git worktree`, test, and package-manager commands run in the host runtime. Eve is pinned to `just-bash` for Root orchestration; its virtual shell is not a replacement Git runtime. Root's host-side diagnostics adapters inspect the controlled workspace and Codex App Server runs directly on the host with the validated worktree as `cwd`, retaining the user's existing `~/.codex`, plugins, skills, MCP settings, authentication, Git credentials, model configuration, and thread persistence. No path-setting environment variable is supported for this boundary.
+The actual `git fetch`, `git worktree`, test, and package-manager commands run in the host runtime. Eve is pinned to `just-bash` for Root orchestration; its virtual shell is not a replacement Git runtime. Root's host-side diagnostics adapters inspect the controlled workspace and Codex App Server runs directly on the host with the validated worktree as `cwd`, retaining the user's existing `~/.codex`, plugins, skills, MCP settings, authentication, Git credentials, model configuration, and thread persistence.
+
+The launcher provides `--target-workspace` as the normal local interface. A service wrapper may set the equivalent `FAILURE_REPORT_TARGET_WORKSPACE` environment variable before starting Eve. The process serves only that repository until it exits; a report for another repository fails closed instead of selecting, cloning, or accepting another host path.
+
+The target `.shea/.../failureReport` hierarchy is a shared workspace convention, not a runtime dependency on Shea Symphony. FailureReport can create and use it independently; a later Shea workflow may consume the same handoff and project-owned configuration.
 
 ### Codex diagnostic runtime preflight
 
@@ -132,7 +141,7 @@ gh auth login
 
 When Root first needs GitHub, it reads the active CLI credential with `gh auth token` once in that process, keeps it only in memory, and passes it to Octokit. All Issue and comment reads/writes then use Octokit, not `gh api`. This applies equally to local MCP and Temporal-backed Root execution; each Root host needs its own active `gh` login by default.
 
-Diagnostic source acquisition is separate from the GitHub API client: Root runs `git clone` and `git fetch` through the host's ordinary Git runtime, only inside its Root-owned `.eve/sandbox-cache/sources/` cache. A public or private repository is supported whenever that runtime can reach and authenticate to the canonical remote. Configure ordinary host Git authentication externally; FailureReport never writes credentials into a report, workpad, plugin configuration, or log.
+Diagnostic source access is separate from the GitHub API client: Root runs `git fetch` and `git worktree` through the host's ordinary Git runtime against the process-bound target checkout. A public or private repository is supported whenever that runtime can reach and authenticate to its canonical remote. Configure ordinary host Git authentication externally; FailureReport never writes credentials into a report, workpad, plugin configuration, or log.
 
 Runtime configuration is optional for that common path. These alternatives are available when a host cannot use a CLI login:
 
@@ -144,8 +153,51 @@ Runtime configuration is optional for that common path. These alternatives are a
 | `FAILURE_REPORT_GITHUB_HOST`, `FAILURE_REPORT_GITHUB_API_URL` | Select a `gh` host and/or GitHub Enterprise API base URL. |
 | `FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ID` + `FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ACTOR_ID` | Required together to identify Root's current managed-comment producer with GitHub's immutable numeric actor ID. |
 | `FAILURE_REPORT_GITHUB_WORKPAD_PRODUCERS` | Optional JSON object mapping every approved producer ID to its immutable GitHub actor ID, for example `{"root-gh":"101","root-app":"202"}`. |
+| `FAILURE_REPORT_TARGET_WORKSPACE` | Required process-level canonical checkout binding. The local `--target-workspace` launcher option sets it; public requests can never change it. |
+| `FAILURE_REPORT_HANDOFF_DELIVERY_POLICY` | Optional repository handoff policy. A repository can publish an Issue comment without a tracker, or explicitly bind its own GitHub Project v2. |
 
 All credentials belong in runtime environment/secret management only. FailureReport does not put tokens, App private keys, credential output, host-local paths, or raw private evidence into the public workpad, prompts, logs, or fixtures. Non-public evidence must be retained outside GitHub and referenced only through an opaque handle.
+
+### Tracker routing and handoff delivery
+
+Create a `Failure Report` option in the target repository's own GitHub Project `Status` field only when Project routing is desired. This diagnostic state belongs to the tracker, not Shea Symphony's workflow `state_map`: Shea claims only its own downstream states such as `Todo` and `Rework`. A target Issue is never added to FailureReport's Project.
+
+The delivery policy is deployment-owned JSON. Root requests and models provide only an Issue identity and revision binding; they cannot choose a template, Project, field, or destination.
+
+```bash
+export FAILURE_REPORT_HANDOFF_DELIVERY_POLICY='{
+  "schema_version": "failure-report/handoff-delivery-policy/v1",
+  "repositories": [
+    {
+      "repository": "Acme/Application",
+      "tracker": {
+        "kind": "github_project_v2",
+        "project_owner": "Acme",
+        "project_owner_type": "organization",
+        "project_number": 12,
+        "status_field": "Status",
+        "intake_state": "Failure Report",
+        "ready_destination": "Backlog"
+      }
+    }
+  ]
+}'
+```
+
+Set `ready_destination` to `Backlog` when a person should promote the completed report manually, or to `Todo` when a downstream system may claim it immediately. `Agent Review`, `Human Review`, `Merging`, and `Done` are intentionally invalid destinations because they require real downstream work and evidence.
+
+Omitting `template` selects `.shea/template/failureReport/implementation.md` in the target canonical checkout. FailureReport copies its own default only when that target file is missing, then canonicalizes the selected path, requires a contained regular file, and rejects traversal or symlink escape. The target file controls only the human-readable part of the new comment; FailureReport always appends the full versioned structured handoff and delivery intent in a folded JSON block. Template variables are validated, and the machine-readable `failure-report/implementation-handoff/v1` schema never changes with presentation.
+
+To publish a handoff comment without adding the target Issue to any Project, configure only the repository:
+
+```json
+{
+  "schema_version": "failure-report/handoff-delivery-policy/v1",
+  "repositories": [{ "repository": "Alive24/CKBoost" }]
+}
+```
+
+The active GitHub credential needs Issue comment write access and GitHub Project v2 read/write access for every configured Project. A missing Project, status field, `Failure Report`/`Backlog`/`Todo` option, or insufficient credential fails closed. Handoff-comment retry uses a deterministic marker and never edits another user's comment; tracker mutation is accepted only after status readback.
 
 ## Team-authorized GitHub Issue Channel
 
@@ -188,7 +240,7 @@ For every initial `@failure-report` mention and every accepted direct missing-in
 
 The Channel ignores PR timeline comments, review comments, Issue-open events, CI events, schedules, proactive sends, and ordinary unmentioned Issue comments. A direct reply is accepted only when the running Channel has exactly one known `ask_question` missing-information request for that Issue and the reply unambiguously answers it. Approval prompts and ambiguous correlations are never continued through GitHub. Membership is rechecked for every accepted reply; authorization is never cached.
 
-Eve's stock GitHub Channel would check a repository out on `turn.started`. FailureReport replaces just that handler: it can retain the bounded `eyes` progress reaction and native Issue replies, but it never asks Eve for a sandbox, clones, fetches, selects a revision, sets a remote, or passes a checkout path to Root or Codex. Root remains the sole owner of `.eve/sandbox-cache/` source and diagnostic-worktree lifecycle.
+Eve's stock GitHub Channel would check a repository out on `turn.started`. FailureReport replaces just that handler: it can retain the bounded `eyes` progress reaction and native Issue replies, but it never asks Eve for a sandbox, clones, fetches, selects a revision, sets a remote, or passes a checkout path to Root or Codex. Root remains the sole verifier of the process-bound target checkout and owner of its `.shea/worktrees/failureReport/` lifecycle.
 
 ### GitHub Channel UAT
 
@@ -205,7 +257,7 @@ Every public workpad entry carries a versioned envelope with its immutable produ
 
 ## Extend
 
-Add a domain as an Eve extension, starting with `npx eve@latest extension init <domain>`. Keep its reusable capabilities in `packages/<domain>-domain-pack/extension/`: `extension.ts`, tools, skills, instructions, hooks, connections, and `lib/`. Mount it from `eve/agent/extensions/<domain>.ts`; its contributions compose under `<domain>__` names. Extensions cannot own an agent config, sandbox, schedules, or nested extensions, so the application retains diagnostic-session policy and one generic Codex worker under `agent/subagents/`. Register each extension's installed native skill assets in Root's fixed `domain_extensions` registry; Root then materializes safe `.agents/skills` symlinks for the selected set in each diagnostic worktree. Do not expose extension selection through MCP or Temporal. A Codex App Server worker must not rely on Eve-authored tools being callable by its model; the prepared delegation starts with all selected native `$skill` invocations and it uses shell, MCP, and worktree-scoped capabilities.
+Add a domain as an optional Eve extension when diagnosis needs reusable domain knowledge or deterministic tools, starting with `npx eve@latest extension init <domain>`. Keep its reusable capabilities in `packages/<domain>-domain-pack/extension/`: `extension.ts`, tools, skills, instructions, hooks, connections, and `lib/`. Mount it from `eve/agent/extensions/<domain>.ts`; its contributions compose under `<domain>__` names. Extensions cannot own an agent config, sandbox, schedules, or nested extensions, so the application retains diagnostic-session policy and one generic Codex worker under `agent/subagents/`. Register each extension's installed native skill assets in Root's fixed `domain_extensions` registry; Root then materializes safe `.agents/skills` symlinks only for the selected set. With no selected extension, the worker relies on repository instructions and standard diagnostics rather than a placeholder domain or core skill. Do not expose extension selection through MCP or Temporal. A Codex App Server worker must not rely on Eve-authored tools being callable by its model; when skills are selected the prepared delegation starts with their native `$skill` invocations, and in either mode it uses shell, MCP, and worktree-scoped capabilities.
 
 Add an external wrapper at `packages/<name>-adapter/`. It converts platform events into `RootRequest`, calls the default Eve Channel, and returns a `RootResult`. It must not import `eve/agent`, implement FailureReport business logic, or call a domain subagent directly. Temporal Workflow code remains deterministic; its Activity is the outer boundary that invokes the Channel.
 

@@ -13,6 +13,10 @@ describe("MCP Root composition", () => {
     const transport: EveChannelRootTransport = {
       async run(input) {
         seen.push(input.message);
+        await input.onDelivered({
+          sessionId: "session-mcp-root-composition",
+          streamIndex: 0,
+        });
         return {
           data: {
             request_id: "mcp-root-composition",
@@ -20,7 +24,10 @@ describe("MCP Root composition", () => {
             summary: "Eve Root handled the MCP request.",
           },
           status: "completed",
-          sessionState: { streamIndex: 1 },
+          sessionState: {
+            sessionId: "session-mcp-root-composition",
+            streamIndex: 1,
+          },
         };
       },
     };

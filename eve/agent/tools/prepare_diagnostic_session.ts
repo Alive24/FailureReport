@@ -27,7 +27,7 @@ export default defineTool({
       report_id: z.string().min(1),
       repository: z.string().regex(/^[^/\s]+\/[^/\s]+$/),
       issue_number: z.number().int().positive(),
-      domain_extensions: z.array(z.string().regex(/^[a-z][a-z0-9_-]*$/)).min(1),
+      domain_extensions: z.array(z.string().regex(/^[a-z][a-z0-9_-]*$/)),
       request: z.string().min(1),
     })
     .strict(),

@@ -10,6 +10,8 @@ Tracked configuration:
 
 `workflows/` and `prompts/` are FailureReport-owned integration contracts and may be tailored to this Node/TypeScript repository. `.shea/app/` and `.shea/bin/` are the vendored Shea Symphony 2606 MVP runtime; do not patch them when changing FailureReport's tracker policy or lane instructions.
 
+The GitHub Project may also define a `Failure Report` status used by FailureReport during diagnosis. It is intentionally absent from Shea Symphony's workflow `state_map`: FailureReport owns that tracker state and hands downstream ownership to Shea only by moving a Ready report to `Todo`. A `Backlog` delivery remains outside Shea until a person promotes it.
+
 Machine-local files are ignored by the repository root .gitignore:
 
 - logs/, artifacts/, and worktrees/ are runtime output.

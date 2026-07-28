@@ -77,7 +77,7 @@ export class OctokitIssueGateway extends IssueWorkpadGateway {
   }
 
   /** Creates the one marked workpad comment for an Issue's first publication. */
-  protected async createWorkpadComment(
+  protected async createIssueComment(
     repository: string,
     issueNumber: number,
     body: string,

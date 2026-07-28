@@ -1,7 +1,6 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import {
   Client,
@@ -19,6 +18,24 @@ import {
   type RootResult,
 } from "@failure-report/protocol";
 
+import {
+  createRootSessionOperationLedger,
+  FileRootSessionStore,
+  InMemoryRootSessionStore,
+  retiredFilterBytes,
+  type DeliveredRootOperation,
+  type DurableRootOperation,
+  type RootOperationStore,
+  type RootSessionOperationLedger,
+} from "./root-operation-store.js";
+
+export {
+  FileRootSessionStore,
+  InMemoryRootSessionStore,
+  type RootOperationStore,
+  type RootSessionOperationLedger,
+} from "./root-operation-store.js";
+
 /**
  * External client adapter between the typed Root port and a running Eve Root.
  *
@@ -27,81 +44,17 @@ import {
  * inside this MCP wrapper.
  */
 
-/** Persists Eve session state under a stable logical Root conversation key. */
+/**
+ * Legacy cursor-only store surface retained for existing package consumers.
+ *
+ * The MCP invoker itself now requires `RootOperationStore`; cursor-only custom
+ * stores cannot prove delivery ownership and therefore cannot provide the
+ * issue's restart guarantees.
+ */
 export type RootSessionStore = {
   read(key: string): Promise<SessionState | undefined>;
   write(key: string, state: SessionState): Promise<void>;
 };
-
-/** In-process session store suitable for a single MCP host process and tests. */
-export class InMemoryRootSessionStore implements RootSessionStore {
-  private readonly entries = new Map<string, SessionState>();
-
-  async read(key: string): Promise<SessionState | undefined> {
-    return this.entries.get(key);
-  }
-
-  async write(key: string, state: SessionState): Promise<void> {
-    this.entries.set(key, state);
-  }
-}
-
-/**
- * Private on-disk session store used by the local MCP host across restarts.
- *
- * Eve's session state is explicitly serializable, so persisting this small
- * cursor lets a fresh adapter process resume the same Issue-scoped Root
- * conversation without exposing any runtime path through the public contract.
- */
-export class FileRootSessionStore implements RootSessionStore {
-  private writeTail: Promise<void> = Promise.resolve();
-
-  constructor(private readonly filePath: string) {}
-
-  async read(key: string): Promise<SessionState | undefined> {
-    const entries = await this.readEntries();
-    return entries[key];
-  }
-
-  async write(key: string, state: SessionState): Promise<void> {
-    const write = this.writeTail.then(async () => {
-      const entries = await this.readEntries();
-      entries[key] = state;
-      await mkdir(dirname(this.filePath), { recursive: true, mode: 0o700 });
-      const temporaryPath = this.filePath + "." + randomUUID() + ".tmp";
-      await writeFile(
-        temporaryPath,
-        JSON.stringify({ version: 1, entries }, null, 2) + "\n",
-        { encoding: "utf8", mode: 0o600 },
-      );
-      // A rename keeps a reader from observing a partially written session
-      // cursor if the MCP host is restarted while a turn is completing.
-      await rename(temporaryPath, this.filePath);
-    });
-    this.writeTail = write.catch(() => undefined);
-    await write;
-  }
-
-  private async readEntries(): Promise<Record<string, SessionState>> {
-    let raw: string;
-    try {
-      raw = await readFile(this.filePath, "utf8");
-    } catch (error) {
-      if (hasErrorCode(error, "ENOENT")) {
-        return {};
-      }
-      throw error;
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new Error("FailureReport MCP session store contains invalid JSON.");
-    }
-    return parsePersistedRootSessions(parsed);
-  }
-}
 
 /**
  * Resolves the user-private state file for the local MCP adapter.
@@ -134,6 +87,11 @@ export interface EveChannelRootTransport {
   run(input: {
     message: string;
     sessionState?: SessionState;
+    /**
+     * Called after Eve accepts the message but before its result stream is read.
+     * The invoker must durably persist this cursor before the terminal wait.
+     */
+    onDelivered(sessionState: SessionState): Promise<void>;
   }): Promise<EveChannelRootTurn>;
 }
 
@@ -142,10 +100,8 @@ export interface EveChannelRootPendingTurnConsumer {
   /**
    * Consumes the next already-delivered turn without sending another message.
    *
-   * A caller timeout can leave a completed turn unread while a later retry has
-   * already been delivered to the same Eve session. This operation advances
-   * that cursor so the invoker can recover the retry's own result without
-   * duplicating the Root request.
+   * Recovery always starts from a cursor persisted by `onDelivered`; no retry
+   * may use this path to post the Root request again.
    */
   consumePendingTurn(input: {
     sessionState: SessionState;
@@ -179,16 +135,35 @@ export class EveChannelRootTransport
     });
   }
 
-  /** Sends one schema-constrained turn to the Eve Root service. */
+  /**
+   * Delivers one schema-constrained turn, exposes its allocated session cursor,
+   * and only then waits for the terminal Eve event.
+   */
   async run(input: {
     message: string;
     sessionState?: SessionState;
+    onDelivered(sessionState: SessionState): Promise<void>;
   }): Promise<EveChannelRootTurn> {
     const session = this.client.session(input.sessionState);
     const response = await session.send<RootResult>({
       message: input.message,
       outputSchema: rootResultSchema,
     });
+    const deliveredState: SessionState = {
+      ...((response.continuationToken ?? input.sessionState?.continuationToken)
+        ? {
+            continuationToken:
+              response.continuationToken ??
+              input.sessionState?.continuationToken,
+          }
+        : {}),
+      sessionId: response.sessionId,
+      streamIndex:
+        input.sessionState?.sessionId === response.sessionId
+          ? input.sessionState.streamIndex
+          : 0,
+    };
+    await input.onDelivered(deliveredState);
     const result = await response.result();
 
     return {
@@ -198,7 +173,7 @@ export class EveChannelRootTransport
     };
   }
 
-  /** Reads the next delivered turn after a replayed prior result. */
+  /** Reads the next delivered turn after a process or caller interruption. */
   async consumePendingTurn(input: {
     sessionState: SessionState;
   }): Promise<EveChannelRootTurn> {
@@ -212,98 +187,630 @@ export class EveChannelRootTransport
   }
 }
 
+export type RootOperationRetentionOptions = {
+  /** Full request-bearing terminal records retained per canonical session. */
+  terminal_operations?: number;
+  /** Compact result-bearing cleaned records retained per session; minimum one. */
+  cleaned_operations?: number;
+};
+
+type EveChannelRootInvokerOptions = {
+  retention?: RootOperationRetentionOptions;
+};
+
 /**
  * Implements the public Root port on top of an Eve Channel transport.
  *
- * It validates both sides of the boundary and turns malformed agent output into a
- * typed failure so callers never need to understand Eve-specific response data.
+ * One durable pump owns each canonical session key. Same-key requests join or
+ * queue behind that pump, while unrelated keys keep independent pumps.
  */
 export class EveChannelRootInvoker implements RootInvoker {
+  private readonly pumps = new Map<string, Promise<void>>();
+  private readonly deliveryOwner: string;
+  private readonly terminalRetention: number;
+  private readonly cleanedRetention: number;
+
   constructor(
     private readonly transport: EveChannelRootTransport,
-    private readonly sessionStore?: RootSessionStore,
-  ) {}
+    private readonly operationStore: RootOperationStore = new InMemoryRootSessionStore(),
+    options: EveChannelRootInvokerOptions = {},
+  ) {
+    this.deliveryOwner = operationStore.runtime_id + ":invoker:" + randomUUID();
+    this.terminalRetention = parseRetentionLimit(
+      options.retention?.terminal_operations,
+      32,
+      0,
+    );
+    this.cleanedRetention = parseRetentionLimit(
+      options.retention?.cleaned_operations,
+      128,
+      1,
+    );
+  }
 
-  /** Invokes Root and persists the updated Eve session before interpreting output. */
+  /** Persists or joins one operation and waits only for that operation's result. */
   async invoke(request: RootRequest): Promise<RootResult> {
     const parsedRequest = rootRequestSchema.parse(request);
     const sessionKey = rootSessionKey(parsedRequest);
-    const sessionState = await this.sessionStore?.read(sessionKey);
-    let turn = await this.transport.run({
-      message: buildRootInvocationMessage(parsedRequest),
-      sessionState,
-    });
-    await this.persistSessionState(sessionKey, turn.sessionState);
+    const fingerprint = rootRequestFingerprint(parsedRequest);
+    let registered: RootResult | undefined;
+    try {
+      registered = await this.registerOperation(
+        sessionKey,
+        parsedRequest,
+        fingerprint,
+      );
+    } catch {
+      return operationFailure(
+        parsedRequest,
+        "The durable Root operation state could not be validated or written; " +
+          "no new Root message was delivered.",
+      );
+    }
+    if (registered) {
+      return registered;
+    }
 
+    for (;;) {
+      let completed: RootResult | undefined;
+      try {
+        completed = await this.readOperationResult(
+          sessionKey,
+          parsedRequest,
+          fingerprint,
+        );
+      } catch {
+        return operationFailure(
+          parsedRequest,
+          "The durable Root operation state could not be validated; no new " +
+            "Root message was delivered.",
+        );
+      }
+      if (completed) {
+        return completed;
+      }
+
+      const pump = this.ensurePump(sessionKey);
+      const outcome = await Promise.race([
+        pump.then(
+          () => "settled" as const,
+          () => "failed" as const,
+        ),
+        delay(operationPollIntervalMs).then(() => "pending" as const),
+      ]);
+      if (outcome === "failed") {
+        let afterFailure: RootResult | undefined;
+        try {
+          afterFailure = await this.readOperationResult(
+            sessionKey,
+            parsedRequest,
+            fingerprint,
+          );
+        } catch {
+          return operationFailure(
+            parsedRequest,
+            "The durable Root operation state could not be validated after " +
+              "the Eve turn was interrupted; no retry was delivered.",
+          );
+        }
+        return (
+          afterFailure ?? {
+            request_id: parsedRequest.request_id,
+            status: "failed",
+            summary:
+              "The Root operation remains durably recorded but its Eve turn " +
+              "could not be drained. Retry with the same request_id.",
+          }
+        );
+      }
+    }
+  }
+
+  /**
+   * Starts recovery pumps for durable delivered and queued work at adapter boot.
+   *
+   * It intentionally does not await long-running Root turns; MCP startup remains
+   * bounded while the background pumps preserve the existing operation order.
+   */
+  async resumePendingOperations(): Promise<void> {
+    let sessionKeys: string[];
+    try {
+      sessionKeys = await this.operationStore.listSessionKeys();
+    } catch {
+      // Keep the MCP server available so a caller receives the deterministic
+      // fail-closed Root result from `invoke`; startup must not hide corruption
+      // behind a dropped stdio connection.
+      return;
+    }
+    for (const sessionKey of sessionKeys) {
+      let ledger: RootSessionOperationLedger | undefined;
+      try {
+        ledger = await this.operationStore.readLedger(sessionKey);
+      } catch {
+        continue;
+      }
+      if (
+        ledger &&
+        !ledger.blocked_reason &&
+        (ledger.active_request_id || ledger.queue.length > 0)
+      ) {
+        void this.ensurePump(sessionKey).catch(() => undefined);
+      }
+    }
+  }
+
+  private async registerOperation(
+    sessionKey: string,
+    request: RootRequest,
+    fingerprint: string,
+  ): Promise<RootResult | undefined> {
+    return this.operationStore.mutateLedger(sessionKey, (existing) => {
+      const ledger = existing ?? createRootSessionOperationLedger();
+      compactTerminalOperations(
+        ledger,
+        this.terminalRetention,
+        this.cleanedRetention,
+      );
+
+      if (ledger.blocked_reason) {
+        return {
+          ledger,
+          value: operationFailure(request, ledger.blocked_reason),
+        };
+      }
+
+      const prior = ledger.operations[request.request_id];
+      if (prior) {
+        if (prior.request_fingerprint !== fingerprint) {
+          return {
+            ledger,
+            value: operationFailure(
+              request,
+              "The request_id is already bound to different Root request data.",
+            ),
+          };
+        }
+        if (prior.state === "terminal" || prior.state === "cleaned") {
+          return { ledger, value: prior.result };
+        }
+        return { ledger, value: undefined };
+      }
+
+      if (retiredFilterHas(ledger.retired_request_filter, request.request_id)) {
+        return {
+          ledger,
+          value: operationFailure(
+            request,
+            "The request_id belongs to a safely cleaned Root operation whose " +
+              "terminal payload is no longer retained; it will not be delivered again.",
+          ),
+        };
+      }
+
+      const now = nextLedgerTimestamp(ledger);
+      if (ledger.active_request_id || ledger.queue.length > 0) {
+        ledger.operations[request.request_id] = {
+          state: "queued",
+          request_id: request.request_id,
+          request_fingerprint: fingerprint,
+          request,
+          created_at: now,
+          updated_at: now,
+        };
+        ledger.queue.push(request.request_id);
+      } else {
+        ledger.operations[request.request_id] = {
+          state: "prepared",
+          request_id: request.request_id,
+          request_fingerprint: fingerprint,
+          request,
+          created_at: now,
+          updated_at: now,
+        };
+        ledger.active_request_id = request.request_id;
+      }
+      return { ledger, value: undefined };
+    });
+  }
+
+  private async readOperationResult(
+    sessionKey: string,
+    request: RootRequest,
+    fingerprint: string,
+  ): Promise<RootResult | undefined> {
+    const ledger = await this.operationStore.readLedger(sessionKey);
+    if (!ledger) {
+      return operationFailure(
+        request,
+        "The durable Root operation disappeared before completion.",
+      );
+    }
+    if (ledger.blocked_reason) {
+      return operationFailure(request, ledger.blocked_reason);
+    }
+    const operation = ledger.operations[request.request_id];
+    if (!operation) {
+      return retiredFilterHas(ledger.retired_request_filter, request.request_id)
+        ? operationFailure(
+            request,
+            "The request_id belongs to a safely cleaned Root operation and " +
+              "will not be delivered again.",
+          )
+        : operationFailure(request, "The durable Root operation is missing.");
+    }
+    if (operation.request_fingerprint !== fingerprint) {
+      return operationFailure(
+        request,
+        "The request_id is already bound to different Root request data.",
+      );
+    }
+    if (operation.state === "terminal" || operation.state === "cleaned") {
+      return operation.result;
+    }
+    return undefined;
+  }
+
+  private ensurePump(sessionKey: string): Promise<void> {
+    const existing = this.pumps.get(sessionKey);
+    if (existing) {
+      return existing;
+    }
+    const pump = this.drainSession(sessionKey);
+    this.pumps.set(sessionKey, pump);
+    void pump.then(
+      () => {
+        if (this.pumps.get(sessionKey) === pump) {
+          this.pumps.delete(sessionKey);
+        }
+      },
+      () => {
+        if (this.pumps.get(sessionKey) === pump) {
+          this.pumps.delete(sessionKey);
+        }
+      },
+    );
+    return pump;
+  }
+
+  private async drainSession(sessionKey: string): Promise<void> {
+    for (;;) {
+      const active = await this.nextActiveOperation(sessionKey);
+      if (!active) {
+        return;
+      }
+
+      if (active.state === "prepared") {
+        if (
+          active.delivery_owner &&
+          active.delivery_owner !== this.deliveryOwner
+        ) {
+          await this.blockSession(
+            sessionKey,
+            "Durable state cannot prove that the prior delivery attempt was " +
+              "not accepted by Eve. The canonical Root session is blocked to prevent a duplicate run.",
+          );
+          return;
+        }
+        if (!(await this.deliverPreparedOperation(sessionKey, active))) {
+          return;
+        }
+      } else if (!(await this.recoverDeliveredOperation(sessionKey, active))) {
+        return;
+      }
+    }
+  }
+
+  private async nextActiveOperation(
+    sessionKey: string,
+  ): Promise<
+    | Extract<DurableRootOperation, { state: "prepared" | "delivered" }>
+    | undefined
+  > {
+    const snapshot = await this.operationStore.readLedger(sessionKey);
+    if (!snapshot || snapshot.blocked_reason) {
+      return undefined;
+    }
+    if (snapshot.active_request_id) {
+      const active = snapshot.operations[snapshot.active_request_id];
+      if (active?.state !== "prepared" && active?.state !== "delivered") {
+        throw new Error("FailureReport MCP active operation is invalid.");
+      }
+      return active;
+    }
+    if (snapshot.queue.length === 0) {
+      return undefined;
+    }
+
+    return this.operationStore.mutateLedger(sessionKey, (existing) => {
+      const ledger = existing ?? createRootSessionOperationLedger();
+      if (ledger.blocked_reason) {
+        return { ledger, value: undefined };
+      }
+
+      if (!ledger.active_request_id) {
+        const requestId = ledger.queue.shift();
+        if (!requestId) {
+          return { ledger, value: undefined };
+        }
+        const queued = ledger.operations[requestId];
+        if (queued?.state !== "queued") {
+          throw new Error("FailureReport MCP queue ownership is invalid.");
+        }
+        const now = nextLedgerTimestamp(ledger);
+        ledger.operations[requestId] = {
+          ...queued,
+          state: "prepared",
+          updated_at: now,
+        };
+        ledger.active_request_id = requestId;
+      }
+
+      const active = ledger.operations[ledger.active_request_id];
+      if (active?.state !== "prepared" && active?.state !== "delivered") {
+        throw new Error("FailureReport MCP active operation is invalid.");
+      }
+      return { ledger, value: active };
+    });
+  }
+
+  private async deliverPreparedOperation(
+    sessionKey: string,
+    operation: Extract<DurableRootOperation, { state: "prepared" }>,
+  ): Promise<boolean> {
+    const claimed = await this.operationStore.mutateLedger(
+      sessionKey,
+      (existing) => {
+        const ledger = requireLedger(existing);
+        const current = ledger.operations[operation.request_id];
+        if (current?.state !== "prepared") {
+          return { ledger, value: undefined };
+        }
+        if (current.delivery_owner) {
+          return { ledger, value: current };
+        }
+        const now = nextLedgerTimestamp(ledger);
+        const next = {
+          ...current,
+          delivery_owner: this.deliveryOwner,
+          delivery_started_at: now,
+          updated_at: now,
+        };
+        ledger.operations[operation.request_id] = next;
+        return { ledger, value: next };
+      },
+    );
+    if (!claimed || claimed.delivery_owner !== this.deliveryOwner) {
+      return false;
+    }
+
+    let delivered = false;
+    let turn: EveChannelRootTurn;
+    try {
+      turn = await this.transport.run({
+        message: buildRootInvocationMessage(claimed.request),
+        sessionState: (await this.operationStore.readLedger(sessionKey))
+          ?.session_state,
+        onDelivered: async (sessionState) => {
+          await this.recordDelivery(
+            sessionKey,
+            claimed.request_id,
+            sessionState,
+          );
+          delivered = true;
+        },
+      });
+    } catch (error) {
+      if (!delivered) {
+        await this.blockSession(
+          sessionKey,
+          "Eve delivery did not produce a durable session cursor. The canonical " +
+            "Root session is blocked because resending could duplicate the diagnostic.",
+        );
+        return false;
+      }
+      throw error;
+    }
+
+    if (!delivered) {
+      await this.blockSession(
+        sessionKey,
+        "The Eve transport completed without durably recording delivery. The " +
+          "canonical Root session is blocked to prevent a duplicate run.",
+      );
+      return false;
+    }
+    return this.finishDeliveredTurn(sessionKey, claimed.request, turn);
+  }
+
+  private async recordDelivery(
+    sessionKey: string,
+    requestId: string,
+    sessionState: SessionState,
+  ): Promise<void> {
+    if (!sessionState.sessionId) {
+      throw new Error("Eve delivery did not return a resumable session id.");
+    }
+    await this.operationStore.mutateLedger(sessionKey, (existing) => {
+      const ledger = requireLedger(existing);
+      const current = ledger.operations[requestId];
+      if (
+        current?.state !== "prepared" ||
+        current.delivery_owner !== this.deliveryOwner ||
+        ledger.active_request_id !== requestId
+      ) {
+        throw new Error("FailureReport MCP delivery ownership changed.");
+      }
+      const now = nextLedgerTimestamp(ledger);
+      ledger.operations[requestId] = {
+        ...current,
+        state: "delivered",
+        delivery_owner: this.deliveryOwner,
+        delivered_at: now,
+        session_state: sessionState,
+        updated_at: now,
+      };
+      ledger.session_state = sessionState;
+      return { ledger, value: undefined };
+    });
+  }
+
+  private async recoverDeliveredOperation(
+    sessionKey: string,
+    operation: DeliveredRootOperation,
+  ): Promise<boolean> {
+    if (!isPendingTurnConsumer(this.transport)) {
+      await this.blockSession(
+        sessionKey,
+        "The Eve transport cannot reattach to the durably delivered Root turn.",
+      );
+      return false;
+    }
+    const turn = await this.transport.consumePendingTurn({
+      sessionState: operation.session_state,
+    });
+    return this.finishDeliveredTurn(sessionKey, operation.request, turn);
+  }
+
+  private async finishDeliveredTurn(
+    sessionKey: string,
+    request: RootRequest,
+    initialTurn: EveChannelRootTurn,
+  ): Promise<boolean> {
+    let turn = initialTurn;
     for (let replayCount = 0; ; replayCount += 1) {
       const parsedResult = rootResultSchema.safeParse(turn.data);
       if (!parsedResult.success) {
-        return {
-          request_id: parsedRequest.request_id,
-          status: "failed",
-          summary:
+        return this.recordTerminalResult(
+          sessionKey,
+          request,
+          operationFailure(
+            request,
             "Eve Root did not return a valid structured result; turn status was " +
-            turn.status +
-            ".",
-        };
+              turn.status +
+              ".",
+          ),
+          turn.sessionState,
+        );
       }
-      if (parsedResult.data.request_id !== parsedRequest.request_id) {
+      if (parsedResult.data.request_id !== request.request_id) {
         if (
           replayCount >= maxStaleRootTurnsToDrain ||
           turn.status === "failed" ||
           !turn.sessionState.sessionId ||
           !isPendingTurnConsumer(this.transport)
         ) {
-          return {
-            request_id: parsedRequest.request_id,
-            status: "failed",
-            summary: "Eve Root returned a result for a different request id.",
-          };
+          return this.recordTerminalResult(
+            sessionKey,
+            request,
+            operationFailure(
+              request,
+              "Eve Root returned a result for a different request id.",
+            ),
+            turn.sessionState,
+          );
         }
-
-        try {
-          // `run()` has already delivered this request. A stale result means
-          // its stream began before a prior turn's terminal event, so only
-          // advance the cursor instead of submitting the request a second time.
-          turn = await this.transport.consumePendingTurn({
-            sessionState: turn.sessionState,
-          });
-          await this.persistSessionState(sessionKey, turn.sessionState);
-          continue;
-        } catch {
-          return {
-            request_id: parsedRequest.request_id,
-            status: "failed",
-            summary:
-              "Eve Root replayed an earlier result, but the pending request " +
-              "could not be recovered.",
-          };
-        }
+        // A stale terminal turn is safe to checkpoint because the active
+        // request's own result has not yet been observed. Replaying it after a
+        // crash would also be safe, but persisting keeps recovery bounded.
+        await this.persistDeliveredCursor(
+          sessionKey,
+          request.request_id,
+          turn.sessionState,
+        );
+        turn = await this.transport.consumePendingTurn({
+          sessionState: turn.sessionState,
+        });
+        continue;
       }
-      const selectorResultFailure = validateSelectorRehydration(
-        parsedRequest,
+
+      const selectorFailure = validateSelectorRehydration(
+        request,
         parsedResult.data,
       );
-      if (selectorResultFailure) {
-        return {
-          request_id: parsedRequest.request_id,
-          status: "failed",
-          summary: selectorResultFailure,
-        };
-      }
-      return parsedResult.data;
+      return this.recordTerminalResult(
+        sessionKey,
+        request,
+        selectorFailure
+          ? operationFailure(request, selectorFailure)
+          : parsedResult.data,
+        turn.sessionState,
+      );
     }
   }
 
-  private async persistSessionState(
+  private async persistDeliveredCursor(
     sessionKey: string,
+    requestId: string,
     sessionState: SessionState,
   ): Promise<void> {
-    if (this.sessionStore) {
-      // Preserve the continuation even if Root returned invalid or replayed
-      // data; a repaired follow-up must resume the same agent context.
-      await this.sessionStore.write(sessionKey, sessionState);
-    }
+    await this.operationStore.mutateLedger(sessionKey, (existing) => {
+      const ledger = requireLedger(existing);
+      const operation = ledger.operations[requestId];
+      if (
+        operation?.state !== "delivered" ||
+        ledger.active_request_id !== requestId
+      ) {
+        throw new Error("FailureReport MCP delivered operation is not active.");
+      }
+      ledger.session_state = sessionState;
+      ledger.operations[requestId] = {
+        ...operation,
+        session_state: sessionState,
+        updated_at: nextLedgerTimestamp(ledger),
+      };
+      return { ledger, value: undefined };
+    });
+  }
+
+  private async recordTerminalResult(
+    sessionKey: string,
+    request: RootRequest,
+    result: RootResult,
+    sessionState: SessionState,
+  ): Promise<boolean> {
+    return this.operationStore.mutateLedger(sessionKey, (existing) => {
+      const ledger = requireLedger(existing);
+      const operation = ledger.operations[request.request_id];
+      if (
+        operation?.state !== "delivered" ||
+        ledger.active_request_id !== request.request_id
+      ) {
+        throw new Error("FailureReport MCP terminal operation is not active.");
+      }
+      const now = nextLedgerTimestamp(ledger);
+      ledger.operations[request.request_id] = {
+        state: "terminal",
+        request_id: request.request_id,
+        request_fingerprint: operation.request_fingerprint,
+        request,
+        result,
+        created_at: operation.created_at,
+        updated_at: now,
+        completed_at: now,
+      };
+      // Commit the terminal result and its advanced Eve cursor together. A
+      // restart can therefore either redrain the delivered turn or replay the
+      // stored result, but can never observe a cursor past an absent result.
+      ledger.session_state = sessionState;
+      delete ledger.active_request_id;
+      compactTerminalOperations(
+        ledger,
+        this.terminalRetention,
+        this.cleanedRetention,
+      );
+      return { ledger, value: ledger.queue.length > 0 };
+    });
+  }
+
+  private async blockSession(
+    sessionKey: string,
+    reason: string,
+  ): Promise<void> {
+    await this.operationStore.mutateLedger(sessionKey, (existing) => {
+      const ledger = requireLedger(existing);
+      ledger.blocked_reason ??= reason;
+      return { ledger, value: undefined };
+    });
   }
 }
 
@@ -312,8 +819,9 @@ export type McpRootCompositionOptions = {
   host?: string;
   bearer?: string;
   transport?: EveChannelRootTransport;
-  session_store?: RootSessionStore;
+  session_store?: RootOperationStore;
   session_store_path?: string;
+  operation_retention?: RootOperationRetentionOptions;
 };
 
 /**
@@ -324,15 +832,10 @@ export type McpRootCompositionOptions = {
  */
 const defaultLocalEveChannelHost = "http://127.0.0.1:2000";
 
-/**
- * Connects an external wrapper to the built-in Eve Channel.
- *
- * The default endpoint is the local `eve dev` server. Production callers pass
- * their deployed host and, when required by the channel policy, a bearer token.
- */
+/** Connects an external wrapper to the built-in Eve Channel. */
 export function createMcpRootInvoker(
   options: McpRootCompositionOptions = {},
-): RootInvoker {
+): EveChannelRootInvoker {
   const host = options.host ?? defaultLocalEveChannelHost;
   const transport =
     options.transport ??
@@ -347,6 +850,7 @@ export function createMcpRootInvoker(
       new FileRootSessionStore(
         options.session_store_path ?? defaultRootSessionStorePath(),
       ),
+    { retention: options.operation_retention },
   );
 }
 
@@ -372,11 +876,7 @@ export function buildRootInvocationMessage(request: RootRequest): string {
   ].join("\n");
 }
 
-/**
- * Chooses the longest-lived safe session scope available for a Root request.
- * Issues win over report IDs so separate requests about one durable workpad share
- * a single Eve conversation, while unrelated ad-hoc requests remain isolated.
- */
+/** Chooses the longest-lived safe session scope available for a Root request. */
 export function rootSessionKey(request: RootRequest): string {
   const issue =
     request.issue_selector ?? request.issue ?? request.report?.shared_context;
@@ -387,6 +887,29 @@ export function rootSessionKey(request: RootRequest): string {
     return "report:" + request.report.id;
   }
   return "request:" + request.request_id;
+}
+
+function rootRequestFingerprint(request: RootRequest): string {
+  return createHash("sha256")
+    .update(canonicalJson(request), "utf8")
+    .digest("hex");
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return "[" + value.map((item) => canonicalJson(item)).join(",") + "]";
+  }
+  if (value !== null && typeof value === "object") {
+    return (
+      "{" +
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => JSON.stringify(key) + ":" + canonicalJson(item))
+        .join(",") +
+      "}"
+    );
+  }
+  return JSON.stringify(value);
 }
 
 /** Enforces that a successful selector intake gives callers a reusable context. */
@@ -413,8 +936,118 @@ function validateSelectorRehydration(
   return undefined;
 }
 
+function operationFailure(request: RootRequest, summary: string): RootResult {
+  return {
+    request_id: request.request_id,
+    status: "failed",
+    summary,
+  };
+}
+
+function requireLedger(
+  ledger: RootSessionOperationLedger | undefined,
+): RootSessionOperationLedger {
+  if (!ledger) {
+    throw new Error("FailureReport MCP durable operation is missing.");
+  }
+  return ledger;
+}
+
+function compactTerminalOperations(
+  ledger: RootSessionOperationLedger,
+  terminalLimit: number,
+  cleanedLimit: number,
+): void {
+  const terminal = Object.values(ledger.operations)
+    .filter(
+      (
+        operation,
+      ): operation is Extract<DurableRootOperation, { state: "terminal" }> =>
+        operation.state === "terminal",
+    )
+    .sort((left, right) => right.completed_at.localeCompare(left.completed_at));
+  const now = new Date().toISOString();
+  for (const operation of terminal.slice(terminalLimit)) {
+    ledger.operations[operation.request_id] = {
+      state: "cleaned",
+      request_id: operation.request_id,
+      request_fingerprint: operation.request_fingerprint,
+      result: operation.result,
+      created_at: operation.created_at,
+      updated_at: now,
+      completed_at: operation.completed_at,
+      cleaned_at: operation.completed_at,
+    };
+  }
+
+  const cleaned = Object.values(ledger.operations)
+    .filter(
+      (
+        operation,
+      ): operation is Extract<DurableRootOperation, { state: "cleaned" }> =>
+        operation.state === "cleaned",
+    )
+    .sort((left, right) => right.cleaned_at.localeCompare(left.cleaned_at));
+  for (const operation of cleaned.slice(cleanedLimit)) {
+    ledger.retired_request_filter = retiredFilterAdd(
+      ledger.retired_request_filter,
+      operation.request_id,
+    );
+    delete ledger.operations[operation.request_id];
+  }
+}
+
+function retiredFilterAdd(
+  encoded: string | undefined,
+  requestId: string,
+): string {
+  const filter = encoded
+    ? Buffer.from(encoded, "base64")
+    : Buffer.alloc(retiredFilterBytes);
+  for (const bit of retiredFilterBits(requestId)) {
+    filter[Math.floor(bit / 8)]! |= 1 << (bit % 8);
+  }
+  return filter.toString("base64");
+}
+
+function retiredFilterHas(
+  encoded: string | undefined,
+  requestId: string,
+): boolean {
+  if (!encoded) {
+    return false;
+  }
+  const filter = Buffer.from(encoded, "base64");
+  return retiredFilterBits(requestId).every(
+    (bit) => (filter[Math.floor(bit / 8)]! & (1 << (bit % 8))) !== 0,
+  );
+}
+
+function retiredFilterBits(requestId: string): number[] {
+  const digest = createHash("sha256").update(requestId, "utf8").digest();
+  const bitCount = retiredFilterBytes * 8;
+  return [0, 4, 8, 12].map((offset) => digest.readUInt32BE(offset) % bitCount);
+}
+
+function parseRetentionLimit(
+  configured: number | undefined,
+  fallback: number,
+  minimum: number,
+): number {
+  if (configured === undefined) {
+    return fallback;
+  }
+  if (!Number.isInteger(configured) || configured < minimum) {
+    throw new Error(
+      "Root operation retention limit is outside its supported integer range.",
+    );
+  }
+  return configured;
+}
+
 /** Maximum completed stale turns to drain before reporting a correlation failure. */
 const maxStaleRootTurnsToDrain = 8;
+const operationPollIntervalMs = 20;
 
 function isPendingTurnConsumer(
   transport: EveChannelRootTransport,
@@ -454,43 +1087,17 @@ async function readNextEveChannelTurn(
   return { data, status };
 }
 
-/** Parses the private file format before a serialized cursor reaches Eve. */
-function parsePersistedRootSessions(
-  value: unknown,
-): Record<string, SessionState> {
-  if (!isRecord(value) || value.version !== 1 || !isRecord(value.entries)) {
-    throw new Error("FailureReport MCP session store has an invalid format.");
-  }
-
-  const entries: Record<string, SessionState> = {};
-  for (const [key, state] of Object.entries(value.entries)) {
-    if (!isSessionState(state)) {
-      throw new Error(
-        "FailureReport MCP session store has an invalid session.",
-      );
-    }
-    entries[key] = state;
-  }
-  return entries;
+async function delay(milliseconds: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-/** Checks the explicitly serializable subset Eve accepts as a session cursor. */
-function isSessionState(value: unknown): value is SessionState {
-  return (
-    isRecord(value) &&
-    typeof value.streamIndex === "number" &&
-    Number.isInteger(value.streamIndex) &&
-    value.streamIndex >= 0 &&
-    (value.continuationToken === undefined ||
-      typeof value.continuationToken === "string") &&
-    (value.sessionId === undefined || typeof value.sessionId === "string")
+function nextLedgerTimestamp(ledger: RootSessionOperationLedger): string {
+  const latest = Object.values(ledger.operations).reduce(
+    (maximum, operation) => {
+      const parsed = Date.parse(operation.updated_at);
+      return Number.isNaN(parsed) ? maximum : Math.max(maximum, parsed);
+    },
+    0,
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasErrorCode(error: unknown, code: string): boolean {
-  return isRecord(error) && error.code === code;
+  return new Date(Math.max(Date.now(), latest + 1)).toISOString();
 }

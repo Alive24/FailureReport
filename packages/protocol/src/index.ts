@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import {
+  handoffDeliveryReceiptSchema,
   humanInputRequestSchema,
   implementationHandoffSchema,
 } from "./handoff.js";
@@ -13,10 +14,12 @@ import {
 
 export {
   HandoffNeedsInputError,
+  handoffDeliveryReceiptSchema,
   humanInputRequestSchema,
   implementationHandoffSchema,
   renderDiagnosticHandoff,
   type DiagnosticHandoff,
+  type HandoffDeliveryReceipt,
   type HumanInputRequest,
   type ImplementationHandoff,
 } from "./handoff.js";
@@ -241,7 +244,6 @@ export const diagnosticBranchSchema = z
  */
 export const diagnosticDomainExtensionsSchema = z
   .array(identifierSchema)
-  .min(1)
   .superRefine((extensions, context) => {
     for (let index = 0; index < extensions.length; index += 1) {
       const current = extensions[index];
@@ -915,6 +917,7 @@ export const rootOperationSchema = z.enum([
   "resume",
   "inspect",
   "render_handoff",
+  "deliver_handoff",
 ]);
 
 /** Validates an adapter request before it is handed to Root. */
@@ -967,12 +970,14 @@ export const rootRequestSchema = z
       });
     }
 
-    if (request.operation === "render_handoff") {
+    if (
+      request.operation === "render_handoff" ||
+      request.operation === "deliver_handoff"
+    ) {
       if (!request.report?.shared_context) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
-          message:
-            "render_handoff requires the caller's persisted report binding so Root can reject stale state",
+          message: `${request.operation} requires the caller's persisted report binding so Root can reject stale state`,
           path: ["report"],
         });
       }
@@ -983,16 +988,14 @@ export const rootRequestSchema = z
       ) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
-          message:
-            "render_handoff requires a persisted workpad logical-session and entry identity",
+          message: `${request.operation} requires a persisted workpad logical-session and entry identity`,
           path: ["report", "shared_context"],
         });
       }
       if (request.issue_selector) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
-          message:
-            "render_handoff requires a revision-bound report, not a minimal Issue selector",
+          message: `${request.operation} requires a revision-bound report, not a minimal Issue selector`,
           path: ["issue_selector"],
         });
       }
@@ -1008,6 +1011,7 @@ export const rootResultSchema = z
     issue: githubIssueContextSchema.optional(),
     summary: z.string().min(1),
     implementation_handoff: implementationHandoffSchema.optional(),
+    handoff_delivery: handoffDeliveryReceiptSchema.optional(),
     human_input_request: humanInputRequestSchema.optional(),
   })
   .strict()
@@ -1025,6 +1029,27 @@ export const rootResultSchema = z
         code: z.ZodIssueCode.custom,
         message: "implementation_handoff requires completed Root status",
         path: ["status"],
+      });
+    }
+    if (result.handoff_delivery && !result.implementation_handoff) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "handoff_delivery requires the matching implementation_handoff",
+        path: ["handoff_delivery"],
+      });
+    }
+    if (
+      result.handoff_delivery &&
+      result.implementation_handoff &&
+      result.handoff_delivery.handoff_id !==
+        result.implementation_handoff.handoff_id
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "handoff_delivery must acknowledge the returned implementation_handoff",
+        path: ["handoff_delivery", "handoff_id"],
       });
     }
     if (result.human_input_request && result.status !== "needs_input") {

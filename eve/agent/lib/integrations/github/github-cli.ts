@@ -97,7 +97,7 @@ export class GithubCliIssueGateway extends IssueWorkpadGateway {
   }
 
   /** Creates the one structured workpad comment when an Issue has none yet. */
-  protected async createWorkpadComment(
+  protected async createIssueComment(
     repository: string,
     issueNumber: number,
     body: string,

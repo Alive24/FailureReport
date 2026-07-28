@@ -317,7 +317,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     ) {
       return {
         canonical_path: "/canonical/CKBoost",
-        path: "/root/.eve/sandbox-cache/worktrees/diagnostic-54",
+        path: "/canonical/target/.shea/worktrees/failureReport/diagnostic-54",
         state: {
           ...state,
           worktree: { ...state.worktree, head_revision: changedHead },
