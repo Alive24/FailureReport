@@ -94,6 +94,8 @@ To verify native Codex skill discovery locally without starting a model turn, ru
 FAILURE_REPORT_RUN_CODEX_APP_SERVER_SMOKE=1 pnpm --filter @Alive24/FailureReport exec vitest run test/codex-native-skill.smoke.test.ts
 ```
 
+For an operator-owned Shea Halo candidate experiment, FailureReport also has one explicit real Root-to-Codex trace-capture command. It is dormant during ordinary runtime use and accepts only exact-revision fixture/candidate configuration with owner-only ignored output. See [Real Root-to-Codex trace capture](docs/operations/halo-real-trace-capture.md).
+
 FailureReport's MVP is a local product runtime. It uses the same `codex login` credentials in two distinct roles: a tool-capable Eve Root model via `experimental_chatgpt()`, and a direct Codex App Server host transport for the diagnostic worker. The latter must be given an isolated worktree and must not be used as the Root model, because it does not support AI SDK custom tool schemas.
 
 To use the public Root MCP surface through Codex, start Eve (and therefore its default Channel) in one terminal:
