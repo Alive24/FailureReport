@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   failureReportSchema,
   parseFailureReportWorkpad,
+  renderFailureReportWorkpadHumanView,
   workpadMarker,
 } from "@failure-report/protocol";
 
@@ -87,6 +88,11 @@ describe("GitHub Issue workpad", () => {
       "Alive24/CKBoost/54",
     );
     expect(parsed.entries[0]?.report.shared_context?.workpad_revision).toBe(0);
+    expect(mutation.workpad_comment_body).toContain("#### Completed diagnosis");
+    expect(mutation.workpad_comment_body).toContain("##### Diagnosis");
+    expect(mutation.workpad_comment_body).toContain(
+      "Canonical context — complete FailureReport snapshot",
+    );
   });
 
   it("appends same-producer history in the verified comment without rewriting prior bytes", async () => {
@@ -309,7 +315,7 @@ describe("GitHub Issue workpad", () => {
       report,
       "2026-07-15T10:01:00Z",
       rootGh,
-      5_000,
+      15_000,
     );
     expect(planned.mode).toBe("chunk");
     if (planned.mode !== "chunk") {
@@ -330,7 +336,7 @@ describe("GitHub Issue workpad", () => {
       report,
       "2026-07-15T10:01:00Z",
       rootGh,
-      5_000,
+      15_000,
     );
     expect(retried.mode).toBe("chunk");
     if (retried.mode !== "chunk") {
@@ -345,6 +351,19 @@ describe("GitHub Issue workpad", () => {
       planned,
       provisional.map((comment) => comment.id),
       rootGh,
+    );
+    const inlineHumanView = renderFailureReportWorkpadHumanView(planned.entry);
+    const stageStart = "\n#### Completed diagnosis";
+    expect(
+      manifest
+        .slice(manifest.indexOf(stageStart), manifest.indexOf("\n<details>"))
+        .trimEnd(),
+    ).toBe(
+      inlineHumanView.slice(inlineHumanView.indexOf(stageStart)).trimEnd(),
+    );
+    expect(manifest).toContain("Authoritative comment group");
+    expect(manifest).toContain(
+      "Canonical context — verified multi-comment manifest",
     );
     const head = findExistingWorkpad(
       issue([...provisional, managedComment("manifest-1", manifest, "101")]),
@@ -365,7 +384,7 @@ describe("GitHub Issue workpad", () => {
       report,
       "2026-07-15T10:01:00Z",
       rootGh,
-      5_000,
+      15_000,
     );
     if (planned.mode !== "chunk") {
       throw new Error("Expected a chunked publication.");
@@ -387,7 +406,7 @@ describe("GitHub Issue workpad", () => {
       report,
       "2026-07-15T10:01:00Z",
       rootGh,
-      5_000,
+      15_000,
     );
     expect(fresh.mode).toBe("chunk");
     if (fresh.mode !== "chunk") {
