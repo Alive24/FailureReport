@@ -1,83 +1,134 @@
 ---
 name: shea-symphony-human-review
-description: Brief a Shea Symphony operator for Human Review after independent review evidence, guide one operator-owned UAT decision, persist an append-only decision note, and route only after explicit confirmation.
+description: Brief a Shea Symphony operator after independent review evidence, guide one operator-owned UAT decision, record append-only evidence, and route only after explicit confirmation. Use for issues waiting in Human Review, including parent-batch acceptance.
 ---
 
 # Shea Symphony Human Review
 
-Use this skill after an independent Review Agent pass when an operator must make final acceptance decisions before merge-lane work. Human Review is not implementation, independent review, or merging. An accepted ordinary issue routes to Merging, never directly to Done.
+Human Review is the operator-owned acceptance checkpoint before merge-lane work.
+It is not implementation, independent Agent Review, or merge execution.
+Accepted Human Review routes to `Merging`, never directly to `Done`.
 
-## Bind the review surface
+## Mandatory visible brief
 
-Resolve the active repository, workflow, tracker project, canonical harness checkout, Human Review note template, parent-batch briefing template, linked PR workspace, and supported read/write actions. Never assume paths, repository, workflow file, template, or command.
+Before freshness work, UAT, or a routing question, visibly explain the review in
+the operator's language. The operator must not need to open GitHub to understand:
 
-Use the configured workflow surface for Project state, append-only timeline notes, and guarded routing. Use provider read-only views for ordinary issue and PR content. Human Review notes must never upsert or restructure the Main Agent Workpad.
+- **Problem**: what user, operator, or system problem the issue addresses.
+- **Delivered change**: what behavior changed and where, not a raw diff.
+- **Resulting effect**: the observed before/after outcome; if only intended or
+  not yet evidenced, label that uncertainty explicitly.
+- **Evidence**: what Agent Review and current readbacks establish, plus risks or
+  missing evidence.
+- **Human decision needed**: the remaining UAT or acceptance choice and the
+  available routes.
+
+Also name the issue, PR, branch/base, and current state. Never omit a field:
+write `unknown`, `not evidenced`, or `not applicable` when necessary.
+Internal reasoning, tool output, links, freshness status, and test summaries do
+not satisfy this visible briefing contract.
+
+## Bind and inspect
+
+Resolve the active repository, workflow, tracker project, canonical harness
+checkout, linked PR worktree, decision-note template, and supported read/write
+actions from current configuration. Never assume repo-specific paths or command
+topology.
+
+Use the configured Shea workflow surface for Project reads, append-only notes,
+and guarded routing. Use provider views read-only for ordinary issue and PR
+content; never bypass the workflow with raw Project mutations.
+
+Before briefing, inspect the issue goal, scope, expected outcome, completion
+criteria, UAT, Main Workpad, append-only evidence, Agent Review pass, linked PR
+identity and checks, Project state, and any stale assumption or blocker.
+Summarize decision-relevant facts instead of dumping raw JSON.
+
+Native GitHub subissues are not routine Human Review surfaces. Without recorded
+`Subissue Human Review Exception: <reason>` evidence, explain that a passing
+child routes from Agent Review to `Merging` and the parent owns final UAT.
+
+Only for a native parent issue, read
+`.shea/template/workpad/parent-batch-human-review-brief.md`. The first Human
+Review action is to prepare a compact parent-batch evidence brief from current
+readbacks. It is read-only and advisory: Do not write tracker comments or mutate
+state while preparing it. Child `Done`, child PR merge evidence, and parent
+Agent Review PASS are inputs, not proof that parent UAT passed or authorization
+for approval.
 
 ## Authority and language
 
-- Do not change implementation code except a narrow, mechanical PR freshness repair described below.
-- Do not act as Review Agent or Merging Agent, and do not merge.
-- Do not mutate Project state before the operator explicitly confirms the decision after the briefing and UAT discussion.
-- Treat UAT as operator-owned unless the issue says otherwise.
-- A routine native subissue does not enter direct Human Review. Without a recorded Subissue Human Review Exception, explain that a passing child routes from Agent Review to Merging and the parent owns final UAT.
-- Match live conversation language to the operator. Durable tracker artifacts, issue bodies, workpads, and PR comments are English; preserve configured state names and decision labels exactly.
+- Do not change implementation except a narrow mechanical PR freshness repair.
+- Do not act as Agent Review or Merging Agent, and do not merge.
+- Never mutate Project state until the operator explicitly confirms the final
+  decision after the briefing and UAT discussion.
+- Treat unchecked UAT as human-owned unless the issue says otherwise.
+- Keep Human Review notes append-only; never overwrite the Main Workpad.
+- Match the operator-facing language. Do not force English in live discussion.
+  Write durable tracker artifacts in English and preserve canonical decision
+  labels, state names, paths, and commands.
 
-## Required reads
+## Review flow
 
-Before briefing, inspect:
+1. Inspect the decision surfaces and give the mandatory visible brief.
+2. After the orientation brief, run the PR freshness preflight automatically;
+   it is not an operator-owned UAT decision.
+3. If preflight changes the branch or evidence, re-present the five-field brief
+   as a compact post-preflight packet and include a running note draft.
+4. Give exactly one next UAT action, why it matters, where to run it, and ask for
+   `pass`, `fail`, `deferred`, or the smallest blocker.
+5. Wait for the operator result; do not infer acceptance from tests or tone.
+6. Draft the English decision note and state the proposed route.
+7. Obtain an explicit confirmation phrase before writing evidence or routing.
+8. Append the note, perform the guarded state route as the final mutation, then
+   only read back status and run Doctor verification.
 
-- issue goal, scope, guardrails, dependencies, and all review checklists;
-- Main Workpad and append-only evidence;
-- Review Agent pass evidence and unchecked/missing items;
-- linked PR identity, base/head, readiness, checks, and merge state; and
-- missing evidence, stale assumptions, and blockers.
+## PR freshness preflight
 
-For a parent with native subissues, also inspect child Project state, child PR merge evidence into the parent integration branch, the parent final PR and Review Agent evidence, and remaining parent-owned UAT.
+Run from the linked PR/issue worktree, never canonical `main`:
 
-Summarize decision-relevant facts, not raw JSON.
+1. Fetch upstream and verify the branch contains latest `origin/main`.
+2. If behind, attempt only a safe mechanical merge of `origin/main`.
+3. If clean or mechanically resolvable, run focused verification, push the
+   branch, and record the repair in the running note draft.
+4. If conflicts are broad, product-scope, ambiguous, or verification fails,
+   stop before UAT and recommend `Request Rework` with the smallest finding.
 
-## Required PR freshness preflight
+If no safe linked worktree can be resolved, record a UAT blocker and ask for the
+smallest workspace choice. Provider mergeability is corroborating evidence, not
+a substitute for the local ancestry check.
 
-Before PR-specific UAT, work only from the linked PR/issue worktree, never the canonical main checkout:
+## Guide UAT
 
-1. Refresh upstream references and verify that the PR branch contains latest origin/main.
-2. If it is fresh, continue.
-3. If behind, attempt only a safe, local, mechanical merge of origin/main.
-4. If clean, run focused verification, push the branch, and record the repair in the running decision-note draft.
-5. If conflict resolution is clearly mechanical, resolve in that worktree, verify, push, and record it.
-6. If the conflict is broad, product-scope, ambiguous, or verification fails, stop before UAT and recommend Request Rework with the smallest finding.
+- Guide one checklist item at a time unless the operator requests the full list.
+- Run PR-specific checks from the linked PR worktree; a result from canonical
+  `main` before merge needs clarification and rerun.
+- Do not mark human-owned UAT from Agent Review or automated test evidence.
+- Treat fixture or memory-tracker runs as smoke evidence unless the issue asks
+  for rehearsal and the operator accepts that boundary.
+- Before any configured live workflow write, show its dry-run target and obtain
+  the operator's explicit choice to exercise that live path.
+- Keep a running note draft separating Agent Review, automatic preflight, and
+  operator-owned UAT evidence.
 
-If no safe linked worktree can be found or created from existing evidence, treat it as a UAT blocker and ask for the smallest workspace decision. Provider mergeability is corroborating evidence, not a substitute for the local ancestry check.
+## Decision evidence and routing
 
-## Live review flow
+Use `.shea/template/workpad/human-review.md`. Show the completed draft before
+asking for an explicit phrase such as `confirm approve to Merging`. A UAT result
+alone is not confirmation. After confirmation, append the decision note before
+the state transition.
 
-Follow this order:
+| Decision | Route |
+| --- | --- |
+| `Approve for Merging` | `Merging` |
+| `Request Rework` | `Rework` with an actionable finding |
+| `Need Human Input` | `Need Human Input` with the unresolved question |
+| `Defer` | retain `Human Review`; append a note only if requested |
 
-1. Give an operator-language orientation: issue/PR, purpose, intended outcome, change summary, Review Agent evidence, human-owned UAT, known risks, and possible decisions.
-2. Run the automatic freshness preflight.
-3. If any preflight work occurred, present a compact post-preflight packet with the updated verification result and a running note draft.
-4. Ask for exactly one UAT result: pass, fail, deferred, or a stated blocker.
-5. Wait for the operator's result.
-6. Draft a Human Review Decision Note in English and show the routing result.
-7. Obtain explicit confirmation before writing the note or changing state.
+## Quality gate
 
-Do not end with a bare pass/fail question after a freshness repair. Keep the operator's decision separate from automatic preflight evidence.
-
-The decision note is an append-only Shea Symphony Human Review Decision timeline comment. It records issue/PR, reviewed evidence, preflight outcome, UAT result, operator decision, residual risk, and proposed target state. Write the note before the guarded state route.
-
-## Routing
-
-After explicit confirmation:
-
-- Approve for Merging: route to Merging.
-- Request Rework: route to Rework with actionable evidence.
-- Need Human Input: route there with the unresolved question.
-- Defer: retain Human Review and append the decision note; do not simulate approval.
-
-For an ordinary native child without an exception, do not create a direct Human Review result; preserve its parent-owned acceptance boundary.
-
-The routing action is the final mutation. Afterwards, only read back the status and run Doctor verification.
-
-## Quality bar
-
-Do not approve when issue scope, review evidence, linked PR, freshness, UAT result, or operator confirmation is missing. Do not replace UAT with a technical test result. Do not overwrite comments or workpads; evidence is append-only.
+Do not approve when the issue contract, linked PR, Agent Review evidence,
+freshness result, operator-owned UAT, visible five-field brief, or explicit
+confirmation is missing. Do not replace UAT with technical verification, hide
+uncertainty, overwrite evidence, or continue implementing or merging after the
+route.
