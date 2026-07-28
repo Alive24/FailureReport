@@ -22,7 +22,8 @@ import {
 } from "../agent/lib/diagnostics/envelope.js";
 import type { DiagnosticSessionWorkpad } from "../agent/lib/diagnostics/workpad.js";
 
-const worktreePath = "/root/.eve/sandbox-cache/worktrees/diagnostic-54";
+const worktreePath =
+  "/canonical/target/.shea/worktrees/failureReport/diagnostic-54";
 const envelope = diagnosticSessionEnvelopeSchema.parse({
   schema_version: "failure-report/diagnostic-session/v1",
   domain_extensions: ["ckb"],
@@ -360,7 +361,7 @@ describe("direct Codex App Server diagnostic transport", () => {
   it("fails closed when the App Server rebinds a session to another worktree", async () => {
     const workpad = new FakeWorkpad();
     const process = new FakeDirectProcess({
-      cwd: "/root/.eve/sandbox-cache/worktrees/diagnostic-other",
+      cwd: "/canonical/target/.shea/worktrees/failureReport/diagnostic-other",
     });
     const runtime = new FakeHostRuntime([process]);
     const resolveModel = createResolver(workpad, runtime);

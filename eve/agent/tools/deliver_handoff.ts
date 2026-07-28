@@ -7,11 +7,11 @@ const deliverHandoff = createDiagnosticHandoffDelivery();
 
 /**
  * Root-only configured delivery boundary. The caller binds the durable report
- * revision but cannot select a template, Project, status field, or destination.
+ * revision but cannot select a target template, Project, field, or destination.
  */
 export default defineTool({
   description:
-    "Publish a configured human-readable implementation handoff and move its GitHub Project item to the configured Backlog or Todo destination after readback.",
+    "Publish a target-owned human-readable implementation handoff and, only when the target repository configures its own Project, move that item to Backlog or Todo after readback.",
   inputSchema: z
     .object({
       report_id: z.string().min(1),

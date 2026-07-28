@@ -42,7 +42,7 @@ describe("Eve development entrypoint", () => {
       "dev:preflight":
         "pnpm --filter @failure-report/protocol --filter @failure-report/ckb-domain-pack run build",
       predev: "pnpm run dev:preflight",
-      dev: "eve dev --no-ui",
+      dev: "node ./scripts/dev.mjs",
     });
     expect(evePackage.scripts?.["dev:preflight"]).not.toMatch(
       /\b(?:add|install)\b/,
@@ -56,6 +56,14 @@ describe("Eve development entrypoint", () => {
       expect(workspacePackage.scripts?.build).toBeTypeOf("string");
       expect(JSON.stringify(workspacePackage.exports)).toContain("./dist/");
     }
+
+    const launcher = await readFile(
+      resolve(eveRoot, "scripts/dev.mjs"),
+      "utf8",
+    );
+    expect(launcher).toContain("--target-workspace");
+    expect(launcher).toContain("FAILURE_REPORT_TARGET_WORKSPACE");
+    expect(launcher).toContain('"dev", "--no-ui"');
   });
 
   it("pins just-bash with automatic dependency installation disabled", async () => {

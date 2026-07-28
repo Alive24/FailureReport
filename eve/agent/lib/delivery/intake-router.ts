@@ -52,6 +52,9 @@ export function createFailureReportIntakeRouter(
     if (!repositoryPolicy) {
       return { status: "not_configured" };
     }
+    if (!repositoryPolicy.tracker) {
+      return { status: "not_configured" };
+    }
     try {
       const tracker = await Promise.resolve(
         options.tracker ?? getDefaultGithubProjectTracker(),

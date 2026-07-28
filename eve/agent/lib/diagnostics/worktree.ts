@@ -10,12 +10,16 @@ import type {
 
 import type { DomainExtension, NativeSkill } from "./domain-extensions.js";
 import {
-  DiagnosticSourceCacheError,
-  DiagnosticSourceCacheManager,
-  resolveManagedDiagnosticWorkspaceLayout,
+  DiagnosticTargetWorkspaceError,
+  DiagnosticTargetWorkspaceManager,
   type DiagnosticSourceResolver,
   type ResolvedDiagnosticSource,
-} from "./source-cache.js";
+} from "./target-workspace.js";
+import {
+  prepareTargetSheaWorkspace,
+  TargetSheaConfigurationError,
+  type TargetSheaWorkspace,
+} from "./target-shea.js";
 
 /**
  * Deterministic, Root-owned diagnostic-worktree lifecycle management.
@@ -65,11 +69,12 @@ export type WorktreePathOperations = {
 export type DiagnosticWorktreeManagerOptions = {
   domainExtensions: readonly DomainExtension[];
   backendId: string;
-  /** Authored host-runtime seam; callers can never provide a workspace path. */
-  runtimeRoot?: string;
-  sourceCache?: DiagnosticSourceResolver;
+  sourceResolver?: DiagnosticSourceResolver;
   git?: GitCommandRunner;
   paths?: WorktreePathOperations;
+  prepareTargetShea?: (input: {
+    canonicalCheckout: string;
+  }) => Promise<TargetSheaWorkspace>;
 };
 
 /** Canonical checkout plus the validated durable state for a diagnostic worktree. */
@@ -77,6 +82,8 @@ export type VerifiedDiagnosticWorktree = {
   canonical_path: string;
   /** Root-private host path; never persisted in the public FailureReport. */
   path: string;
+  /** Target-owned diagnostic guidance loaded from `.shea` for delegation. */
+  diagnostic_prompt: string;
   state: DiagnosticSession;
 };
 
@@ -86,7 +93,7 @@ type ResolvedNativeSkill = {
 };
 
 /** Real filesystem implementation used outside tests. */
-const defaultPathOperations: WorktreePathOperations = {
+export const hostWorktreePathOperations: WorktreePathOperations = {
   async ensureDirectory(path) {
     await mkdir(path, { recursive: true });
   },
@@ -106,25 +113,27 @@ const defaultPathOperations: WorktreePathOperations = {
 export class DiagnosticWorktreeManager {
   private readonly domainExtensions: readonly DomainExtension[];
   private readonly backendId: string;
-  private readonly runtimeRoot?: string;
   private readonly git: GitCommandRunner;
   private readonly paths: WorktreePathOperations;
-  private readonly sourceCache: DiagnosticSourceResolver;
+  private readonly sourceResolver: DiagnosticSourceResolver;
+  private readonly prepareTargetShea: (input: {
+    canonicalCheckout: string;
+  }) => Promise<TargetSheaWorkspace>;
 
   constructor(options: DiagnosticWorktreeManagerOptions) {
     this.domainExtensions = [...options.domainExtensions];
     this.assertDomainExtensions();
     this.backendId = options.backendId;
-    this.runtimeRoot = options.runtimeRoot;
-    this.git = options.git ?? runGit;
-    this.paths = options.paths ?? defaultPathOperations;
-    this.sourceCache =
-      options.sourceCache ??
-      new DiagnosticSourceCacheManager({
-        runtimeRoot: this.runtimeRoot,
+    this.git = options.git ?? runHostGit;
+    this.paths = options.paths ?? hostWorktreePathOperations;
+    this.sourceResolver =
+      options.sourceResolver ??
+      new DiagnosticTargetWorkspaceManager({
         git: this.git,
         paths: this.paths,
       });
+    this.prepareTargetShea =
+      options.prepareTargetShea ?? prepareTargetSheaWorkspace;
   }
 
   /** Exposes the fixed extension skill names for envelope validation without paths. */
@@ -161,7 +170,8 @@ export class DiagnosticWorktreeManager {
     const source = await this.acquireCanonicalSource(report);
     const canonicalPath = source.canonical_path;
     const nativeSkills = await this.resolveNativeSkillSources();
-    const isolatedRoot = await this.resolveIsolatedWorktreeRoot();
+    const targetShea = await this.resolveTargetShea(canonicalPath);
+    const isolatedRoot = targetShea.worktree_root;
     const baseRevision = source.base_revision;
     const worktreePath = this.worktreePath(report, isolatedRoot);
 
@@ -199,7 +209,7 @@ export class DiagnosticWorktreeManager {
     // Resolve after `git worktree add` to reject a root containing hostile symlinks.
     if (!isPathInside(isolatedRoot, actualPath)) {
       throw new DiagnosticSafetyError(
-        "The allocated diagnostic worktree resolves outside Root-owned `.eve/sandbox-cache/worktrees`.",
+        "The allocated diagnostic worktree resolves outside the target canonical checkout's `.shea/worktrees/failureReport` directory.",
       );
     }
     await this.provisionNativeSkills(actualPath, nativeSkills);
@@ -212,6 +222,7 @@ export class DiagnosticWorktreeManager {
     return {
       canonical_path: canonicalPath,
       path: actualPath,
+      diagnostic_prompt: renderTargetDiagnosticPrompt(targetShea),
       state: {
         lifecycle: "active",
         domain_extensions: this.domainExtensionIds(),
@@ -425,7 +436,8 @@ export class DiagnosticWorktreeManager {
     );
     const canonicalPath = source.canonical_path;
     const nativeSkills = await this.resolveNativeSkillSources();
-    const isolatedRoot = await this.resolveIsolatedWorktreeRoot();
+    const targetShea = await this.resolveTargetShea(canonicalPath);
+    const isolatedRoot = targetShea.worktree_root;
     const expectedPath = this.worktreePath(report, isolatedRoot);
 
     let declaredStat: WorktreePathStat;
@@ -458,7 +470,7 @@ export class DiagnosticWorktreeManager {
     }
     if (!isPathInside(isolatedRoot, worktreePath)) {
       throw new DiagnosticSafetyError(
-        "The saved diagnostic worktree resolves outside Root-owned `.eve/sandbox-cache/worktrees`.",
+        "The saved diagnostic worktree resolves outside the target canonical checkout's `.shea/worktrees/failureReport` directory.",
       );
     }
     if (worktreePath === canonicalPath) {
@@ -515,6 +527,7 @@ export class DiagnosticWorktreeManager {
     return {
       canonical_path: canonicalPath,
       path: worktreePath,
+      diagnostic_prompt: renderTargetDiagnosticPrompt(targetShea),
       state: {
         ...state,
         worktree: {
@@ -715,42 +728,44 @@ export class DiagnosticWorktreeManager {
   private async acquireCanonicalSource(
     report: FailureReport,
   ): Promise<ResolvedDiagnosticSource> {
-    return this.wrapSourceCache(() => this.sourceCache.acquire(report));
+    return this.wrapSourceResolver(() => this.sourceResolver.acquire(report));
   }
 
   private async restoreCanonicalSource(
     report: FailureReport,
     recordedBaseRevision: string,
   ): Promise<ResolvedDiagnosticSource> {
-    return this.wrapSourceCache(() =>
-      this.sourceCache.restore(report, recordedBaseRevision),
+    return this.wrapSourceResolver(() =>
+      this.sourceResolver.restore(report, recordedBaseRevision),
     );
   }
 
-  private async wrapSourceCache(
+  private async wrapSourceResolver(
     operation: () => Promise<ResolvedDiagnosticSource>,
   ): Promise<ResolvedDiagnosticSource> {
     try {
       return await operation();
     } catch (error) {
-      if (error instanceof DiagnosticSourceCacheError) {
+      if (error instanceof DiagnosticTargetWorkspaceError) {
         throw new DiagnosticSafetyError(error.message);
       }
       throw error;
     }
   }
 
-  private async resolveIsolatedWorktreeRoot(): Promise<string> {
+  private async resolveTargetShea(
+    canonicalPath: string,
+  ): Promise<TargetSheaWorkspace> {
     try {
-      return (
-        await resolveManagedDiagnosticWorkspaceLayout({
-          runtimeRoot: this.runtimeRoot,
-          paths: this.paths,
-        })
-      ).worktree_root;
-    } catch {
+      return await this.prepareTargetShea({
+        canonicalCheckout: canonicalPath,
+      });
+    } catch (error) {
+      if (error instanceof TargetSheaConfigurationError) {
+        throw new DiagnosticSafetyError(error.message);
+      }
       throw new DiagnosticSafetyError(
-        "Root's `.eve/sandbox-cache/worktrees` directory cannot be resolved safely.",
+        "The target canonical checkout's FailureReport `.shea` workspace cannot be resolved safely.",
       );
     }
   }
@@ -766,7 +781,7 @@ export class DiagnosticWorktreeManager {
     ]);
     if (worktreeOrigin !== canonicalRemote) {
       throw new DiagnosticSafetyError(
-        "The diagnostic worktree origin does not match Root's canonical managed source.",
+        "The diagnostic worktree origin does not match Root's process-bound target.",
       );
     }
   }
@@ -910,7 +925,10 @@ export class DiagnosticWorktreeManager {
 }
 
 /** Executes Git without a shell so configured paths and arguments stay literal. */
-async function runGit(input: { cwd: string; args: string[] }): Promise<string> {
+export async function runHostGit(input: {
+  cwd: string;
+  args: string[];
+}): Promise<string> {
   return new Promise<string>((resolvePromise, reject) => {
     const child = spawn("git", ["-C", input.cwd, ...input.args], {
       stdio: ["ignore", "pipe", "pipe"],
@@ -989,6 +1007,12 @@ function isNotFoundError(error: unknown): boolean {
     "code" in error &&
     error.code === "ENOENT"
   );
+}
+
+function renderTargetDiagnosticPrompt(workspace: TargetSheaWorkspace): string {
+  return [workspace.prompts.intake.trim(), workspace.prompts.synthesis.trim()]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 /** Converts a caught setup error into bounded operator-facing diagnostic context. */
