@@ -865,6 +865,19 @@ export function createExistingIssueRootRequest(
   };
 }
 
+export function rootResultFailureCode(status) {
+  if (status === "completed") {
+    return undefined;
+  }
+  if (status === "failed") {
+    return "root_flow_failed";
+  }
+  if (status === "needs_input") {
+    return "root_needs_input";
+  }
+  return "root_incomplete";
+}
+
 async function invokeExistingIssueFlow({ fixture, host, signal }) {
   const client = new Client({
     host,
@@ -877,12 +890,9 @@ async function invokeExistingIssueFlow({ fixture, host, signal }) {
     undefined,
     signal,
   );
-  if (response.result.status !== "completed") {
-    throw new CaptureError(
-      response.result.status === "failed"
-        ? "root_flow_failed"
-        : "codex_flow_failed",
-    );
+  const failureCode = rootResultFailureCode(response.result.status);
+  if (failureCode) {
+    throw new CaptureError(failureCode);
   }
   if (
     !response.result.issue ||

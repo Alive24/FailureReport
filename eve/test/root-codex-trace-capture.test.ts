@@ -25,6 +25,7 @@ import {
   parseCaptureEnvironment,
   prepareContainedOutputDirectory,
   repositoryFromRemote,
+  rootResultFailureCode,
   runRealRootCodexTraceCapture,
   validateCanonicalSpans,
 } from "../scripts/root-codex-trace-capture.mjs";
@@ -277,6 +278,13 @@ describe("real Root-to-Codex trace capture request", () => {
         "Run one real FailureReport diagnosis for this operator-approved disposable fixture. " +
         `Use the bound immutable target revision ${fixtureRevision}.`,
     });
+  });
+
+  it("keeps incomplete Root outcomes distinct without exposing result content", () => {
+    expect(rootResultFailureCode("completed")).toBeUndefined();
+    expect(rootResultFailureCode("failed")).toBe("root_flow_failed");
+    expect(rootResultFailureCode("needs_input")).toBe("root_needs_input");
+    expect(rootResultFailureCode("accepted")).toBe("root_incomplete");
   });
 });
 
