@@ -12,6 +12,7 @@
   "scripts": {
     "build": "turbo run build",
     "check": "turbo run check",
+    "halo:trace-capture-real": "pnpm --filter @Alive24/FailureReport run dev:preflight && node eve/scripts/real-root-codex-trace-capture.mjs",
     "test": "turbo run test",
     "format:check": "prettier --check ."
   },

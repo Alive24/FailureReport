@@ -44,6 +44,7 @@ describe("Eve development entrypoint", () => {
       predev: "pnpm run dev:preflight",
       dev: "node ./scripts/dev.mjs",
     });
+    expect(evePackage.dependencies?.["@inference/tracing"]).toBe("0.1.8");
     expect(evePackage.scripts?.["dev:preflight"]).not.toMatch(
       /\b(?:add|install)\b/,
     );
@@ -64,6 +65,18 @@ describe("Eve development entrypoint", () => {
     expect(launcher).toContain("--target-workspace");
     expect(launcher).toContain("FAILURE_REPORT_TARGET_WORKSPACE");
     expect(launcher).toContain('"dev", "--no-ui"');
+
+    const instrumentation = await readFile(
+      resolve(eveRoot, "agent/instrumentation.ts"),
+      "utf8",
+    );
+    expect(instrumentation).toContain("defineCatalystEveInstrumentation");
+    expect(instrumentation).toContain(
+      'process.env.FAILURE_REPORT_REAL_TRACE_CAPTURE === "1"',
+    );
+    expect(instrumentation).toContain("recordInputs: false");
+    expect(instrumentation).toContain("recordOutputs: false");
+    expect(instrumentation).toContain('batching: "simple"');
   });
 
   it("pins just-bash with automatic dependency installation disabled", async () => {

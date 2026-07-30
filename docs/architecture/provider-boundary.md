@@ -129,6 +129,8 @@ When extensions are selected, the prepared delegation begins with every selected
 
 Eve is pinned to its just-bash backend for Root orchestration. just-bash has a virtual filesystem and no real Git or package-manager binaries, so it is not a substitute for the controlled host workspace. Root's authored diagnostics adapters inspect and manage the trusted canonical checkout and target `.shea` workspace; the direct Codex App Server transport is launched only after Root validates the envelope and workpad. It sends:
 
+The root `agent/instrumentation.ts` hook is separately opt-in. Ordinary development and product starts export no Catalyst traces. Only the explicit `halo:trace-capture-real` demo/test harness activates the pinned framework-native Eve integration, disables input/output recording, supplies an immutable `service.version`, and owns a bounded loopback OTLP listener. It adds no manual Root, model, tool, or delegated-agent spans and is not a product trace service. The complete operator contract is in [`docs/operations/halo-real-trace-capture.md`](../operations/halo-real-trace-capture.md).
+
 ```text
 thread/start or thread/resume
   cwd: Root-owned detached diagnostic worktree
