@@ -18,6 +18,7 @@ import {
   assertLoopbackEndpoint,
   assertSafeReceipt,
   atomicallyFinalizeCapture,
+  createExistingIssueRootRequest,
   createCaptureReceipt,
   decodeOtlpTracePayload,
   loadCaptureConfiguration,
@@ -251,6 +252,31 @@ describe("real Root-to-Codex trace capture configuration", () => {
         join(repository, ".shea", "artifacts", "halo", "run"),
       ),
     ).rejects.toThrowError(captureError("output_directory_symlink"));
+  });
+});
+
+describe("real Root-to-Codex trace capture request", () => {
+  it("asks Root to read and diagnose the selected existing Issue in one turn", () => {
+    expect(
+      createExistingIssueRootRequest(
+        {
+          repository: "Alive24/Fixture",
+          issue_number: 123,
+          revision: fixtureRevision,
+        },
+        "trace-capture-request",
+      ),
+    ).toEqual({
+      request_id: "trace-capture-request",
+      operation: "start",
+      issue_selector: {
+        repository: "Alive24/Fixture",
+        issue_number: 123,
+      },
+      message:
+        "Run one real FailureReport diagnosis for this operator-approved disposable fixture. " +
+        `Use the bound immutable target revision ${fixtureRevision}.`,
+    });
   });
 });
 

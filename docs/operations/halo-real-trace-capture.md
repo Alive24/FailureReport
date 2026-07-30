@@ -6,7 +6,7 @@ FailureReport exposes one opt-in command for a Shea Halo candidate experiment:
 pnpm halo:trace-capture-real
 ```
 
-This is a real, model-backed demo/test harness. It starts the candidate FailureReport checkout, rehydrates one operator-approved existing fixture Issue, runs one Eve Root diagnosis through the declared Codex worker, captures the framework-native Catalyst/OpenTelemetry stream on an ephemeral loopback listener, and atomically finalizes HALO canonical one-span-per-line JSONL. It is not the synthetic exporter-contract smoke from FailureReport #26, the read-only native verifier tracked by FailureReport #30, or a product trace backend.
+This is a real, model-backed demo/test harness. It starts the candidate FailureReport checkout, asks Eve Root to read and diagnose one operator-approved existing fixture Issue in a single turn through the declared Codex worker, captures the framework-native Catalyst/OpenTelemetry stream on an ephemeral loopback listener, and atomically finalizes HALO canonical one-span-per-line JSONL. It is not the synthetic exporter-contract smoke from FailureReport #26, the read-only native verifier tracked by FailureReport #30, or a product trace backend.
 
 ## Required runtime configuration
 

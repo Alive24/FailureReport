@@ -848,50 +848,48 @@ async function waitForRuntimeReadiness({ child, port, signal }) {
   }
 }
 
+export function createExistingIssueRootRequest(
+  fixture,
+  requestId = `trace-capture-${randomUUID()}`,
+) {
+  return {
+    request_id: requestId,
+    operation: "start",
+    issue_selector: {
+      repository: fixture.repository,
+      issue_number: fixture.issue_number,
+    },
+    message:
+      "Run one real FailureReport diagnosis for this operator-approved disposable fixture. " +
+      `Use the bound immutable target revision ${fixture.revision}.`,
+  };
+}
+
 async function invokeExistingIssueFlow({ fixture, host, signal }) {
   const client = new Client({
     host,
     redirect: "manual",
     preserveCompletedSessions: true,
   });
-  const firstRequest = {
-    request_id: `trace-capture-${randomUUID()}`,
-    operation: "start",
-    issue_selector: {
-      repository: fixture.repository,
-      issue_number: fixture.issue_number,
-    },
-    message: "Rehydrate the explicitly selected disposable fixture Issue.",
-  };
-  const first = await sendRootRequest(client, firstRequest, undefined, signal);
-  if (
-    first.result.status !== "completed" ||
-    !first.result.issue ||
-    first.result.issue.repository !== fixture.repository ||
-    first.result.issue.issue_number !== fixture.issue_number
-  ) {
-    throw new CaptureError("root_rehydration_failed");
-  }
-  const secondRequest = {
-    request_id: `trace-capture-${randomUUID()}`,
-    operation: "start",
-    issue: first.result.issue,
-    message:
-      "Run one real FailureReport diagnosis for this operator-approved disposable fixture. " +
-      `Use the bound immutable target revision ${fixture.revision}.`,
-  };
-  const second = await sendRootRequest(
+  const response = await sendRootRequest(
     client,
-    secondRequest,
-    first.sessionState,
+    createExistingIssueRootRequest(fixture),
+    undefined,
     signal,
   );
-  if (second.result.status !== "completed") {
+  if (response.result.status !== "completed") {
     throw new CaptureError(
-      second.result.status === "failed"
+      response.result.status === "failed"
         ? "root_flow_failed"
         : "codex_flow_failed",
     );
+  }
+  if (
+    !response.result.issue ||
+    response.result.issue.repository !== fixture.repository ||
+    response.result.issue.issue_number !== fixture.issue_number
+  ) {
+    throw new CaptureError("root_flow_failed");
   }
 }
 
