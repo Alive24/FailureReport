@@ -19,7 +19,8 @@ Preserve these architecture boundaries:
 - Eve Root is the sole supervisor.
 - Eve Channels are ingress.
 - Optional domain extensions contribute only knowledge, native skills, and deterministic tools; generic diagnosis must not invent a placeholder domain or skill.
-- Root owns workpads and host-managed workspaces under `.eve/sandbox-cache`.
+- One local FailureReport process is bound to one caller-selected canonical target checkout; public requests cannot supply or change that host path.
+- Root owns workpads and host-managed diagnostic worktrees under the target checkout's `.shea/worktrees/failureReport/`.
 - Codex is the diagnostic worker.
 - MCP, Temporal, and the Codex plugin remain outer adapters.
 - Diagnostic branches are reviewable snapshots, not implementation or pull-request branches.
