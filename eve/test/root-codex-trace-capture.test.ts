@@ -41,7 +41,7 @@ afterEach(async () => {
 });
 
 describe("real Root-to-Codex trace capture configuration", () => {
-  it("requires every operator-owned immutable input", () => {
+  it("requires every immutable runtime input", () => {
     expect(() => parseCaptureEnvironment({})).toThrowError(
       captureError("missing_runtime_input"),
     );
@@ -59,6 +59,40 @@ describe("real Root-to-Codex trace capture configuration", () => {
         }),
       ),
     ).toThrowError(captureError("source_revision_invalid"));
+  });
+
+  it("uses Halo's exact candidate revision and rejects conflicting overrides", () => {
+    expect(
+      parseCaptureEnvironment(
+        validEnvironment({
+          FAILURE_REPORT_TRACE_EXPECTED_SOURCE_REVISION: "",
+          CATALYST_SERVICE_VERSION: sourceRevision,
+        }),
+      ).expected_source_revision,
+    ).toBe(sourceRevision);
+    expect(() =>
+      parseCaptureEnvironment(
+        validEnvironment({
+          FAILURE_REPORT_TRACE_EXPECTED_SOURCE_REVISION: fixtureRevision,
+          CATALYST_SERVICE_VERSION: sourceRevision,
+        }),
+      ),
+    ).toThrowError(captureError("source_revision_conflict"));
+    expect(
+      parseCaptureEnvironment(
+        validEnvironment({
+          CATALYST_SERVICE_VERSION: sourceRevision,
+        }),
+      ).expected_source_revision,
+    ).toBe(sourceRevision);
+    expect(() =>
+      parseCaptureEnvironment(
+        validEnvironment({
+          FAILURE_REPORT_TRACE_EXPECTED_SOURCE_REVISION: "",
+          CATALYST_SERVICE_VERSION: "",
+        }),
+      ),
+    ).toThrowError(captureError("missing_runtime_input"));
   });
 
   it("rejects tokens, credentials, DNS names, and non-loopback endpoints", () => {

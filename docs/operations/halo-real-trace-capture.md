@@ -10,7 +10,7 @@ This is a real, model-backed demo/test harness. It starts the candidate FailureR
 
 ## Required runtime configuration
 
-The operator must provide all six values:
+The operator must provide the five fixture and output values below. The source revision comes from Shea Halo's standard candidate binding during a managed experiment, or from an explicit standalone-UAT override:
 
 | Environment variable | Contract |
 | --- | --- |
@@ -18,8 +18,9 @@ The operator must provide all six values:
 | `FAILURE_REPORT_TRACE_FIXTURE_ISSUE_NUMBER` | Positive existing Issue number selected for this run |
 | `FAILURE_REPORT_TRACE_FIXTURE_REVISION` | Full immutable revision currently checked out by the fixture |
 | `FAILURE_REPORT_TRACE_TARGET_CHECKOUT` | Absolute real path to that clean fixture checkout |
-| `FAILURE_REPORT_TRACE_EXPECTED_SOURCE_REVISION` | Full immutable `HEAD` of the clean FailureReport candidate checkout |
 | `FAILURE_REPORT_TRACE_OUTPUT_DIRECTORY` | Absolute empty directory strictly below the candidate’s ignored `.shea/artifacts/halo/` tree |
+
+Shea Halo sets `CATALYST_SERVICE_VERSION` to the exact fixed candidate revision for post-publication experiments, and this command uses that value as the expected FailureReport source revision. A standalone operator UAT may instead set `FAILURE_REPORT_TRACE_EXPECTED_SOURCE_REVISION` to the full immutable `HEAD`. If both values are present, they must be identical or the command fails before startup.
 
 The target checkout’s canonical `origin`, `HEAD`, and clean state must match the fixture identity. The candidate checkout’s `HEAD` and clean state must match the expected source revision. A mutable ref such as a branch or tag is never accepted.
 
@@ -47,7 +48,7 @@ The fixture Issue may receive only the append-only workpad activity produced by 
 
 ## Shea Halo configured action
 
-Configure the candidate experiment as a runtime action executed from the fixed candidate worktree. Bind the six variables above from operator-owned Halo runtime configuration, set the expected source revision to the candidate SHA, and choose a fresh empty leaf below `.shea/artifacts/halo/`. The action itself is exactly:
+Configure the candidate experiment as a runtime action executed from the fixed candidate worktree. Bind the five operator-owned variables above from Halo runtime configuration and choose a fresh empty leaf below `.shea/artifacts/halo/`. Halo supplies the exact candidate SHA through `CATALYST_SERVICE_VERSION`. The action itself is exactly:
 
 ```text
 pnpm halo:trace-capture-real

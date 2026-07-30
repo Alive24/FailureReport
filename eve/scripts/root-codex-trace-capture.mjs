@@ -39,6 +39,7 @@ export const captureEnvironmentVariables = Object.freeze({
   fixtureRevision: "FAILURE_REPORT_TRACE_FIXTURE_REVISION",
   targetCheckout: "FAILURE_REPORT_TRACE_TARGET_CHECKOUT",
   expectedSourceRevision: "FAILURE_REPORT_TRACE_EXPECTED_SOURCE_REVISION",
+  haloCandidateRevision: "CATALYST_SERVICE_VERSION",
   outputDirectory: "FAILURE_REPORT_TRACE_OUTPUT_DIRECTORY",
 });
 
@@ -99,11 +100,27 @@ export function parseCaptureEnvironment(environment = process.env) {
     captureEnvironmentVariables.fixtureRevision,
     "fixture_revision_invalid",
   );
-  const expectedSourceRevision = requiredFullRevision(
-    environment,
-    captureEnvironmentVariables.expectedSourceRevision,
-    "source_revision_invalid",
+  const explicitSourceRevision = trimmed(
+    environment[captureEnvironmentVariables.expectedSourceRevision],
   );
+  const haloCandidateRevision = trimmed(
+    environment[captureEnvironmentVariables.haloCandidateRevision],
+  );
+  if (
+    explicitSourceRevision &&
+    haloCandidateRevision &&
+    explicitSourceRevision !== haloCandidateRevision
+  ) {
+    throw new CaptureError("source_revision_conflict");
+  }
+  const expectedSourceRevision =
+    explicitSourceRevision || haloCandidateRevision;
+  if (!expectedSourceRevision) {
+    throw new CaptureError("missing_runtime_input");
+  }
+  if (!fullRevisionPattern.test(expectedSourceRevision)) {
+    throw new CaptureError("source_revision_invalid");
+  }
   const targetCheckout = requiredAbsolutePath(
     environment,
     captureEnvironmentVariables.targetCheckout,
