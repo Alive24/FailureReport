@@ -16,6 +16,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
+    "demo:existing-issue": "node scripts/demo-existing-issue.mjs",
     "mcp": "node dist/stdio.js",
     "test": "vitest run"
   },

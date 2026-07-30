@@ -42,19 +42,23 @@ The core diagnostic value has already been demonstrated:
 - A remote diagnostic snapshot exists at [`diagnostic/56-bug-campaign-start-end-times-do-not-update-correctly`](https://github.com/Alive24/CKBoost/tree/diagnostic/56-bug-campaign-start-end-times-do-not-update-correctly).
 - Eve Root, the generic Codex worker, the CKB domain extension, GitHub workpads, the Codex plugin, MCP wrapper, diagnostic finalization, and handoff rendering/delivery boundaries all exist in the repository.
 
-The current readiness estimate is approximately **75–80% for a focused local alpha demonstration**. The remaining work is concentrated in one end-to-end integration path rather than a broad feature build.
+The current readiness estimate is approximately **90–95% for a focused local alpha demonstration**. The core end-to-end path has succeeded; the remaining work is rehearsal, packaging, verification, and fallback preparation rather than product-scope expansion.
 
-## Critical gap
+Use the [OpenSourceIRL demo runbook](opensourceirl-2026-07-31-runbook.md) for the exact startup, live entrypoint, presentation sequence, and recovery path.
 
-CKBoost #56 currently exposes a lifecycle mismatch:
+## Critical path completed
 
-- the diagnostic session has been finalized;
-- the diagnostic snapshot branch has been pushed;
-- the report remains `diagnosed`;
-- the handoff remains `not_ready` with a blocked gate;
-- the Issue does not yet contain the final human-readable implementation handoff.
+The previously blocking CKBoost #56 lifecycle mismatch has been closed through FailureReport itself:
 
-The demo is not ready until the following path succeeds through FailureReport itself:
+- Root re-entered the existing Issue and read its durable workpad.
+- The exact reporter timezone and uncaptured live transaction were classified as non-material residual risks rather than assumption-dependent blockers.
+- The report reached `todo_ready` with `gate_decision: Ready`.
+- The diagnostic session and pushed diagnostic-only snapshot were preserved.
+- The deterministic handoff was rendered from revision-bound durable state.
+- Delivery created a new [human-readable implementation handoff comment](https://github.com/Alive24/CKBoost/issues/56#issuecomment-5104104249).
+- The structured handoff remains folded after the human view.
+- CKBoost #56 remained tracker-free and was not added to FailureReport's Project.
+- FailureReport created no implementation branch or pull request.
 
 ```text
 finalized diagnosis
@@ -63,7 +67,22 @@ finalized diagnosis
 → new human-readable Issue comment
 ```
 
-The handoff must be understandable without opening the folded structured JSON. The structured payload remains authoritative and should appear after the human-readable view.
+The handoff is understandable without opening the folded structured JSON, while the structured payload remains available as the authoritative representation.
+
+## Remaining demo work
+
+- Prepare screenshots or a short recording for the original long-running diagnosis.
+- Prepare the browser tabs, terminal font size, and window order on the presentation machine.
+- Refresh OpenWiki only after authoritative code and documentation have stabilized.
+
+The first complete read-only rehearsal passed on 28 July:
+
+- Eve started from a clean, isolated local Workflow World with CKBoost as its fixed target workspace.
+- The actual MCP stdio wrapper entered through the Eve Channel and inspected CKBoost #56.
+- Root returned revision 7, `todo_ready`, a high-confidence diagnosis, the finalized diagnostic snapshot, and the delivered handoff.
+- The Issue comment count remained 6 and the last comment remained `5104104249` before and after the rehearsal.
+- The full build, type-check, test, and formatting suite passed.
+- The snapshot branch and final handoff were read back from GitHub.
 
 ## Work plan
 
@@ -79,11 +98,11 @@ The handoff must be understandable without opening the folded structured JSON. T
 
 ### Wednesday, 29 July — close the handoff lifecycle
 
-- Make the finalized CKBoost #56 diagnosis reach a valid Ready implementation contract when no material unknown remains.
-- Render and deliver a new human-readable handoff comment without editing existing comments.
-- Preserve the diagnostic branch as a diagnostic-only snapshot.
-- Confirm that no PR or implementation branch is created by FailureReport.
-- Confirm tracker-free delivery for CKBoost #56 unless CKBoost explicitly configures its own Project routing.
+- Completed: the finalized CKBoost #56 diagnosis reached a valid Ready implementation contract with non-material uncertainty preserved as residual risk.
+- Completed: FailureReport rendered and delivered a new human-readable handoff comment without editing existing comments.
+- Completed: the diagnostic branch remains a diagnostic-only snapshot.
+- Completed: FailureReport created no PR or implementation branch.
+- Completed: delivery was tracker-free for CKBoost #56.
 
 ### Thursday, 30 July — rehearse and package the demonstration
 
@@ -94,6 +113,8 @@ The handoff must be understandable without opening the folded structured JSON. T
 - Record the exact commands, expected visible checkpoints, and recovery steps.
 - Prepare screenshots or a short backup recording in case live model, GitHub, or network latency is unsuitable.
 - Refresh OpenWiki only after authoritative code and documentation have stabilized.
+
+The repository-local MCP demo client is the guaranteed live entrypoint while the repository remains intentionally marketplace-free. The Codex plugin is the packaged end-user surface, but installing it in Codex currently requires a configured marketplace and remains outside the demo environment unless the operator explicitly changes that policy.
 
 ### Friday, 31 July — present the focused alpha
 

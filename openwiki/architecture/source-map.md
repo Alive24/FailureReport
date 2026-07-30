@@ -29,13 +29,16 @@ Use this page to choose the smallest authoritative source set before changing co
 | `/eve/agent/channels/eve.ts` | Default `/eve/v1/session*` HTTP ingress |
 | `/eve/agent/channels/github.ts` | Optional team-authorized Issue-comment ingress |
 | `/eve/agent/tools/` | Root tools for workpad read/publish, prepare/finalize, handoff rendering, configured intake routing, and handoff delivery |
-| `/eve/agent/lib/diagnostics/` | Source cache, detached worktree, session, completion, extension registry, envelope, finalization, and handoff helpers |
+| `/eve/agent/lib/diagnostics/` | Process-bound target verification, target `.shea` preparation, detached worktree, session, completion, extension registry, envelope, finalization, and handoff helpers |
 | `/eve/agent/lib/delivery/` | Deployment-owned delivery policy, safe template loading/rendering, intake routing, and receipt creation |
 | `/eve/agent/lib/backends/` | Root model plus direct Codex App Server preflight, transport, model wrapper, and approval broker |
 | `/eve/agent/lib/integrations/github/` | Workpad codec/provenance, optimistic publication, authorization, and Octokit/legacy CLI gateways |
 | `/eve/agent/subagents/codex/` | The single consumer-owned diagnostic worker and its restrictions |
 | `/eve/agent/extensions/ckb.ts` | Mount point for the reusable CKB domain extension |
 | `/eve/config/workers/codex-app-server.json` | Worker command and execution policy |
+| `/eve/scripts/dev.mjs` | Required target-workspace development launcher |
+| `/eve/scripts/demo-start.mjs` | Isolated production-build launcher used by the current repository demo procedure |
+| `/eve/config/failure-report/` | Authored defaults copied only when target `.shea` assets are missing |
 
 The diagnostic helpers under `agent/lib/` are host-runtime implementation owned by Root. They are not public adapter APIs and are never mounted into the target diagnostic worktree. Their interaction is documented in [runtime and workspaces](../workflows/runtime-and-workspaces.md).
 
@@ -51,6 +54,7 @@ The diagnostic helpers under `agent/lib/` are host-runtime implementation owned 
 
 ## Examples and extension points
 
+- `/docs/demos/opensourceirl-2026-07-31.md` records the completed CKBoost #56 handoff boundary; `/docs/demos/opensourceirl-2026-07-31-runbook.md` defines the current repository demo procedure, and `/packages/mcp-adapter/scripts/demo-existing-issue.mjs` implements its read-only MCP entrypoint.
 - `/examples/add-custom-subagent/README.md` distinguishes a consumer-owned runtime worker from a domain extension.
 - `/examples/temporal-host/README.md` shows Activity ownership and why workflow code must remain deterministic.
 - `/examples/mcp-host/` contains outer MCP host composition; it must still call Root through the default Channel.
@@ -61,7 +65,7 @@ The diagnostic helpers under `agent/lib/` are host-runtime implementation owned 
 
 - `/packages/protocol/test/protocol.test.ts` — schema strictness, generic empty-extension sessions, legacy rejection, readiness, workpad envelopes/groups, and handoff determinism.
 - `/eve/test/codex-diagnostic-session.test.ts` and `/eve/test/codex-app-server-preflight.test.ts` — generic or extension-assisted allocation, restore, skill discovery, thread state, finalization, and snapshot policy.
-- `/eve/test/source-cache.test.ts` and `/eve/test/host-managed-workspace.test.ts` — fixed ownership, origin, containment, path privacy, and Git invariants.
+- `/eve/test/target-workspace.test.ts`, `/eve/test/target-shea.test.ts`, `/eve/test/host-managed-workspace.test.ts`, and `/eve/test/development-entrypoint.test.ts` — process binding, origin, target-owned assets, containment, path privacy, startup, and Git invariants.
 - `/eve/test/codex-app-server-*.test.ts` and `/eve/test/native-approval-broker.test.ts` — preflight, transport, process lifecycle, events, approvals, and failure classification.
 - `/eve/test/diagnostic-completion-reconciliation.test.ts` and `/eve/test/handoff-renderer.test.ts` — append-safe completions and read-only revision-bound output.
 - `/eve/test/issue-workpad.test.ts`, `/eve/test/octokit-issue-gateway.test.ts`, `/eve/test/github-issue-channel.test.ts` — provenance, publication groups, races, and authorized ingress.
@@ -72,4 +76,4 @@ See [operations and testing](../operations/testing-and-extension.md) for command
 
 ## Excluded or non-authoritative areas
 
-Do not document or inspect secrets, `.env` files, `/.eve` runtime state, `/.shea/logs`, `/.shea/artifacts`, `/.shea/worktrees`, generated `dist/`, caches, temporary diagnostic evidence, or target worktrees. Fixtures are evidence of expected behavior only when aligned with current schemas and tests; they are not authority for unsupported runtime conclusions. Root-level `/AGENTS.md` and `/CLAUDE.md` currently point readers to this generated wiki but are not generated documentation. not generated documentation.
+Do not document or inspect secrets, `.env` files, `/.eve` runtime state, `/.shea/logs`, `/.shea/artifacts`, `/.shea/worktrees`, generated `dist/`, caches, temporary diagnostic evidence, or target worktrees. Fixtures are evidence of expected behavior only when aligned with current schemas and tests; they are not authority for unsupported runtime conclusions. Root-level `/AGENTS.md` and `/CLAUDE.md` currently point readers to this generated wiki but are not generated documentation.

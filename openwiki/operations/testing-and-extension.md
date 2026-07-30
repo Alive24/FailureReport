@@ -26,10 +26,10 @@ The root uses Turborepo. `build` depends on package builds and may emit ignored 
 For normal Eve development:
 
 ```bash
-pnpm --filter @Alive24/FailureReport dev
+pnpm --filter @Alive24/FailureReport dev --target-workspace /absolute/path/to/target-checkout
 ```
 
-`predev` runs `dev:preflight`, building only `@failure-report/protocol` and `@failure-report/ckb-domain-pack`, then starts `eve dev --no-ui`. This cold-start path must not run `pnpm add`, rewrite manifests/lockfiles, or provision Docker, a VM, or a microsandbox. Root’s `just-bash` backend has automatic installation disabled.
+`predev` runs `dev:preflight`, building only `@failure-report/protocol` and `@failure-report/ckb-domain-pack`. The launcher then requires an absolute real non-symlink target directory, canonicalizes it as the process-lifetime `FAILURE_REPORT_TARGET_WORKSPACE`, and starts `eve dev --no-ui`. Root later verifies that directory is the matching Git top level and `origin`; a request for another repository fails closed. This cold-start path must not run `pnpm add`, rewrite manifests/lockfiles, or provision Docker, a VM, or a microsandbox. Root’s `just-bash` backend has automatic installation disabled.
 
 Clean-checkout non-interactive smoke:
 
@@ -52,12 +52,25 @@ FAILURE_REPORT_RUN_CODEX_APP_SERVER_SMOKE=1 \
   pnpm --filter @Alive24/FailureReport exec vitest run test/codex-native-skill.smoke.test.ts
 ```
 
-To use the Codex plugin, start Eve first and load `/packages/codex-plugin/failure-report`. The plugin launches the MCP adapter, which uses the local Channel default unless an explicit deployed host is configured. See [integration boundaries](../integrations/boundaries.md).
+The packaged Codex plugin is installed through a configured Codex marketplace; this repository intentionally has no marketplace. For a repository-local, marketplace-free read-only inspection, build Eve production output, start an isolated process, then invoke the real MCP stdio wrapper:
+
+```bash
+cd eve
+pnpm exec eve build --skip-sandbox-prewarm
+pnpm run demo:start -- --target-workspace /absolute/path/to/target-checkout
+
+# In another terminal from the repository root:
+export FAILURE_REPORT_EVE_HOST="http://127.0.0.1:2000"
+export FAILURE_REPORT_MCP_SESSION_STORE="/tmp/failure-report-demo-mcp.json"
+pnpm --filter @failure-report/mcp-adapter demo:existing-issue -- owner/repository 123
+```
+
+`demo:start` uses a fresh temporary Eve app root so it cannot resume `eve/.eve` development state. `demo:existing-issue` sends an explicit read-only `inspect`; it does not replay diagnosis or mutate GitHub, branches, handoffs, or trackers. This is the current repository demo procedure; `/docs/demos/opensourceirl-2026-07-31-runbook.md` is the authoritative guide to its exact configuration, presentation order, live-write policy, and recovery path. See [integration boundaries](../integrations/boundaries.md) and the [completed CKBoost walkthrough](../workflows/runtime-and-workspaces.md#opensourceirl-read-only-entrypoint-and-completed-ckboost-path).
 
 ## Authentication and authority runbook
 
 - GitHub API default: install `gh`, run `gh auth login`, and let Root obtain the active token once per process for Octokit.
-- Source acquisition: configure ordinary host Git authentication separately; clone/fetch runs only in Root’s source cache.
+- Target source access: configure ordinary host Git authentication separately. Root fetches only through the process-bound canonical checkout, verifies its `origin`, and creates diagnostic worktrees only beneath that target’s `.shea/worktrees/failureReport/`; it does not clone or select another checkout.
 - Central deployments may select runtime token or GitHub App modes as documented in `/README.md`.
 - Optional tracker routing and handoff delivery use `FAILURE_REPORT_HANDOFF_DELIVERY_POLICY`; the active GitHub identity needs Issue-comment write access and Project v2 read/write access, and every configured Project must define exactly one required status field plus the selected `Failure Report`, `Backlog`, or `Todo` options.
 - The optional GitHub Issue Channel needs deployment-owned policy plus verified webhook/App credentials and least-privilege Issue/member access.
@@ -92,7 +105,7 @@ A finalized diagnostic session is terminal. Continued diagnosis or implementatio
 | Area | Focused suites |
 | --- | --- |
 | Protocol, readiness, targets, workpad envelopes/groups, handoff | `pnpm --filter @failure-report/protocol test` |
-| Workspace/source cache/session/finalization | Eve tests: `source-cache`, `host-managed-workspace`, `codex-diagnostic-session` |
+| Target binding/target `.shea`/workspace/session/finalization | Eve tests: `target-workspace`, `target-shea`, `host-managed-workspace`, `development-entrypoint`, `codex-diagnostic-session` |
 | Codex preflight/transport/approvals | Eve tests: `codex-app-server-preflight`, `codex-app-server-transport`, `codex-app-server-direct-transport`, `native-approval-broker` |
 | Completion, handoff rendering, and delivery races | Eve tests: `diagnostic-completion-reconciliation`, `handoff-renderer`, `handoff-delivery` |
 | GitHub workpad/gateway and Project routing | Eve tests: `issue-workpad`, `octokit-issue-gateway`, `github-cli-issue-gateway`, `project-tracker` |
@@ -135,12 +148,16 @@ pnpm --filter @Alive24/FailureReport eval
 ## Safe change guidance
 
 - **Protocol change:** update schemas first, preserve strict rejection where intended, then update all adapters and persistence tests. Do not silently migrate removed fields.
-- **Workspace change:** maintain fixed `.eve/sandbox-cache` ownership, path privacy, canonical origin, containment, detached/base/HEAD checks, and fail-closed behavior.
+- **Workspace change:** preserve one process-bound canonical target checkout, target-owned `.shea/worktrees/failureReport/`, copy-missing-only defaults, path privacy, canonical origin, containment, detached/base/HEAD checks, and fail-closed behavior. Never reintroduce request-selected paths or fallback cloning.
 - **Workpad change:** preserve append-only bytes, immutable producer/author provenance, linear lineage, provider-private budgets, and manifest visibility semantics.
 - **Backend change:** preserve preflight/turn separation, ambient-host inheritance, bounded cleanup/retry, process-bound approvals, and sanitized durable evidence.
 - **Extension change:** follow the [capability-only extension model](../domain/extensions.md); do not couple a domain pack to a provider or workspace.
 - **Integration change:** follow [outer adapter boundaries](../integrations/boundaries.md); use the default Channel and shared protocol.
 - **Handoff change:** keep `render_handoff` read-only, revision-bound, and deterministic. Keep `deliver_handoff` as the separate configured side-effect boundary; preserve the fixed structured handoff, template containment/validation, marker idempotency, second render, tracker readback, and receipt-to-handoff identity binding. Never infer downstream implementation from delivery to `Todo`.
+
+## OpenWiki maintenance policy
+
+Maintainers refresh `/openwiki` by explicitly running OpenWiki after authoritative source or documentation changes. There is no scheduled GitHub Actions workflow for OpenWiki updates. Generated pages should not be hand-edited outside an explicit documentation maintenance run; change the authoritative source first, then run a surgical wiki update such as this one. The [source map](../architecture/source-map.md) identifies the primary evidence to inspect before editing a concept.
 
 ## Operational exclusions
 

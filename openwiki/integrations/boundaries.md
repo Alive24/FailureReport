@@ -48,17 +48,17 @@ Deployment policy and credentials must stay outside Issues, workpads, model cont
 
 ## Root-owned GitHub gateway
 
-Root uses GitHub Issues as shared context and managed comments as durable report transport. Octokit is the default API client. By default Root obtains the active `gh auth login` token once per process and keeps it in memory; token and GitHub App modes are deployment alternatives. Host Git authentication for source clone/fetch is separate from GitHub API authentication.
+Root uses GitHub Issues as shared context and managed comments as durable report transport. Octokit is the default API client. By default Root obtains the active `gh auth login` token once per process and keeps it in memory; token and GitHub App modes are deployment alternatives. Host Git authentication for fetching the process-bound target checkout and managing its worktrees is separate from GitHub API authentication.
 
 The gateway never edits Issue bodies or foreign/prior comments. Producer identity must be configured with immutable GitHub actor IDs, and publication follows the provenance and append-only transaction in [protocol and workpads](../domain/protocol-and-workpads.md). `FAILURE_REPORT_GITHUB_GATEWAY=gh-cli` selects an explicit legacy fallback, not the normal transport.
 
 ## Configured tracker and handoff delivery
 
-`FAILURE_REPORT_HANDOFF_DELIVERY_POLICY` is optional deployment-owned JSON keyed by repository. A repository entry fixes a Markdown template plus one GitHub Project v2 owner, number, single-select status field, intake state `Failure Report`, and ready destination `Backlog` or `Todo`. Public requests, Channels, extensions, workers, and models cannot override any of those coordinates. With no matching policy, diagnosis and read-only `render_handoff` remain available; tracker intake is skipped and `deliver_handoff` fails closed.
+`FAILURE_REPORT_HANDOFF_DELIVERY_POLICY` is optional deployment-owned JSON keyed by repository. A repository entry may configure Issue-comment delivery alone (`tracker: null`) or additionally fix one GitHub Project v2 owner, number, single-select status field, intake state `Failure Report`, and ready destination `Backlog` or `Todo`. Public requests, Channels, extensions, workers, and models cannot override the template or tracker coordinates. With no matching policy, diagnosis and read-only `render_handoff` remain available; tracker intake is skipped and `deliver_handoff` fails closed.
 
 `begin_failure_report` is Root’s intake mutation. For an accepted new `start` with no managed workpad, it adds the Issue to the configured Project if necessary and moves it to `Failure Report`. It may take ownership only from unset, `Failure Report`, `Need Human Input`, `Backlog`, or `Todo`; active downstream implementation/review states are never regressed. `Failure Report` belongs to FailureReport and is intentionally absent from Shea Symphony’s `state_map`.
 
-`deliver_handoff` reuses the [revision-bound pure renderer](../workflows/runtime-and-workspaces.md#handoff-rendering-and-delivery), then applies configured presentation and routing. Template paths are relative to the Eve application root and must resolve canonically to a non-empty regular file inside it; traversal and symlink escape fail closed. Templates are validated against known variables and required diagnostic, goal, scope, outcomes, and verification fields. They never replace the fixed `failure-report/implementation-handoff/v1`: the complete handoff and deterministic delivery intent are always appended in folded JSON.
+`deliver_handoff` reuses the [revision-bound pure renderer](../workflows/runtime-and-workspaces.md#handoff-rendering-and-delivery), then applies configured presentation and routing. Template paths resolve inside the process-bound target checkout, defaulting to target-owned `.shea/template/failureReport/implementation.md`; Root copies its authored default only when that file is missing and never overwrites a target customization. The selected template must be a canonical non-empty regular file contained by the checkout, so traversal and symlink escape fail closed. Templates are validated against known variables and required diagnostic, goal, scope, outcomes, and verification fields. They never replace the fixed `failure-report/implementation-handoff/v1`: the complete handoff and deterministic delivery intent are always appended in folded JSON.
 
 ```mermaid
 sequenceDiagram
@@ -73,14 +73,16 @@ sequenceDiagram
   Issue-->>Root: verified comment reference
   Root->>Renderer: reread and verify same handoff identity
   Renderer-->>Root: unchanged handoff
-  Root->>Project: set configured Backlog or Todo
-  Project-->>Root: status readback
+  opt configured Project tracker
+    Root->>Project: set configured Backlog or Todo
+    Project-->>Root: status readback
+  end
   Root-->>Root: create delivery receipt
 ```
 
-The delivery boundary publishes a comment before changing tracker status, and it refuses tracker mutation if the durable handoff changes during that window.
+The delivery boundary always publishes or reuses the comment first. When a Project tracker is configured, it changes status only after the second render confirms the durable handoff is unchanged; tracker-free delivery ends with the verified comment and a `tracker: null` receipt.
 
-The delivery ID hashes the handoff ID, template content digest, and configured tracker intent. Its versioned marker makes process-loss retry idempotent: Root may reuse exactly one byte-identical comment by the configured producer, but duplicate markers, foreign authors, or conflicting body/template/intent require operator input. It never edits an existing handoff comment. After comment readback, Root rerenders to reject a changed workpad, then the Project adapter resolves exactly one field and option and requires status readback. The `failure-report/handoff-delivery/v1` receipt binds delivery and handoff IDs, report/workpad reference, template digest, comment reference, Project coordinates, and final `Backlog`/`Todo` state. It acknowledges only FailureReport’s boundary—`Todo` makes the Issue eligible for downstream Shea Symphony, while `Backlog` requires manual promotion.
+The delivery ID hashes the handoff ID, template content digest, and configured tracker intent. Its versioned marker makes process-loss retry idempotent: Root may reuse exactly one byte-identical comment by the configured producer, but duplicate markers, foreign authors, or conflicting body/template/intent require operator input. It never edits an existing handoff comment. After comment readback, Root rerenders to reject a changed workpad, then the Project adapter resolves exactly one field and option and requires status readback. The `failure-report/handoff-delivery/v1` receipt binds delivery and handoff IDs, report/workpad reference, template digest, comment reference, and either `tracker: null` or the configured Project coordinates and final `Backlog`/`Todo` state. It acknowledges only FailureReport’s boundary—`Todo` makes the Issue eligible for downstream Shea Symphony, while `Backlog` requires manual promotion.
 
 Primary sources: `/eve/agent/lib/delivery/`, `/eve/agent/tools/begin_failure_report.ts`, `/eve/agent/tools/deliver_handoff.ts`, `/eve/agent/lib/integrations/github/project-tracker.ts`, `/packages/protocol/src/handoff.ts`, `/eve/test/handoff-delivery.test.ts`, and `/eve/test/project-tracker.test.ts`.
 
@@ -117,9 +119,9 @@ Primary sources: `/packages/mcp-adapter/src/root-operation-store.ts`, `/packages
 
 ## Codex plugin
 
-`/packages/codex-plugin/failure-report/` packages the public `failure-report` skill and `.mcp.json`. Its composition is plugin → MCP stdio adapter → Eve default Channel → Root. It neither embeds an Eve agent nor includes the internal CKB diagnostic skill. Runtime host/auth values are optional environment configuration, not plugin-stored credentials.
+`/packages/codex-plugin/failure-report/` packages the public `failure-report` skill and `.mcp.json`. Its composition is plugin → MCP stdio adapter → Eve default Channel → Root. It neither embeds an Eve agent nor includes the internal CKB diagnostic skill. Runtime host/auth values are optional environment configuration, not plugin-stored credentials. Codex installs plugins through configured marketplaces; this repository intentionally does not provide one, so the plugin is the packaged end-user distribution surface rather than the guaranteed repository demo entrypoint.
 
-Do not confuse the plugin-facing skill, which helps callers form public `failure_report` requests, with worktree-local domain-native skills selected by Root.
+For the current marketplace-free OpenSourceIRL path, the repository’s `demo:existing-issue` client launches that same MCP stdio adapter and performs a read-only Root inspection; see the [runtime walkthrough](../workflows/runtime-and-workspaces.md#opensourceirl-read-only-entrypoint-and-completed-ckboost-path). Do not confuse either caller-facing surface with worktree-local domain-native skills selected by Root.
 
 ## Temporal adapter
 

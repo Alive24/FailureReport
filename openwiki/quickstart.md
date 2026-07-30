@@ -7,12 +7,12 @@ tags: [failurereport, eve, diagnostics, quickstart]
 
 # FailureReport Quickstart
 
-FailureReport is an Eve-supervised “Failure in the Loop” system. It turns an incomplete software failure into a durable, evidence-backed report whose shared context remains one target-repository GitHub Issue from intake through a reviewable implementation handoff. An optional deployment policy can route that Issue through a FailureReport-owned GitHub Project intake state and deliver the Ready handoff to `Backlog` or `Todo`; the current MVP still does **not** implement the target change or open a pull request.
+FailureReport is an Eve-supervised “Failure in the Loop” system. It turns an incomplete software failure into a durable, evidence-backed report whose shared context remains one target-repository GitHub Issue from intake through a reviewable implementation handoff. An optional deployment policy can route that Issue through a target-repository GitHub Project intake state and deliver the Ready handoff to `Backlog` or `Todo`; the current MVP still does **not** implement the target change or open a pull request.
 
 ## Non-negotiable boundaries
 
 - **Eve Root is the sole supervisor.** [Eve Channels are ingress and outer packages call the default Channel](integrations/boundaries.md); no adapter or domain package is a second Root.
-- **Root owns durable and host state.** It alone publishes the GitHub workpad and manages source caches and detached worktrees under `.eve/sandbox-cache/`; host paths never enter the public protocol.
+- **Root owns durable and host state.** It alone publishes the GitHub workpad. One local process is bound at startup to one caller-selected canonical target checkout; Root verifies its Git top level and `origin`, prepares target-owned FailureReport assets, and manages detached worktrees beneath that checkout’s `.shea/worktrees/failureReport/`. Host paths never enter the public protocol, and a request cannot change the bound checkout.
 - **Codex is the one diagnostic worker.** It diagnoses in Root’s assigned worktree and may run focused tests or create ephemeral evidence, but must not change business code, publish workpads, commit, push, create branches, or open PRs.
 - **Domain extensions are optional capabilities, not supervisors or prerequisites.** Generic diagnosis persists an empty extension set and uses repository instructions plus standard Codex diagnostics without inventing a placeholder skill. Selected extensions add knowledge, native skills, and deterministic namespaced tools; they do not own providers, sandboxes, worktrees, sessions, or workers. See the [domain extension model](domain/extensions.md).
 - **A diagnostic branch is a snapshot only.** `diagnostic/<issue>-<slug>` is a reviewable, finalized diagnostic ref. Future implementation must use a separate worktree and branch and must not open a PR directly from the snapshot.
@@ -34,10 +34,10 @@ pnpm test
 For a normal local Eve development start:
 
 ```bash
-pnpm --filter @Alive24/FailureReport dev
+pnpm --filter @Alive24/FailureReport dev --target-workspace /absolute/path/to/target-checkout
 ```
 
-`dev` first builds only the protocol and CKB domain pack, then runs `eve dev --no-ui`. The default local Channel endpoint used by the MCP adapter is `http://127.0.0.1:2000`. Generated `dist/` and `.eve/` runtime state are ignored; startup must not install dependencies or alter manifests and lockfiles. See [operations, testing, and extension guidance](operations/testing-and-extension.md) for smoke checks, authentication boundaries, failure recovery, and the test matrix.
+`dev` first builds only the protocol and CKB domain pack, validates and canonicalizes the required real target directory, exports the process binding, then runs `eve dev --no-ui`. The process serves only that target repository until exit. The default local Channel endpoint used by the MCP adapter is `http://127.0.0.1:2000`. Generated `dist/` and `.eve/` runtime state are ignored; startup must not install dependencies or alter manifests and lockfiles. See [operations, testing, and extension guidance](operations/testing-and-extension.md) for smoke checks, the isolated OpenSourceIRL demo entrypoint, authentication boundaries, failure recovery, and the test matrix.
 
 ## Current runtime in one view
 
@@ -48,7 +48,7 @@ flowchart TD
   Channel --> Root
   Root --> Workpad["Verified GitHub workpad lineage"]
   Root --> Extensions["Optional selected domain extensions"]
-  Root --> Workspace["Root-managed source cache and detached worktree"]
+  Root --> Workspace["Bound target checkout and target-owned diagnostic worktree"]
   Workspace --> Codex["Codex diagnostic worker"]
   Codex --> Root
   Root --> Snapshot["Diagnostic-only snapshot"]

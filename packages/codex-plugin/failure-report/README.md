@@ -22,13 +22,21 @@ pnpm install
 pnpm build
 ```
 
-Start Eve first, in a separate terminal:
+Start Eve first, in a separate normal host terminal:
 
 ```bash
-pnpm --filter @Alive24/FailureReport dev
+pnpm --filter @Alive24/FailureReport dev --target-workspace /absolute/path/to/target-checkout
 ```
 
-That command runs `eve dev --no-ui`, whose documented local Channel endpoint is `http://127.0.0.1:2000`. Then load this plugin from `packages/codex-plugin/failure-report`. Its `.mcp.json` starts `pnpm --filter @failure-report/mcp-adapter mcp` from the workspace root, so Codex receives the `failure_report` MCP tool automatically. With no `FAILURE_REPORT_EVE_HOST`, the adapter owns and uses that local endpoint. The plugin configuration deliberately declares only optional runtime environment variables; it does not embed a host or credentials.
+That command runs `eve dev --no-ui`, whose documented local Channel endpoint is `http://127.0.0.1:2000`. Codex discovers installable plugins through configured marketplaces; it does not load an arbitrary plugin root directly. This repository intentionally contains no marketplace, so consumers should publish or configure a marketplace outside this bundle before installing it. Once installed, the plugin's `.mcp.json` starts `pnpm --filter @failure-report/mcp-adapter mcp` from the workspace root, so Codex receives the `failure_report` MCP tool automatically. With no `FAILURE_REPORT_EVE_HOST`, the adapter owns and uses that local endpoint. The plugin configuration deliberately declares only optional runtime environment variables; it does not embed a host or credentials.
+
+For the repository's marketplace-free OpenSourceIRL demonstration, use the checked-in read-only MCP client after Eve starts:
+
+```bash
+pnpm --filter @failure-report/mcp-adapter demo:existing-issue -- Alive24/CKBoost 56
+```
+
+See the [demo runbook](../../../docs/demos/opensourceirl-2026-07-31-runbook.md) for exact runtime configuration and presentation order.
 
 For a non-local Eve deployment, provide runtime environment variables to the Codex process before it starts the plugin:
 

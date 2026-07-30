@@ -36,7 +36,7 @@ sequenceDiagram
   Caller->>Channel: RootRequest
   Channel->>Root: authenticated turn
   Root->>Issue: read and publish verified revision
-  Root->>Workspace: prepare immutable target and optional skills
+  Root->>Workspace: verify bound checkout and prepare target .shea
   Workspace->>AppServer: initialize and list skills
   AppServer-->>Workspace: readiness result
   Root->>Worker: revision-bound delegation
@@ -54,7 +54,7 @@ The short preflight process and the live diagnostic process are distinct. Root p
 
 The GitHub Issue is shared human context. Root never edits its body or a foreign comment. A verified managed-comment lineage stores the structured FailureReport, collaboration binding, portable diagnostic session identity, selected extensions, backend ID, immutable target/base/HEAD, optional Codex thread, completion records, and optional finalized snapshot.
 
-Host-local source caches and worktree paths stay private under `.eve/sandbox-cache/`. Root derives them from portable identity and validates canonical origin, containment, real-directory boundaries, detached state, base revision, and saved HEAD on each active resume. This division is encoded by the [protocol and workpad model](../domain/protocol-and-workpads.md); a caller cannot smuggle `cwd`, checkout paths, cache paths, branches, or mutable revision selectors into the report.
+The canonical target checkout is host-only process configuration selected through `--target-workspace` or its service-wrapper environment equivalent. Root verifies that it is the real Git top level whose `origin` matches the report repository, fetches the exact immutable SHA, copies only missing authored defaults into target-owned `.shea` prompts and templates, and derives each private worktree beneath `.shea/worktrees/failureReport/`. On active resume it revalidates origin, containment, real-directory boundaries, detached state, base revision, saved HEAD, and selected skill links. This division is encoded by the [protocol and workpad model](../domain/protocol-and-workpads.md); a caller cannot smuggle or change `cwd`, checkout/worktree paths, branches, or mutable revision selectors through the report.
 
 ## Provider and execution boundary
 
@@ -88,6 +88,6 @@ These are current implemented constraints; the direct App Server transport and i
 - `/docs/architecture/overview.md` and `/docs/architecture/provider-boundary.md`
 - `/eve/agent/agent.ts`, `/eve/agent/instructions.md`, `/eve/agent/sandbox.ts`
 - `/eve/agent/channels/eve.ts`, `/eve/agent/channels/github.ts`
-- `/eve/agent/lib/diagnostics/` and `/eve/agent/lib/backends/`
+- `/eve/agent/lib/diagnostics/target-workspace.ts`, `/eve/agent/lib/diagnostics/target-shea.ts`, `/eve/agent/lib/diagnostics/worktree.ts`, and `/eve/agent/lib/backends/`
 - `/eve/agent/subagents/codex/instructions.md`
 - `/packages/protocol/src/index.ts` and `/packages/protocol/src/handoff.ts`
