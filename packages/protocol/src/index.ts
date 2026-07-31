@@ -1836,7 +1836,7 @@ function assertPublicWorkpadPayload(report: FailureReport): void {
   const prohibitedPath =
     /(?:^|[\s"'`(])(?:\/Users\/|\/Volumes\/|\/home\/|[A-Za-z]:\\\\)/;
   const credential =
-    /(?:ghp_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|(?:api[_-]?key|token|secret|password|credential)\s*[:=]|bearer\s+\S+|-----BEGIN [A-Z ]*PRIVATE KEY-----)/i;
+    /(?:ghp_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|(?:api[_-]?key|token|secret|password|credential)\s*[:=]|bearer\s+\S+|:\/\/[^/:\s]+:[^/@\s]+@|-----BEGIN [A-Z ]*PRIVATE KEY-----)/i;
 
   const inspect = (value: unknown, path: string): void => {
     if (typeof value === "string") {
@@ -1877,6 +1877,16 @@ function assertPublicWorkpadPayload(report: FailureReport): void {
       assertOpaquePrivateArtifact(artifact.ref, artifact.sensitivity);
     }
   }
+  for (const completion of report.diagnostic_completions ?? []) {
+    for (const evidence of [
+      ...completion.outcome.evidence,
+      ...completion.outcome.operation_evidence,
+    ]) {
+      for (const artifact of evidence.artifacts) {
+        assertOpaquePrivateArtifact(artifact.ref, artifact.sensitivity);
+      }
+    }
+  }
   inspect(report, "failure_report");
 }
 
@@ -1889,6 +1899,15 @@ function assertOpaquePrivateArtifact(
   if (sensitivity !== "public" && !opaqueReference) {
     throw new Error(
       "Non-public evidence must use an opaque protected:// or logical reference before public workpad rendering.",
+    );
+  }
+  if (
+    sensitivity === "public" &&
+    !opaqueReference &&
+    !/^(?!file:)[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(ref)
+  ) {
+    throw new Error(
+      "Public evidence must use a public URL or logical reference before public workpad rendering.",
     );
   }
 }

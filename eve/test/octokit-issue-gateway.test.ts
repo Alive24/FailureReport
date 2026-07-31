@@ -162,6 +162,41 @@ describe("Octokit Issue gateway", () => {
     );
   });
 
+  it("normalizes a private artifact before its first GitHub publication", async () => {
+    const report = await loadReport();
+    const privateRef = "/Users/diagnostic-user/private/first-attempt.log";
+    const unsafe = failureReportSchema.parse({
+      ...report,
+      inputs: [
+        ...report.inputs.slice(0, 1),
+        {
+          ...report.inputs[1]!,
+          artifact: { ref: privateRef, sensitivity: "restricted" },
+        },
+        ...report.inputs.slice(2),
+      ],
+    });
+    const fake = createMutableOctokit();
+    const gateway = new OctokitIssueGateway(
+      fake.octokit as unknown as Octokit,
+      rootGh,
+      100_000,
+    );
+
+    const published = await gateway.publishSharedContext(
+      repository,
+      issueNumber,
+      unsafe,
+      "2026-07-15T10:01:00Z",
+    );
+
+    expect(fake.octokit.rest.issues.createComment).toHaveBeenCalledTimes(1);
+    expect(published.report.inputs[1]?.artifact.ref).toMatch(
+      /^protected:\/\/failure-report\/input\/input-event-reference\//,
+    );
+    expect(fake.comments[0]?.body).not.toContain(privateRef);
+  });
+
   it("creates one new handoff comment and reuses it without editing on retry", async () => {
     const fake = createMutableOctokit();
     const gateway = new OctokitIssueGateway(
