@@ -777,21 +777,37 @@ export class EveChannelRootInvoker implements RootInvoker {
       ) {
         throw new Error("FailureReport MCP terminal operation is not active.");
       }
+      const resumableCursor = selectTerminalCursor(
+        operation.session_state,
+        sessionState,
+      );
+      const noResumableCursorReason =
+        "The terminal Eve turn did not return a resumable session cursor and " +
+        "no prior cursor is available. Its stored result can be replayed with " +
+        "the original request_id; a later request will start a new Eve session " +
+        "for the same Issue.";
+      const terminalResult = resumableCursor
+        ? result
+        : operationFailure(request, noResumableCursorReason);
       const now = nextLedgerTimestamp(ledger);
       ledger.operations[request.request_id] = {
         state: "terminal",
         request_id: request.request_id,
         request_fingerprint: operation.request_fingerprint,
         request,
-        result,
+        result: terminalResult,
         created_at: operation.created_at,
         updated_at: now,
         completed_at: now,
       };
-      // Commit the terminal result and its advanced Eve cursor together. A
-      // restart can therefore either redrain the delivered turn or replay the
-      // stored result, but can never observe a cursor past an absent result.
-      ledger.session_state = sessionState;
+      // A failed Eve turn may report only a stream index. Never let that erase
+      // the delivered cursor whose session identity makes same-Issue resume
+      // safe; a valid terminal cursor is still the newest proven cursor.
+      if (resumableCursor) {
+        ledger.session_state = resumableCursor;
+      } else {
+        delete ledger.session_state;
+      }
       delete ledger.active_request_id;
       compactTerminalOperations(
         ledger,
@@ -812,6 +828,25 @@ export class EveChannelRootInvoker implements RootInvoker {
       return { ledger, value: undefined };
     });
   }
+}
+
+function selectTerminalCursor(
+  deliveredCursor: SessionState,
+  terminalCursor: SessionState,
+): SessionState | undefined {
+  if (isResumableSessionState(terminalCursor)) {
+    return terminalCursor;
+  }
+  return isResumableSessionState(deliveredCursor) ? deliveredCursor : undefined;
+}
+
+function isResumableSessionState(
+  sessionState: SessionState,
+): sessionState is SessionState & { sessionId: string } {
+  return (
+    typeof sessionState.sessionId === "string" &&
+    sessionState.sessionId.length > 0
+  );
 }
 
 /** Options for this MCP wrapper's connection to Eve's default HTTP Channel. */

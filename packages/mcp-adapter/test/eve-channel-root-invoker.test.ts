@@ -96,6 +96,95 @@ describe("Eve Channel Root invoker", () => {
     expect(result.summary).toContain("valid structured result");
   });
 
+  it.each([
+    {
+      id: "no-prior",
+      turnStatus: "completed" as const,
+      dataStatus: "completed" as const,
+      terminalCursor: { sessionId: "session-first", streamIndex: 2 },
+      expectedCursor: { sessionId: "session-first", streamIndex: 2 },
+    },
+    {
+      id: "same-session",
+      turnStatus: "completed" as const,
+      dataStatus: "completed" as const,
+      terminalCursor: { sessionId: "session-delivered", streamIndex: 2 },
+      expectedCursor: { sessionId: "session-delivered", streamIndex: 2 },
+    },
+    {
+      id: "different-session",
+      turnStatus: "completed" as const,
+      dataStatus: "completed" as const,
+      terminalCursor: { sessionId: "session-replaced", streamIndex: 0 },
+      expectedCursor: { sessionId: "session-replaced", streamIndex: 0 },
+    },
+    {
+      id: "failed-missing-session-id",
+      turnStatus: "failed" as const,
+      dataStatus: "failed" as const,
+      terminalCursor: { streamIndex: 0 },
+      expectedCursor: { sessionId: "session-delivered", streamIndex: 0 },
+    },
+    {
+      id: "waiting-missing-session-id",
+      turnStatus: "waiting" as const,
+      dataStatus: "needs_input" as const,
+      terminalCursor: { streamIndex: 0 },
+      expectedCursor: { sessionId: "session-delivered", streamIndex: 0 },
+    },
+    {
+      id: "malformed-missing-session-id",
+      turnStatus: "failed" as const,
+      dataStatus: undefined,
+      terminalCursor: { streamIndex: 0 },
+      expectedCursor: { sessionId: "session-delivered", streamIndex: 0 },
+    },
+  ])(
+    "keeps the newest resumable cursor for $id terminal turns",
+    async ({ id, turnStatus, dataStatus, terminalCursor, expectedCursor }) => {
+      const store = new InMemoryRootSessionStore();
+      const request = {
+        request_id: "cursor-" + id,
+        operation: "start" as const,
+        message: "Start a report.",
+      };
+      const invoker = new EveChannelRootInvoker(
+        {
+          async run(input) {
+            if (id === "no-prior") {
+              expect(input.sessionState).toBeUndefined();
+            }
+            await input.onDelivered({
+              continuationToken: "eve:delivered",
+              sessionId: "session-delivered",
+              streamIndex: 0,
+            });
+            return {
+              data: dataStatus
+                ? {
+                    request_id: request.request_id,
+                    status: dataStatus,
+                    summary: "Terminal " + id + ".",
+                  }
+                : { malformed: true },
+              status: turnStatus,
+              sessionState: terminalCursor,
+            };
+          },
+        },
+        store,
+      );
+
+      const result = await invoker.invoke(request);
+      const ledger = await store.readLedger(rootSessionKey(request));
+
+      expect(ledger?.session_state).toMatchObject(expectedCursor);
+      expect(result.status).toBe(
+        id === "malformed-missing-session-id" ? "failed" : dataStatus,
+      );
+    },
+  );
+
   it("preserves a no-workpad Issue session across retry, adapter restart, and later full context", async () => {
     const temporaryRoot = await mkdtemp(
       join(tmpdir(), "failure-report-mcp-session-"),

@@ -354,6 +354,177 @@ describe("durable Root operation lifecycle", () => {
     }
   });
 
+  it("replays a failed turn and resumes the same Issue after a missing terminal cursor restart", async () => {
+    const temporaryRoot = await mkdtemp(
+      join(tmpdir(), "failure-report-root-failed-cursor-"),
+    );
+    const storePath = join(temporaryRoot, "operations.json");
+    const failedRequest = issueRequest("failed-cursor", 31);
+    const followUpRequest = issueRequest("failed-cursor-follow-up", 31);
+    const deliveredIds: string[] = [];
+
+    try {
+      const first = createMcpRootInvoker({
+        session_store_path: storePath,
+        transport: {
+          async run(input) {
+            deliveredIds.push(requestIdFromMessage(input.message));
+            await input.onDelivered({
+              continuationToken: "eve:failed:delivered",
+              sessionId: "session-failed-cursor",
+              streamIndex: 4,
+            });
+            return {
+              data: {
+                request_id: failedRequest.request_id,
+                status: "failed" as const,
+                summary: "The provider rejected this Root turn.",
+              },
+              status: "failed" as const,
+              // Eve's failed terminal event may retain only the stream index.
+              sessionState: { streamIndex: 0 },
+            };
+          },
+        },
+      });
+
+      const failedResult = await first.invoke(failedRequest);
+      const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
+        sessions: Record<string, { session_state?: unknown }>;
+      };
+      expect(failedResult.status).toBe("failed");
+      expect(
+        persisted.sessions["issue:Alive24/FailureReport#31"]?.session_state,
+      ).toMatchObject({
+        continuationToken: "eve:failed:delivered",
+        sessionId: "session-failed-cursor",
+        streamIndex: 4,
+      });
+
+      const restarted = createMcpRootInvoker({
+        session_store_path: storePath,
+        transport: {
+          async run(input) {
+            const requestId = requestIdFromMessage(input.message);
+            deliveredIds.push(requestId);
+            expect(requestId).toBe(followUpRequest.request_id);
+            expect(input.sessionState).toMatchObject({
+              continuationToken: "eve:failed:delivered",
+              sessionId: "session-failed-cursor",
+              streamIndex: 4,
+            });
+            await input.onDelivered({
+              continuationToken: "eve:follow-up:delivered",
+              sessionId: "session-failed-cursor",
+              streamIndex: 4,
+            });
+            return terminalTurn(
+              followUpRequest.request_id,
+              "Resumed after the failed turn.",
+              6,
+              "session-failed-cursor",
+            );
+          },
+        },
+      });
+
+      await expect(restarted.invoke(failedRequest)).resolves.toEqual(
+        failedResult,
+      );
+      await expect(restarted.invoke(followUpRequest)).resolves.toMatchObject({
+        status: "completed",
+      });
+      expect(deliveredIds).toEqual([
+        failedRequest.request_id,
+        followUpRequest.request_id,
+      ]);
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("drops a legacy incomplete terminal cursor without losing its replay record", async () => {
+    const temporaryRoot = await mkdtemp(
+      join(tmpdir(), "failure-report-root-legacy-failed-cursor-"),
+    );
+    const storePath = join(temporaryRoot, "operations.json");
+    const failedRequest = issueRequest("legacy-failed-cursor", 31);
+    const followUpRequest = issueRequest("legacy-failed-cursor-follow-up", 31);
+    let sends = 0;
+
+    try {
+      const first = createMcpRootInvoker({
+        session_store_path: storePath,
+        transport: {
+          async run(input) {
+            await input.onDelivered({
+              sessionId: "session-legacy-failed-cursor",
+              streamIndex: 0,
+            });
+            return {
+              data: {
+                request_id: failedRequest.request_id,
+                status: "failed" as const,
+                summary: "The original provider turn failed.",
+              },
+              status: "failed" as const,
+              sessionState: {
+                sessionId: "session-legacy-failed-cursor",
+                streamIndex: 2,
+              },
+            };
+          },
+        },
+      });
+      const failedResult = await first.invoke(failedRequest);
+      const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
+        sessions: Record<string, { session_state?: unknown }>;
+      };
+      const ledger = persisted.sessions["issue:Alive24/FailureReport#31"];
+      if (!ledger) {
+        throw new Error(
+          "Expected the failed operation ledger to be persisted.",
+        );
+      }
+      // Match the pre-fix terminal state that a failed Eve turn could write.
+      ledger.session_state = { streamIndex: 0 };
+      await writeFile(storePath, JSON.stringify(persisted), "utf8");
+
+      const restarted = createMcpRootInvoker({
+        session_store_path: storePath,
+        transport: {
+          async run(input) {
+            sends += 1;
+            expect(requestIdFromMessage(input.message)).toBe(
+              followUpRequest.request_id,
+            );
+            expect(input.sessionState).toBeUndefined();
+            await input.onDelivered({
+              sessionId: "session-restarted-fresh",
+              streamIndex: 0,
+            });
+            return terminalTurn(
+              followUpRequest.request_id,
+              "Started fresh after the legacy terminal failure.",
+              2,
+              "session-restarted-fresh",
+            );
+          },
+        },
+      });
+
+      await expect(restarted.invoke(failedRequest)).resolves.toEqual(
+        failedResult,
+      );
+      await expect(restarted.invoke(followUpRequest)).resolves.toMatchObject({
+        status: "completed",
+      });
+      expect(sends).toBe(1);
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
   it("blocks an ambiguous delivery attempt instead of resending it", async () => {
     let sends = 0;
     const request = issueRequest("ambiguous-delivery", 31);

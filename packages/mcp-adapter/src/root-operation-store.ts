@@ -268,7 +268,9 @@ function parsePersistedRootSessions(
       if (!isSessionState(state)) {
         throw invalidStore();
       }
-      migrated[key] = createRootSessionOperationLedger(state);
+      migrated[key] = createRootSessionOperationLedger(
+        isResumableSessionState(state) ? state : undefined,
+      );
     }
     return migrated;
   }
@@ -329,6 +331,9 @@ function parseRootSessionOperationLedger(
     }
   }
 
+  const sessionState = isResumableSessionState(value.session_state)
+    ? value.session_state
+    : undefined;
   if (value.active_request_id !== undefined) {
     const active = operations[value.active_request_id];
     if (active?.state !== "prepared" && active?.state !== "delivered") {
@@ -336,8 +341,7 @@ function parseRootSessionOperationLedger(
     }
     if (
       active.state === "delivered" &&
-      (!value.session_state ||
-        !sameSessionState(active.session_state, value.session_state))
+      (!sessionState || !sameSessionState(active.session_state, sessionState))
     ) {
       throw invalidStore();
     }
@@ -350,9 +354,10 @@ function parseRootSessionOperationLedger(
   }
 
   return {
-    ...(value.session_state
-      ? { session_state: value.session_state as SessionState }
-      : {}),
+    // An incomplete cursor is safe to discard only when no delivered operation
+    // remains active. A terminal result is replayable without it, while an
+    // active delivered operation must retain exact recovery ownership.
+    ...(sessionState ? { session_state: sessionState } : {}),
     ...(value.active_request_id
       ? { active_request_id: value.active_request_id }
       : {}),
@@ -609,6 +614,15 @@ function isSessionState(value: unknown): value is SessionState {
     (value.continuationToken === undefined ||
       typeof value.continuationToken === "string") &&
     (value.sessionId === undefined || typeof value.sessionId === "string")
+  );
+}
+
+/** A ledger cursor may be reused only when Eve supplied its session identity. */
+function isResumableSessionState(value: unknown): value is SessionState {
+  return (
+    isSessionState(value) &&
+    typeof value.sessionId === "string" &&
+    value.sessionId.length > 0
   );
 }
 
