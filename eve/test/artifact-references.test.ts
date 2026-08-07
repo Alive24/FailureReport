@@ -106,9 +106,9 @@ describe("Root artifact-reference normalization", () => {
         ...report.inputs.slice(1),
       ],
     });
-    expect(() => normalizeFailureReportArtifactReferences(unsafePublic)).toThrow(
-      "unsafe public artifact reference",
-    );
+    expect(() =>
+      normalizeFailureReportArtifactReferences(unsafePublic),
+    ).toThrow("unsafe public artifact reference");
   });
 
   it("normalizes before immutable completion equality and shares refs with projections", async () => {

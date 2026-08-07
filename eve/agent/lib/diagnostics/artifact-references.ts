@@ -133,7 +133,9 @@ function normalizeArtifact(
     return artifact;
   }
 
-  const identity = ["failure-report/artifact/v1", reportId, slot].join("\u0000");
+  const identity = ["failure-report/artifact/v1", reportId, slot].join(
+    "\u0000",
+  );
   const digest = createHash("sha256").update(identity).digest("hex");
   return {
     ...artifact,
