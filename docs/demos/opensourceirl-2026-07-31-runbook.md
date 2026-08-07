@@ -53,7 +53,7 @@ Run from normal macOS Terminal sessions with host access to the CKBoost checkout
 
 Required local state:
 
-- Node.js 24 or later;
+- Node.js 24.x;
 - pnpm 10;
 - `gh auth status` succeeds;
 - `codex login status` succeeds;
