@@ -393,6 +393,9 @@ describe("durable Root operation lifecycle", () => {
         sessions: Record<string, { session_state?: unknown }>;
       };
       expect(failedResult.status).toBe("failed");
+      expect(failedResult.summary).toBe(
+        "The provider rejected this Root turn.",
+      );
       expect(
         persisted.sessions["issue:Alive24/FailureReport#31"]?.session_state,
       ).toMatchObject({

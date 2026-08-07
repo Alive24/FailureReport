@@ -182,6 +182,11 @@ describe("Eve Channel Root invoker", () => {
       expect(result.status).toBe(
         id === "malformed-missing-session-id" ? "failed" : dataStatus,
       );
+      expect(result.summary).toBe(
+        id === "malformed-missing-session-id"
+          ? "Eve Root did not return a valid structured result; turn status was failed."
+          : "Terminal " + id + ".",
+      );
     },
   );
 

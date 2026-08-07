@@ -781,21 +781,13 @@ export class EveChannelRootInvoker implements RootInvoker {
         operation.session_state,
         sessionState,
       );
-      const noResumableCursorReason =
-        "The terminal Eve turn did not return a resumable session cursor and " +
-        "no prior cursor is available. Its stored result can be replayed with " +
-        "the original request_id; a later request will start a new Eve session " +
-        "for the same Issue.";
-      const terminalResult = resumableCursor
-        ? result
-        : operationFailure(request, noResumableCursorReason);
       const now = nextLedgerTimestamp(ledger);
       ledger.operations[request.request_id] = {
         state: "terminal",
         request_id: request.request_id,
         request_fingerprint: operation.request_fingerprint,
         request,
-        result: terminalResult,
+        result,
         created_at: operation.created_at,
         updated_at: now,
         completed_at: now,
@@ -803,11 +795,7 @@ export class EveChannelRootInvoker implements RootInvoker {
       // A failed Eve turn may report only a stream index. Never let that erase
       // the delivered cursor whose session identity makes same-Issue resume
       // safe; a valid terminal cursor is still the newest proven cursor.
-      if (resumableCursor) {
-        ledger.session_state = resumableCursor;
-      } else {
-        delete ledger.session_state;
-      }
+      ledger.session_state = resumableCursor;
       delete ledger.active_request_id;
       compactTerminalOperations(
         ledger,
@@ -833,11 +821,13 @@ export class EveChannelRootInvoker implements RootInvoker {
 function selectTerminalCursor(
   deliveredCursor: SessionState,
   terminalCursor: SessionState,
-): SessionState | undefined {
+): SessionState {
   if (isResumableSessionState(terminalCursor)) {
     return terminalCursor;
   }
-  return isResumableSessionState(deliveredCursor) ? deliveredCursor : undefined;
+  // recordDelivery and persisted delivered-operation parsing both require a
+  // sessionId, so this cursor is the durable recovery point by construction.
+  return deliveredCursor;
 }
 
 function isResumableSessionState(
