@@ -56,9 +56,10 @@ eve/config/failure-report/     Authored default prompts, templates, and target i
 
 ## Development
 
-Node 24 and pnpm 10 are required.
+Node 24 and pnpm 10 are required. The repository pins Node 24.18.1 for nvm and `.node-version`-aware tools. pnpm also manages the pinned development runtime during install, records it in the lockfile, and uses it for scripts.
 
 ```bash
+nvm install # optional; reads .nvmrc, installs Node 24.18.1 if needed, and selects it
 pnpm install --frozen-lockfile
 pnpm build
 pnpm check
@@ -106,7 +107,7 @@ pnpm --filter @Alive24/FailureReport dev --target-workspace /absolute/path/to/ta
 
 The command above runs `eve dev --no-ui`; when `FAILURE_REPORT_EVE_HOST` is unset, the adapter-owned local default is `http://127.0.0.1:2000`. This fallback is only for that local development path. Then load the repository-local Codex plugin at `packages/codex-plugin/failure-report`. Its `.mcp.json` starts the external `@failure-report/mcp-adapter` wrapper, which exposes the single `failure_report` tool and calls the default Eve Channel. `FAILURE_REPORT_EVE_HOST` can point the wrapper at a deployed Root, and `FAILURE_REPORT_EVE_BEARER_TOKEN` remains optional for Channels that require bearer auth.
 
-The local MCP wrapper keeps an adapter-private durable operation ledger beside Eve's serialized session cursor. Before it sends a Root turn, it records the canonical Issue/report session key, `request_id`, request fingerprint, and delivery owner; immediately after Eve accepts the turn, it records the allocated session cursor before waiting for the terminal stream event. A retry with the same `request_id` drains that delivered turn instead of sending again, while different requests for the same canonical key remain durably queued. Independent keys still run concurrently. Ambiguous or corrupt ownership fails closed rather than risking a second Root run.
+The local MCP wrapper keeps an adapter-private durable operation ledger beside Eve's serialized session cursor. Before it sends a Root turn, it records the canonical Issue/report session key, `request_id`, request fingerprint, and delivery owner; immediately after Eve accepts the turn, it records the allocated resumable session cursor before waiting for the terminal stream event. A terminal cursor with a valid `sessionId` advances that durable cursor. If a failed or waiting terminal event returns only an incomplete cursor, the wrapper stores the terminal result but retains the last delivered resumable cursor, so replay and later same-Issue work remain safe across restart. Legacy terminal ledgers with an incomplete cursor keep their replay records and start a fresh Eve session for later work; incomplete cursors attached to active delivered ownership still fail closed. A retry with the same `request_id` drains that delivered turn or replays its terminal result instead of sending again, while different requests for the same canonical key remain durably queued. Independent keys still run concurrently. Ambiguous or corrupt ownership fails closed rather than risking a second Root run.
 
 Terminal records are compacted in bounded stages: by default, each canonical session retains 32 full request-bearing terminal records and 128 result-bearing cleaned records, then a fixed-size retired-request filter prevents an older cleaned `request_id` from being delivered again after its result is discarded. An embedding host can lower or raise those limits through `operation_retention`; full terminal retention may be zero, while cleaned-result retention must remain at least one so the completing caller can read its result. The stdio host uses the defaults. Version 1 cursor-only files migrate on their first write. Set `FAILURE_REPORT_MCP_SESSION_STORE` to place this private ledger on a managed state volume; it contains requests, results, Eve session IDs, continuation tokens, and adapter ownership metadata, so it must remain readable only by the operating user. The public Root request never accepts a ledger path or any of that private state.
 

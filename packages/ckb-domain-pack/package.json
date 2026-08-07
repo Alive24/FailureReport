@@ -23,8 +23,8 @@
     }
   },
   "scripts": {
-    "build": "eve extension build",
-    "prepare": "eve extension build",
+    "build": "pnpm exec eve extension build",
+    "prepare": "pnpm exec eve extension build",
     "typecheck": "tsc",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
@@ -39,8 +39,5 @@
   },
   "peerDependencies": {
     "eve": "^0.24.4"
-  },
-  "engines": {
-    "node": "24.x"
   }
 }
