@@ -617,6 +617,7 @@ export function validateCanonicalSpans(records, expectedRevision) {
   }
 
   let parentedSpanCount = 0;
+  let externalParentSpanCount = 0;
   let maximumDepth = 1;
   for (const record of records) {
     if (!record.parent_span_id) {
@@ -625,7 +626,8 @@ export function validateCanonicalSpans(records, expectedRevision) {
     parentedSpanCount += 1;
     const parentIdentity = `${record.trace_id}:${record.parent_span_id}`;
     if (!identities.has(parentIdentity)) {
-      throw new CaptureError("missing_parent_span");
+      externalParentSpanCount += 1;
+      continue;
     }
     const visited = new Set();
     let cursor = record;
@@ -638,13 +640,17 @@ export function validateCanonicalSpans(records, expectedRevision) {
       visited.add(cursorIdentity);
       cursor = identities.get(`${cursor.trace_id}:${cursor.parent_span_id}`);
       if (!cursor) {
-        throw new CaptureError("missing_parent_span");
+        externalParentSpanCount += 1;
+        break;
       }
       depth += 1;
     }
     maximumDepth = Math.max(maximumDepth, depth);
   }
   if (maximumDepth < 3) {
+    if (externalParentSpanCount > 0) {
+      throw new CaptureError("missing_parent_span");
+    }
     throw new CaptureError("missing_multilevel_hierarchy");
   }
 
@@ -673,6 +679,7 @@ export function validateCanonicalSpans(records, expectedRevision) {
     span_count: sorted.length,
     trace_count: new Set(sorted.map((record) => record.trace_id)).size,
     parented_span_count: parentedSpanCount,
+    external_parent_span_count: externalParentSpanCount,
     maximum_depth: maximumDepth,
     semantic_operation_counts: operations,
   };
