@@ -640,7 +640,6 @@ export function validateCanonicalSpans(records, expectedRevision) {
       visited.add(cursorIdentity);
       cursor = identities.get(`${cursor.trace_id}:${cursor.parent_span_id}`);
       if (!cursor) {
-        externalParentSpanCount += 1;
         break;
       }
       depth += 1;

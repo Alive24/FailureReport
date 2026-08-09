@@ -42,15 +42,19 @@ function completeHierarchy() {
 }
 
 describe("canonical external-parent boundaries", () => {
-  it("retains a complete in-dataset hierarchy when another span's parent was not exported", () => {
+  it("counts an unexported direct parent once even when descendants reach that boundary", () => {
     const result = validateCanonicalSpans(
-      [...completeHierarchy(), span("4", "9", "external-child")],
+      [
+        ...completeHierarchy(),
+        span("4", "9", "external-child"),
+        span("5", "4", "external-child-descendant"),
+      ],
       revision,
     );
 
     expect(result).toMatchObject({
-      span_count: 4,
-      parented_span_count: 3,
+      span_count: 5,
+      parented_span_count: 4,
       external_parent_span_count: 1,
       maximum_depth: 3,
     });
