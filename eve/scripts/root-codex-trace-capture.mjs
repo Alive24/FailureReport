@@ -878,7 +878,7 @@ async function invokeExistingIssueFlow({ fixture, host, signal }) {
     throw new CaptureError(
       second.result.status === "failed"
         ? "root_flow_failed"
-        : "codex_flow_failed",
+        : `codex_flow_${second.result.status}`,
     );
   }
 }
