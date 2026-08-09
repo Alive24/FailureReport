@@ -1,5 +1,7 @@
 import type { FailureReport } from "@failure-report/protocol";
 
+import { normalizeFailureReportArtifactReferences } from "../../diagnostics/artifact-references.js";
+
 import {
   type GithubActorIdentity,
   type GithubIssueSnapshot,
@@ -193,6 +195,9 @@ export abstract class IssueWorkpadGateway implements GithubIssueGateway {
     report: FailureReport,
     syncedAt: string,
   ): Promise<PublishedSharedContext> {
+    // Normalize before any GitHub read/write preparation so every public route
+    // shares the same canonical artifact refs on its first publication attempt.
+    const normalizedReport = normalizeFailureReportArtifactReferences(report);
     const producers = this.getWorkpadProducerConfiguration();
     const authenticatedActor = await this.readAuthenticatedActor();
     if (authenticatedActor.id !== producers.current.github_actor_id) {
@@ -204,7 +209,7 @@ export abstract class IssueWorkpadGateway implements GithubIssueGateway {
     const issue = await this.readIssue(repository, issueNumber);
     const mutation = prepareIssueWorkpadMutation(
       issue,
-      report,
+      normalizedReport,
       syncedAt,
       producers,
       this.encodedByteBudget,

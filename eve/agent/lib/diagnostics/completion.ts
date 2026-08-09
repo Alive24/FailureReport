@@ -10,6 +10,8 @@ import {
   type FailureReport,
 } from "@failure-report/protocol";
 
+import { normalizeDiagnosticCompletionArtifactReferences } from "./artifact-references.js";
+
 /**
  * Root-owned input for reconciling a completed Codex turn. The worker may
  * report evidence and recommendations, but this type deliberately contains no
@@ -80,6 +82,7 @@ export function createDiagnosticCompletionRecord(input: {
 }): DiagnosticCompletionRecord {
   const outcome = normalizeDiagnosticCompletionOutcome(
     input.completion.outcome,
+    input.report.id,
   );
   const identity: DiagnosticCompletionIdentityInput = {
     report_id: input.report.id,
@@ -276,6 +279,7 @@ export function projectDiagnosticCompletion(input: {
 /** Normalizes optional Root input to the complete persisted outcome shape. */
 function normalizeDiagnosticCompletionOutcome(
   outcome: Partial<DiagnosticCompletionOutcome> | undefined,
+  reportId: string,
 ): DiagnosticCompletionOutcome {
   try {
     const parsed = diagnosticCompletionOutcomeSchema.parse({
@@ -300,13 +304,13 @@ function normalizeDiagnosticCompletionOutcome(
         "Diagnostic completion repeats an evidence identity in both evidence and operation_evidence.",
       );
     }
-    return {
+    return normalizeDiagnosticCompletionArtifactReferences(reportId, {
       ...parsed,
       evidence: sortById(parsed.evidence),
       operation_evidence: sortById(parsed.operation_evidence),
       hypotheses: sortById(parsed.hypotheses),
       experiments: sortById(parsed.experiments),
-    };
+    });
   } catch (error) {
     if (error instanceof DiagnosticCompletionIntegrityError) {
       throw error;
