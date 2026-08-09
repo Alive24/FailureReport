@@ -20,6 +20,7 @@ import {
   atomicallyFinalizeCapture,
   createCaptureReceipt,
   decodeOtlpTracePayload,
+  isUsableRehydratedIssue,
   loadCaptureConfiguration,
   parseCaptureEnvironment,
   prepareContainedOutputDirectory,
@@ -41,6 +42,43 @@ afterEach(async () => {
 });
 
 describe("real Root-to-Codex trace capture configuration", () => {
+  it.each(["accepted", "completed", "needs_input"])(
+    "continues from a correctly bound %s fixture rehydration",
+    (status) => {
+      expect(
+        isUsableRehydratedIssue(
+          {
+            status,
+            issue: { repository: "Alive24/Fixture", issue_number: 123 },
+          },
+          { repository: "Alive24/Fixture", issue_number: 123 },
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects failed, missing, and mismatched fixture rehydration", () => {
+    const fixture = { repository: "Alive24/Fixture", issue_number: 123 };
+    expect(
+      isUsableRehydratedIssue(
+        { status: "failed", issue: { ...fixture } },
+        fixture,
+      ),
+    ).toBe(false);
+    expect(isUsableRehydratedIssue({ status: "needs_input" }, fixture)).toBe(
+      false,
+    );
+    expect(
+      isUsableRehydratedIssue(
+        {
+          status: "completed",
+          issue: { repository: "Alive24/Other", issue_number: 123 },
+        },
+        fixture,
+      ),
+    ).toBe(false);
+  });
+
   it("requires every operator-owned immutable input", () => {
     expect(() => parseCaptureEnvironment({})).toThrowError(
       captureError("missing_runtime_input"),
