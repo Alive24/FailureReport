@@ -69,6 +69,32 @@ export function isUsableRehydratedIssue(result, fixture) {
   );
 }
 
+export function isFreshRehydratedIssue(issue) {
+  return Boolean(
+    issue?.workpad_revision === 0 &&
+    !issue.workpad_comment_ref &&
+    !issue.workpad_logical_session_id &&
+    !issue.workpad_entry_id &&
+    !issue.workpad_producer_id &&
+    !issue.workpad_predecessor_comment_ref,
+  );
+}
+
+export function buildDiagnosticStartRequest(issue, fixture, requestId) {
+  const freshIssueBoundary = isFreshRehydratedIssue(issue)
+    ? " This Issue has workpad_revision 0 and no managed workpad lineage. Treat it as a fresh Issue: do not put failure_report.shared_context on the draft report before the first managed workpad publication; that initial publication must create the lineage."
+    : "";
+  return {
+    request_id: requestId,
+    operation: "start",
+    issue,
+    message:
+      "Run one real FailureReport diagnosis for this operator-approved disposable fixture. " +
+      `Use the bound immutable target revision ${fixture.revision}.` +
+      freshIssueBoundary,
+  };
+}
+
 export function parseCaptureEnvironment(environment = process.env) {
   for (const variable of forbiddenTransportVariables) {
     if (nonEmpty(environment[variable])) {
@@ -860,14 +886,11 @@ async function invokeExistingIssueFlow({ fixture, host, signal }) {
   if (!isUsableRehydratedIssue(first.result, fixture)) {
     throw new CaptureError("root_rehydration_failed");
   }
-  const secondRequest = {
-    request_id: `trace-capture-${randomUUID()}`,
-    operation: "start",
-    issue: first.result.issue,
-    message:
-      "Run one real FailureReport diagnosis for this operator-approved disposable fixture. " +
-      `Use the bound immutable target revision ${fixture.revision}.`,
-  };
+  const secondRequest = buildDiagnosticStartRequest(
+    first.result.issue,
+    fixture,
+    `trace-capture-${randomUUID()}`,
+  );
   const second = await sendRootRequest(
     client,
     secondRequest,
