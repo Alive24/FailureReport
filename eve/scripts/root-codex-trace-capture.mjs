@@ -32,6 +32,7 @@ const defaultReadinessTimeoutMs = 120_000;
 const defaultRootFlowTimeoutMs = 45 * 60_000;
 const defaultExportQuietMs = 1_000;
 const childCleanupTimeoutMs = 5_000;
+const rehydrationStatuses = new Set(["accepted", "completed", "needs_input"]);
 
 export const captureEnvironmentVariables = Object.freeze({
   fixtureRepository: "FAILURE_REPORT_TRACE_FIXTURE_REPOSITORY",
@@ -57,6 +58,15 @@ export class CaptureError extends Error {
     this.name = "CaptureError";
     this.code = code;
   }
+}
+
+export function isUsableRehydratedIssue(result, fixture) {
+  return Boolean(
+    rehydrationStatuses.has(result.status) &&
+    result.issue &&
+    result.issue.repository === fixture.repository &&
+    result.issue.issue_number === fixture.issue_number,
+  );
 }
 
 export function parseCaptureEnvironment(environment = process.env) {
@@ -847,12 +857,7 @@ async function invokeExistingIssueFlow({ fixture, host, signal }) {
     message: "Rehydrate the explicitly selected disposable fixture Issue.",
   };
   const first = await sendRootRequest(client, firstRequest, undefined, signal);
-  if (
-    first.result.status !== "completed" ||
-    !first.result.issue ||
-    first.result.issue.repository !== fixture.repository ||
-    first.result.issue.issue_number !== fixture.issue_number
-  ) {
+  if (!isUsableRehydratedIssue(first.result, fixture)) {
     throw new CaptureError("root_rehydration_failed");
   }
   const secondRequest = {
