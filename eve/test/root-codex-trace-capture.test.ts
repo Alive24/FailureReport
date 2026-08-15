@@ -18,14 +18,18 @@ import {
   assertLoopbackEndpoint,
   assertSafeReceipt,
   atomicallyFinalizeCapture,
+  buildDiagnosticStartRequest,
   createCaptureReceipt,
+  createInitialLifecycleEvidence,
   decodeOtlpTracePayload,
+  isFreshRehydratedIssue,
   isUsableRehydratedIssue,
   loadCaptureConfiguration,
   parseCaptureEnvironment,
   prepareContainedOutputDirectory,
   repositoryFromRemote,
   runRealRootCodexTraceCapture,
+  validateCaptureLifecycle,
   validateCanonicalSpans,
 } from "../scripts/root-codex-trace-capture.mjs";
 
@@ -43,40 +47,98 @@ afterEach(async () => {
 
 describe("real Root-to-Codex trace capture configuration", () => {
   it.each(["accepted", "completed", "needs_input"])(
-    "continues from a correctly bound %s fixture rehydration",
+    "records a correctly bound fresh %s fixture rehydration",
     (status) => {
-      expect(
-        isUsableRehydratedIssue(
-          {
-            status,
-            issue: { repository: "Alive24/Fixture", issue_number: 123 },
-          },
-          { repository: "Alive24/Fixture", issue_number: 123 },
-        ),
-      ).toBe(true);
+      const result = {
+        status,
+        issue: freshIssueContext(),
+      };
+      const fixture = { repository: "Alive24/Fixture", issue_number: 123 };
+      expect(isUsableRehydratedIssue(result, fixture)).toBe(true);
+      expect(createInitialLifecycleEvidence(result, fixture)).toEqual({
+        initial_rehydration_status: status,
+        initial_workpad_revision: 0,
+        initial_managed_lineage: false,
+      });
     },
   );
 
   it("rejects failed, missing, and mismatched fixture rehydration", () => {
     const fixture = { repository: "Alive24/Fixture", issue_number: 123 };
-    expect(
-      isUsableRehydratedIssue(
-        { status: "failed", issue: { ...fixture } },
-        fixture,
-      ),
-    ).toBe(false);
-    expect(isUsableRehydratedIssue({ status: "needs_input" }, fixture)).toBe(
-      false,
+    const rejected = [
+      { status: "failed", issue: freshIssueContext() },
+      { status: "needs_input" },
+      {
+        status: "completed",
+        issue: freshIssueContext({ repository: "Alive24/Other" }),
+      },
+    ];
+    for (const result of rejected) {
+      expect(isUsableRehydratedIssue(result, fixture)).toBe(false);
+      expect(() =>
+        createInitialLifecycleEvidence(result, fixture),
+      ).toThrowError(captureError("root_rehydration_failed"));
+    }
+  });
+
+  it.each([
+    [
+      {
+        status: "completed",
+        issue: freshIssueContext({ workpad_revision: 1 }),
+      },
+      "fixture_workpad_revision_mismatch",
+    ],
+    [
+      {
+        status: "completed",
+        issue: freshIssueContext({ workpad_comment_ref: "comment-1" }),
+      },
+      "fixture_managed_lineage_present",
+    ],
+  ])("rejects non-fresh initial lifecycle evidence", (result, code) => {
+    expect(() =>
+      createInitialLifecycleEvidence(result, {
+        repository: "Alive24/Fixture",
+        issue_number: 123,
+      }),
+    ).toThrowError(captureError(code));
+  });
+
+  it("builds the diagnosis request from the verified fresh context", () => {
+    const issue = freshIssueContext();
+    expect(isFreshRehydratedIssue(issue)).toBe(true);
+    const request = buildDiagnosticStartRequest(
+      issue,
+      {
+        repository: "Alive24/Fixture",
+        issue_number: 123,
+        revision: fixtureRevision,
+      },
+      "request-1",
     );
-    expect(
-      isUsableRehydratedIssue(
-        {
-          status: "completed",
-          issue: { repository: "Alive24/Other", issue_number: 123 },
-        },
-        fixture,
-      ),
-    ).toBe(false);
+    expect(request).toMatchObject({
+      request_id: "request-1",
+      operation: "start",
+      issue,
+    });
+    expect(request.message).toContain("workpad_revision 0");
+    expect(request.message).toContain("no managed lineage");
+    expect(request.message).toContain(fixtureRevision);
+  });
+
+  it("requires a fresh initial boundary and completed diagnosis", () => {
+    expect(() => validateCaptureLifecycle(captureLifecycle())).not.toThrow();
+    for (const lifecycle of [
+      captureLifecycle({ initial_workpad_revision: 1 }),
+      captureLifecycle({ initial_managed_lineage: true }),
+      captureLifecycle({ initial_rehydration_status: "failed" }),
+      captureLifecycle({ diagnosis_status: "needs_input" }),
+    ]) {
+      expect(() => validateCaptureLifecycle(lifecycle)).toThrowError(
+        captureError("lifecycle_evidence_invalid"),
+      );
+    }
   });
 
   it("requires every operator-owned immutable input", () => {
@@ -420,8 +482,10 @@ describe("canonical dataset validation and receipt", () => {
     expect(canonical).toMatchObject({
       span_count: 3,
       trace_count: 1,
-      parented_span_count: 2,
-      maximum_depth: 3,
+      unique_span_identity_count: 3,
+      internal_parent_edge_count: 2,
+      external_parent_edge_count: 0,
+      maximum_internal_depth: 3,
       semantic_operation_counts: {
         eve_root_turn: 1,
         eve_tool: 1,
@@ -435,6 +499,7 @@ describe("canonical dataset validation and receipt", () => {
         issue_number: 123,
         revision: fixtureRevision,
       },
+      lifecycle: captureLifecycle(),
       revision: sourceRevision,
     });
     expect(() => assertSafeReceipt(receipt)).not.toThrow();
@@ -466,7 +531,7 @@ describe("canonical dataset validation and receipt", () => {
       canonicalHierarchy().map((span, index) =>
         index === 1 ? { ...span, parent_span_id: "9".repeat(16) } : span,
       ),
-      "missing_parent_span",
+      "missing_multilevel_hierarchy",
     ],
     [
       canonicalHierarchy().map((span, index) =>
@@ -554,6 +619,7 @@ describe("capture lifecycle", () => {
     );
 
     expect(receipt.status_classification).toBe("complete");
+    expect(receipt.lifecycle).toEqual(captureLifecycle());
     expect(lifecycle).toEqual([
       "collector:start",
       "runtime:start",
@@ -613,6 +679,13 @@ describe("capture lifecycle", () => {
         },
       },
     ],
+    [
+      "lifecycle_evidence_invalid",
+      {
+        invokeRootFlow: async () =>
+          captureLifecycle({ diagnosis_status: "needs_input" }),
+      },
+    ],
   ])("cleans both boundaries after %s", async (code, overrides) => {
     const output = await temporaryDirectory();
     const lifecycle: string[] = [];
@@ -642,6 +715,28 @@ function validEnvironment(
     FAILURE_REPORT_TRACE_TARGET_CHECKOUT: "/tmp/fixture",
     FAILURE_REPORT_TRACE_EXPECTED_SOURCE_REVISION: sourceRevision,
     FAILURE_REPORT_TRACE_OUTPUT_DIRECTORY: "/tmp/output",
+    ...overrides,
+  };
+}
+
+function freshIssueContext(overrides: Record<string, unknown> = {}) {
+  return {
+    provider: "github_issue",
+    repository: "Alive24/Fixture",
+    issue_number: 123,
+    issue_url: "https://github.com/Alive24/Fixture/issues/123",
+    workpad_marker: "<!-- failure-report-workpad -->",
+    workpad_revision: 0,
+    ...overrides,
+  };
+}
+
+function captureLifecycle(overrides: Record<string, unknown> = {}) {
+  return {
+    initial_rehydration_status: "needs_input",
+    initial_workpad_revision: 0,
+    initial_managed_lineage: false,
+    diagnosis_status: "completed",
     ...overrides,
   };
 }
@@ -819,7 +914,7 @@ function fakeLifecycle({
   lifecycle: string[];
   records: ReturnType<typeof canonicalHierarchy>;
   waitForReadiness?: () => Promise<void>;
-  invokeRootFlow?: () => Promise<void>;
+  invokeRootFlow?: () => Promise<unknown>;
   waitForRequiredOperations?: () => Promise<void>;
   readinessTimeoutMs?: number;
 }) {
@@ -852,7 +947,7 @@ function fakeLifecycle({
     },
     async invokeRootFlow() {
       lifecycle.push("root:complete");
-      await invokeRootFlow?.();
+      return (await invokeRootFlow?.()) ?? captureLifecycle();
     },
     async stopRuntime() {
       lifecycle.push("runtime:stop");
@@ -863,20 +958,23 @@ function fakeLifecycle({
 
 function safeReceipt() {
   return {
-    schema_version: "failure-report/root-codex-trace-capture-receipt/v1",
+    schema_version: "failure-report/root-codex-trace-capture-receipt/v2",
     revision: sourceRevision,
     digest: `sha256:${"c".repeat(64)}`,
     counts: {
       spans: 3,
       traces: 1,
-      parented_spans: 2,
-      maximum_depth: 3,
+      unique_span_identities: 3,
+      internal_parent_edges: 2,
+      external_parent_edges: 0,
+      maximum_internal_depth: 3,
     },
     semantic_operation_counts: {
       eve_root_turn: 1,
       eve_tool: 1,
       delegated_codex: 1,
     },
+    lifecycle: captureLifecycle(),
     status_classification: "complete",
     fixture: {
       repository: "Alive24/Fixture",

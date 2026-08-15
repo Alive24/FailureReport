@@ -69,6 +69,69 @@ export function isUsableRehydratedIssue(result, fixture) {
   );
 }
 
+export function isFreshRehydratedIssue(issue) {
+  return Boolean(
+    issue?.workpad_revision === 0 &&
+    !issue.workpad_comment_ref &&
+    !issue.workpad_logical_session_id &&
+    !issue.workpad_entry_id &&
+    !issue.workpad_producer_id &&
+    !issue.workpad_predecessor_comment_ref,
+  );
+}
+
+export function createInitialLifecycleEvidence(result, fixture) {
+  if (!isUsableRehydratedIssue(result, fixture)) {
+    throw new CaptureError("root_rehydration_failed");
+  }
+  if (result.issue.workpad_revision !== 0) {
+    throw new CaptureError("fixture_workpad_revision_mismatch");
+  }
+  if (!isFreshRehydratedIssue(result.issue)) {
+    throw new CaptureError("fixture_managed_lineage_present");
+  }
+  return {
+    initial_rehydration_status: result.status,
+    initial_workpad_revision: 0,
+    initial_managed_lineage: false,
+  };
+}
+
+export function buildDiagnosticStartRequest(issue, fixture, requestId) {
+  return {
+    request_id: requestId,
+    operation: "start",
+    issue,
+    message:
+      "Run one real FailureReport diagnosis for this operator-approved disposable fixture. " +
+      `Use the bound immutable target revision ${fixture.revision}. ` +
+      "The rehydrated Issue was verified at workpad_revision 0 with no managed lineage. " +
+      "Treat it as fresh: the first managed workpad publication must create the lineage rather than pre-binding draft shared context.",
+  };
+}
+
+export function validateCaptureLifecycle(lifecycle) {
+  assertExactKeys(
+    lifecycle,
+    [
+      "diagnosis_status",
+      "initial_managed_lineage",
+      "initial_rehydration_status",
+      "initial_workpad_revision",
+    ],
+    "lifecycle_evidence_invalid",
+  );
+  if (
+    lifecycle.initial_workpad_revision !== 0 ||
+    lifecycle.initial_managed_lineage !== false ||
+    !rehydrationStatuses.has(lifecycle.initial_rehydration_status) ||
+    lifecycle.diagnosis_status !== "completed"
+  ) {
+    throw new CaptureError("lifecycle_evidence_invalid");
+  }
+  return lifecycle;
+}
+
 export function parseCaptureEnvironment(environment = process.env) {
   for (const variable of forbiddenTransportVariables) {
     if (nonEmpty(environment[variable])) {
@@ -248,7 +311,7 @@ export async function runRealRootCodexTraceCapture(
       ),
       signalController.signal,
     );
-    await withCancellation(
+    const lifecycle = await withCancellation(
       withTimeout(
         invokeRootFlow({
           fixture: configuration.fixture,
@@ -260,6 +323,7 @@ export async function runRealRootCodexTraceCapture(
       ),
       signalController.signal,
     );
+    validateCaptureLifecycle(lifecycle);
     await collector.waitForRequiredOperations(signalController.signal);
     await stopRuntime(child);
     child = undefined;
@@ -276,6 +340,7 @@ export async function runRealRootCodexTraceCapture(
     const receipt = createCaptureReceipt({
       canonical,
       fixture: configuration.fixture,
+      lifecycle,
       revision: configuration.expected_source_revision,
     });
     assertSafeReceipt(receipt);
@@ -590,17 +655,19 @@ export function validateCanonicalSpans(records, expectedRevision) {
     }
   }
 
-  let parentedSpanCount = 0;
-  let maximumDepth = 1;
+  let internalParentEdgeCount = 0;
+  let externalParentEdgeCount = 0;
+  let maximumInternalDepth = 1;
   for (const record of records) {
     if (!record.parent_span_id) {
       continue;
     }
-    parentedSpanCount += 1;
     const parentIdentity = `${record.trace_id}:${record.parent_span_id}`;
     if (!identities.has(parentIdentity)) {
-      throw new CaptureError("missing_parent_span");
+      externalParentEdgeCount += 1;
+      continue;
     }
+    internalParentEdgeCount += 1;
     const visited = new Set();
     let cursor = record;
     let depth = 1;
@@ -612,13 +679,13 @@ export function validateCanonicalSpans(records, expectedRevision) {
       visited.add(cursorIdentity);
       cursor = identities.get(`${cursor.trace_id}:${cursor.parent_span_id}`);
       if (!cursor) {
-        throw new CaptureError("missing_parent_span");
+        break;
       }
       depth += 1;
     }
-    maximumDepth = Math.max(maximumDepth, depth);
+    maximumInternalDepth = Math.max(maximumInternalDepth, depth);
   }
-  if (maximumDepth < 3) {
+  if (maximumInternalDepth < 3) {
     throw new CaptureError("missing_multilevel_hierarchy");
   }
 
@@ -646,8 +713,10 @@ export function validateCanonicalSpans(records, expectedRevision) {
     digest: createHash("sha256").update(body).digest("hex"),
     span_count: sorted.length,
     trace_count: new Set(sorted.map((record) => record.trace_id)).size,
-    parented_span_count: parentedSpanCount,
-    maximum_depth: maximumDepth,
+    unique_span_identity_count: identities.size,
+    internal_parent_edge_count: internalParentEdgeCount,
+    external_parent_edge_count: externalParentEdgeCount,
+    maximum_internal_depth: maximumInternalDepth,
     semantic_operation_counts: operations,
   };
 }
@@ -676,18 +745,26 @@ export function semanticOperationCounts(records) {
   return counts;
 }
 
-export function createCaptureReceipt({ canonical, fixture, revision }) {
+export function createCaptureReceipt({
+  canonical,
+  fixture,
+  lifecycle,
+  revision,
+}) {
   return {
-    schema_version: "failure-report/root-codex-trace-capture-receipt/v1",
+    schema_version: "failure-report/root-codex-trace-capture-receipt/v2",
     revision,
     digest: `sha256:${canonical.digest}`,
     counts: {
       spans: canonical.span_count,
       traces: canonical.trace_count,
-      parented_spans: canonical.parented_span_count,
-      maximum_depth: canonical.maximum_depth,
+      unique_span_identities: canonical.unique_span_identity_count,
+      internal_parent_edges: canonical.internal_parent_edge_count,
+      external_parent_edges: canonical.external_parent_edge_count,
+      maximum_internal_depth: canonical.maximum_internal_depth,
     },
     semantic_operation_counts: canonical.semantic_operation_counts,
+    lifecycle: validateCaptureLifecycle(lifecycle),
     status_classification: "complete",
     fixture: {
       repository: fixture.repository,
@@ -702,16 +779,19 @@ export function assertSafeReceipt(receipt) {
     "counts",
     "digest",
     "fixture",
+    "lifecycle",
     "revision",
     "schema_version",
     "semantic_operation_counts",
     "status_classification",
   ]);
   assertReceiptKeys(receipt.counts, [
-    "maximum_depth",
-    "parented_spans",
+    "external_parent_edges",
+    "internal_parent_edges",
+    "maximum_internal_depth",
     "spans",
     "traces",
+    "unique_span_identities",
   ]);
   assertReceiptKeys(receipt.semantic_operation_counts, [
     "delegated_codex",
@@ -723,9 +803,15 @@ export function assertSafeReceipt(receipt) {
     "repository",
     "revision",
   ]);
+  assertReceiptKeys(receipt.lifecycle, [
+    "diagnosis_status",
+    "initial_managed_lineage",
+    "initial_rehydration_status",
+    "initial_workpad_revision",
+  ]);
   if (
     receipt.schema_version !==
-      "failure-report/root-codex-trace-capture-receipt/v1" ||
+      "failure-report/root-codex-trace-capture-receipt/v2" ||
     receipt.status_classification !== "complete" ||
     !fullRevisionPattern.test(receipt.revision) ||
     !/^sha256:[0-9a-f]{64}$/.test(receipt.digest) ||
@@ -741,8 +827,16 @@ export function assertSafeReceipt(receipt) {
     receipt.counts.spans <= 0 ||
     receipt.counts.traces <= 0 ||
     receipt.counts.traces > receipt.counts.spans ||
-    receipt.counts.parented_spans <= 0 ||
-    receipt.counts.maximum_depth < 3 ||
+    receipt.counts.unique_span_identities !== receipt.counts.spans ||
+    receipt.counts.internal_parent_edges <= 0 ||
+    receipt.counts.internal_parent_edges +
+      receipt.counts.external_parent_edges >
+      receipt.counts.spans ||
+    receipt.counts.maximum_internal_depth < 3 ||
+    receipt.lifecycle.initial_workpad_revision !== 0 ||
+    receipt.lifecycle.initial_managed_lineage !== false ||
+    !rehydrationStatuses.has(receipt.lifecycle.initial_rehydration_status) ||
+    receipt.lifecycle.diagnosis_status !== "completed" ||
     Object.values(receipt.semantic_operation_counts).some((count) => count <= 0)
   ) {
     throw new CaptureError("receipt_forbidden_field");
@@ -857,17 +951,12 @@ async function invokeExistingIssueFlow({ fixture, host, signal }) {
     message: "Rehydrate the explicitly selected disposable fixture Issue.",
   };
   const first = await sendRootRequest(client, firstRequest, undefined, signal);
-  if (!isUsableRehydratedIssue(first.result, fixture)) {
-    throw new CaptureError("root_rehydration_failed");
-  }
-  const secondRequest = {
-    request_id: `trace-capture-${randomUUID()}`,
-    operation: "start",
-    issue: first.result.issue,
-    message:
-      "Run one real FailureReport diagnosis for this operator-approved disposable fixture. " +
-      `Use the bound immutable target revision ${fixture.revision}.`,
-  };
+  const lifecycle = createInitialLifecycleEvidence(first.result, fixture);
+  const secondRequest = buildDiagnosticStartRequest(
+    first.result.issue,
+    fixture,
+    `trace-capture-${randomUUID()}`,
+  );
   const second = await sendRootRequest(
     client,
     secondRequest,
@@ -881,6 +970,10 @@ async function invokeExistingIssueFlow({ fixture, host, signal }) {
         : "codex_flow_failed",
     );
   }
+  return {
+    ...lifecycle,
+    diagnosis_status: second.result.status,
+  };
 }
 
 async function sendRootRequest(client, request, sessionState, signal) {
