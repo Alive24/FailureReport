@@ -23,6 +23,8 @@ The operator must provide all six values:
 
 The target checkout’s canonical `origin`, `HEAD`, and clean state must match the fixture identity. The candidate checkout’s `HEAD` and clean state must match the expected source revision. A mutable ref such as a branch or tag is never accepted.
 
+The child Root also inherits the normal FailureReport publication authority required for a real diagnosis. In particular, configure `FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ID` and `FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ACTOR_ID` with the deployment’s established producer ID and immutable GitHub actor ID; include `FAILURE_REPORT_GITHUB_WORKPAD_PRODUCERS` when the deployment trusts additional historical producers. These are existing Root authority settings, not capture receipt fields. Missing or partial producer configuration must return `needs_input` before the first managed workpad publication. Do not infer an actor ID from a mutable login or copy a producer identity from an unrelated deployment.
+
 Do not set `CATALYST_OTLP_TOKEN` or `OTLP_INGEST_TOKEN`. The harness creates its own ephemeral `127.0.0.1` collector and overrides export configuration for the child runtime. Any preconfigured tracing endpoint must already be a credential-free `http://127.0.0.1` URL; DNS names, redirects, HTTPS, LAN/public addresses, URL credentials, query strings, and fragments fail before startup.
 
 The command intentionally suppresses child logs and never prints the Root request, model content, tool payloads, endpoints, credentials, or host paths. Raw canonical traces remain only in the configured ignored directory with owner-only permissions.
