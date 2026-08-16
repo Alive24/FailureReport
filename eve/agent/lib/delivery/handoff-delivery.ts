@@ -25,6 +25,10 @@ import {
   createHandoffDeliveryReceipt,
   prepareHandoffDelivery,
 } from "./handoff-template.js";
+import {
+  logRuntimeFailure,
+  runtimeFailureReason,
+} from "../runtime-failures.js";
 
 /** Revision bindings shared with the pure renderer. */
 export type DeliverDiagnosticHandoffRequest = {
@@ -80,10 +84,15 @@ export function createDiagnosticHandoffDelivery(
       policy =
         options.policy ??
         readHandoffDeliveryPolicy(options.environment ?? process.env);
-    } catch {
+    } catch (error) {
+      logRuntimeFailure(
+        "handoff-delivery-policy",
+        error,
+        "delivery_policy_invalid",
+      );
       return needsInput(
         input.report_id,
-        "FAILURE_REPORT_HANDOFF_DELIVERY_POLICY is invalid.",
+        runtimeFailureReason(error, "delivery_policy_invalid"),
       );
     }
     if (!policy) {
@@ -122,21 +131,34 @@ export function createDiagnosticHandoffDelivery(
         );
       }
 
-      const template = options.templateLoader
-        ? await options.templateLoader(
-            options.applicationRoot ?? "/unused-test-seam",
-            repositoryPolicy.template.path,
-          )
-        : await loadTargetHandoffTemplate({
-            repository: input.repository,
-            revision: input.expected_target_revision,
-            configuredPath: repositoryPolicy.template.path,
-          });
-      const prepared = prepareHandoffDelivery({
-        handoff: rendered.implementation_handoff,
-        policy: repositoryPolicy,
-        template: template.content,
-      });
+      let prepared: ReturnType<typeof prepareHandoffDelivery>;
+      try {
+        const template = options.templateLoader
+          ? await options.templateLoader(
+              options.applicationRoot ?? "/unused-test-seam",
+              repositoryPolicy.template.path,
+            )
+          : await loadTargetHandoffTemplate({
+              repository: input.repository,
+              revision: input.expected_target_revision,
+              configuredPath: repositoryPolicy.template.path,
+            });
+        prepared = prepareHandoffDelivery({
+          handoff: rendered.implementation_handoff,
+          policy: repositoryPolicy,
+          template: template.content,
+        });
+      } catch (error) {
+        logRuntimeFailure(
+          "handoff-delivery-template",
+          error,
+          "handoff_template_invalid",
+        );
+        return needsInput(
+          input.report_id,
+          runtimeFailureReason(error, "handoff_template_invalid"),
+        );
+      }
       const comment = await gateway.publishHandoffComment(
         input.repository,
         input.issue_number,
@@ -156,21 +178,35 @@ export function createDiagnosticHandoffDelivery(
         );
       }
       if (repositoryPolicy.tracker) {
-        const tracker = await Promise.resolve(
-          options.tracker ?? getDefaultGithubProjectTracker(),
-        );
-        await tracker.setIssueState({
-          repository: input.repository,
-          issue_number: input.issue_number,
-          tracker: trackerCoordinates(repositoryPolicy.tracker),
-          state: repositoryPolicy.tracker.ready_destination,
-          allowed_previous_states: [
-            null,
-            repositoryPolicy.tracker.intake_state,
-            "Need Human Input",
-            repositoryPolicy.tracker.ready_destination,
-          ],
-        });
+        try {
+          const tracker = await Promise.resolve(
+            options.tracker ?? getDefaultGithubProjectTracker(),
+          );
+          await tracker.setIssueState({
+            repository: input.repository,
+            issue_number: input.issue_number,
+            tracker: trackerCoordinates(repositoryPolicy.tracker),
+            state: repositoryPolicy.tracker.ready_destination,
+            allowed_previous_states: [
+              null,
+              repositoryPolicy.tracker.intake_state,
+              "Need Human Input",
+              repositoryPolicy.tracker.ready_destination,
+            ],
+          });
+        } catch (error) {
+          logRuntimeFailure(
+            "handoff-delivery-tracker",
+            error,
+            "tracker_transition_failed",
+          );
+          return needsInput(
+            input.report_id,
+            error instanceof WorkpadNeedsInputError
+              ? error.message
+              : runtimeFailureReason(error, "tracker_transition_failed"),
+          );
+        }
       }
       return {
         status: "completed",
@@ -184,12 +220,16 @@ export function createDiagnosticHandoffDelivery(
         }),
       };
     } catch (error) {
-      if (error instanceof WorkpadNeedsInputError) {
-        return needsInput(input.report_id, error.message);
-      }
+      logRuntimeFailure(
+        "handoff-delivery-gateway",
+        error,
+        "github_gateway_failed",
+      );
       return needsInput(
         input.report_id,
-        "Configured handoff delivery could not be verified; inspect the Root host provider configuration and retry.",
+        error instanceof WorkpadNeedsInputError
+          ? error.message
+          : runtimeFailureReason(error, "github_gateway_failed"),
       );
     }
   };

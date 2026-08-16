@@ -40,9 +40,14 @@ describe("Eve development entrypoint", () => {
     expect(evePackage.scripts).toMatchObject({
       test: "vitest run --exclude '**/.eve/**'",
       "dev:preflight":
-        "pnpm --filter @failure-report/protocol --filter @failure-report/ckb-domain-pack run build",
+        "pnpm --filter @failure-report/protocol --filter @failure-report/ckb-domain-pack run build && tsc -p tsconfig.json",
       predev: "pnpm run dev:preflight",
       dev: "node ./scripts/dev.mjs",
+      "runtime:build":
+        "pnpm run dev:preflight && pnpm exec eve build --skip-sandbox-prewarm",
+      prestart: "pnpm run runtime:build",
+      start: "node ./scripts/start.mjs",
+      "demo:start": "node ./scripts/demo-start.mjs",
     });
     expect(evePackage.dependencies?.["@inference/tracing"]).toBe("0.1.8");
     expect(evePackage.scripts?.["dev:preflight"]).not.toMatch(
@@ -59,12 +64,24 @@ describe("Eve development entrypoint", () => {
     }
 
     const launcher = await readFile(
-      resolve(eveRoot, "scripts/dev.mjs"),
+      resolve(eveRoot, "scripts/runtime-launcher.mjs"),
       "utf8",
     );
     expect(launcher).toContain("--target-workspace");
     expect(launcher).toContain("FAILURE_REPORT_TARGET_WORKSPACE");
-    expect(launcher).toContain('"dev", "--no-ui"');
+    expect(launcher).toContain('["dev", "--no-ui"');
+    expect(launcher).toContain('"start"');
+    expect(launcher).toContain("host-runtime-preflight-cli.js");
+    expect(launcher).toContain("watcher_exhaustion");
+    expect(launcher).toContain(".failure-report-runtime");
+    expect(launcher).toContain("createPersistentRuntimeRoot");
+
+    const supportedStart = await readFile(
+      resolve(eveRoot, "scripts/start.mjs"),
+      "utf8",
+    );
+    expect(supportedStart).toContain('mode: "production"');
+    expect(supportedStart).not.toContain('mode: "demo"');
 
     const instrumentation = await readFile(
       resolve(eveRoot, "agent/instrumentation.ts"),

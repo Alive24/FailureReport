@@ -1,12 +1,28 @@
 import { constants, existsSync } from "node:fs";
-import { copyFile, lstat, mkdir, readFile, realpath } from "node:fs/promises";
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+} from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  FailureReportRuntimeError,
+  type FailureReportRuntimeFailureCategory,
+} from "../runtime-failures.js";
+
 /** Signals that target-owned FailureReport configuration is unsafe or invalid. */
-export class TargetSheaConfigurationError extends Error {
-  constructor(message: string) {
-    super(message);
+export class TargetSheaConfigurationError extends FailureReportRuntimeError {
+  constructor(
+    message: string,
+    category: FailureReportRuntimeFailureCategory = "target_assets_invalid",
+  ) {
+    super(category, message);
     this.name = "TargetSheaConfigurationError";
   }
 }
@@ -127,7 +143,7 @@ export async function prepareTargetSheaWorkspace(input: {
       canonicalCheckout,
       target,
     );
-    const content = await readFile(canonicalTarget, "utf8");
+    const content = await readTargetAsset(canonicalTarget, asset.kind);
     if (!content.trim()) {
       throw new TargetSheaConfigurationError(
         `Target FailureReport ${asset.kind} asset must not be empty.`,
@@ -153,6 +169,40 @@ export async function prepareTargetSheaWorkspace(input: {
     prompts: { intake, synthesis },
     handoff_template_path: handoffTemplatePath,
   };
+}
+
+export type TargetSheaWriteProbeOperations = {
+  mkdtemp(path: string): Promise<string>;
+  rm(path: string, options: { recursive: true; force: true }): Promise<void>;
+};
+
+/**
+ * Proves ordinary create/remove authority without overwriting target content.
+ * The probe lives only in the already-contained ignored worktree root.
+ */
+export async function verifyTargetSheaWriteAuthority(
+  worktreeRoot: string,
+  operations: TargetSheaWriteProbeOperations = { mkdtemp, rm },
+): Promise<void> {
+  let probe: string | undefined;
+  try {
+    probe = await operations.mkdtemp(
+      join(worktreeRoot, ".failure-report-readiness-"),
+    );
+  } catch {
+    throw new TargetSheaConfigurationError(
+      "The target FailureReport `.shea` workspace is not writable.",
+      "target_workspace_write_denied",
+    );
+  }
+  try {
+    await operations.rm(probe, { recursive: true, force: true });
+  } catch {
+    throw new TargetSheaConfigurationError(
+      "The target FailureReport `.shea` write-authority probe could not be cleaned up.",
+      "target_workspace_write_denied",
+    );
+  }
 }
 
 async function validateCanonicalCheckout(path: string): Promise<string> {
@@ -205,6 +255,7 @@ async function ensureRealDirectory(
     }
     throw new TargetSheaConfigurationError(
       description + " cannot be created or inspected safely.",
+      "target_workspace_write_denied",
     );
   }
 }
@@ -257,8 +308,19 @@ async function copyMissingAsset(source: string, target: string): Promise<void> {
     if (!isAlreadyExistsError(error)) {
       throw new TargetSheaConfigurationError(
         "A missing target FailureReport `.shea` asset could not be copied.",
+        "target_workspace_write_denied",
       );
     }
+  }
+}
+
+async function readTargetAsset(path: string, kind: string): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch {
+    throw new TargetSheaConfigurationError(
+      `Target FailureReport ${kind} asset cannot be read safely.`,
+    );
   }
 }
 

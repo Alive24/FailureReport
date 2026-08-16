@@ -8,6 +8,8 @@ Eve Root is the only public agent. Its sole product entry is the built-in Eve Ch
 
 Root owns intake, GitHub workpad publication, routing, aggregation, and delegation to the one declared `codex` worker. Root uses a tool-capable model, while the direct Codex App Server transport is reserved for the internal worker because it does not expose Eve's custom-tool schema. External access is governed by reachable deployment credentials and network policy, not a Root approval loop.
 
+The supported local launcher builds production output and runs `eve start` without a watcher from a stable ignored production app root. Before Eve accepts work it composes the same Root-owned target-workspace and target-`.shea` components to prove canonical Git top-level/origin, fetch authority, missing-only asset/write authority, and any configured delivery template. Startup cannot know an Issue's repository/SHA binding, so `acquire` still verifies both exact values before delegation or delivery. Watcher development and isolated demo modes use the same host readiness boundary but retain their distinct state and watcher semantics.
+
 ## Domain Capability, Session, and Worker
 
 CKB is a mounted internal Eve extension. It contributes CKB instructions, the `failure-report-ckb-debugging` skill source, and `ckb__recommend_log`. It does not declare a sandbox, agent, session callback, worktree tool, or subagent.

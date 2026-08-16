@@ -71,11 +71,11 @@ pnpm test
 pnpm format:check
 ```
 
-Build Eve's production output without starting a watcher:
+Build FailureReport's host-readiness code and Eve production output without starting a watcher:
 
 ```bash
 cd eve
-pnpm exec eve build --skip-sandbox-prewarm
+pnpm run runtime:build
 ```
 
 The watcher-based `pnpm dev` path is not required for this demonstration.
@@ -104,9 +104,12 @@ pnpm run demo:start -- --target-workspace "/absolute/path/to/CKBoost"
 
 `demo:start` reuses the checked production build but gives Eve a fresh temporary app root. Its local Workflow World therefore cannot resume historical development or rehearsal runs from `FailureReport/eve/.eve`. It does not move, delete, or rewrite that directory.
 
+Before creating that isolated root, the shared launcher performs the same host preflight as durable `pnpm start`: canonical Git top-level/origin, fetch authority, missing-only target `.shea` preparation and write authority, and the configured policy/template. Repair a reported redacted category outside FailureReport and rerun the same command; do not bypass fetch, overwrite target assets, change credentials, or loosen permissions from the launcher.
+
 Wait for both:
 
 ```text
+{"event":"failure-report.host-runtime-readiness","status":"ready","delivery_policy":"configured"}
 Using isolated Eve workflow state at /tmp/failure-report-eve-demo-…/.eve
 Listening on: http://127.0.0.1:2000/
 ```

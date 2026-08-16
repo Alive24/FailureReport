@@ -66,16 +66,31 @@ pnpm check
 pnpm test
 ```
 
-### Cold-start Eve development
+### Supported no-watch local runtime
 
-A fresh checkout needs no manually inferred whole-workspace build before starting Eve. Install the locked workspace and run the normal development entrypoint:
+Normal local operation uses the production Eve server and does not require a filesystem watcher:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm --filter @Alive24/FailureReport start -- --target-workspace /absolute/path/to/target-checkout
+```
+
+The `prestart` hook builds FailureReport's direct workspace dependencies and host-readiness code, then builds or refreshes Eve's production output. Before the server accepts work, the launcher verifies the absolute real Git top level, readable `origin`, `git fetch` authority, missing-only target `.shea` preparation, an actual create/remove probe beneath the ignored FailureReport worktree root, and the configured delivery policy/template when one applies to the bound repository. Successful preflight emits one redacted structured `failure-report.host-runtime-readiness` record and then runs `eve start` from a stable ignored `FailureReport/eve/.failure-report-runtime` app root. Its nested `.eve` workflow state survives ordinary restarts without sharing the authored app root's watcher/development state.
+
+Startup failures emit only a boundary and safe category in structured private logs. Repair the corresponding host condition outside FailureReport and rerun the same command: canonical checkout/origin for `target_workspace_invalid`, checkout ownership for `target_workspace_write_denied`, Git credentials or network for `git_fetch_failed`, target `.shea` content for `target_assets_invalid`, the contained template for `handoff_template_invalid`, or deployment JSON for `delivery_policy_invalid`. The launcher does not change file-descriptor limits, credentials, Git configuration, target customizations, or operating-system permissions.
+
+Repository identity and full immutable revision remain operation-specific. Root rechecks them before diagnostic delegation and handoff delivery; startup readiness never guesses either value.
+
+### Watcher-based development
+
+A fresh checkout needs no manually inferred whole-workspace build before starting the development watcher. Install the locked workspace and run:
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm --filter @Alive24/FailureReport dev --target-workspace /absolute/path/to/target-checkout
 ```
 
-`dev` first runs its `dev:preflight`, which builds only `@failure-report/protocol` and `@failure-report/ckb-domain-pack`: the direct workspace packages Eve imports through generated `dist/` exports. It then validates the target binding, exports it to the host runtime as `FAILURE_REPORT_TARGET_WORKSPACE`, and runs `eve dev --no-ui`. This is deliberately narrower than `pnpm build` and needs no separate developer action.
+`dev` first runs its `dev:preflight`, which builds `@failure-report/protocol` and `@failure-report/ckb-domain-pack` plus FailureReport's local host-readiness code. It then runs the same host-runtime readiness boundary as supported start, exports the canonical binding as `FAILURE_REPORT_TARGET_WORKSPACE`, and launches `eve dev --no-ui`. It remains a development-only watcher path.
 
 The preflight may create ignored `dist/` output, and Eve may create ignored `.eve/` runtime-cache state. Neither is a dependency installation. Root is explicitly pinned to the declared `just-bash` dependency with automatic installation disabled, so this path must never run `pnpm add`, rewrite a package manifest or lockfile, or provision a Docker/microsandbox image or VM. Image or VM provisioning belongs only to an explicitly selected future sandbox backend; it is separate from build output and never a reason to mutate dependencies.
 
@@ -87,7 +102,7 @@ git status --short
 git diff --check
 ```
 
-The two Git commands must produce no output. On a host with ordinary watcher capacity, start `dev` normally and run the same Git checks after shutdown. An `EMFILE` watcher failure is a host/upstream resource condition to report separately; it must not trigger dependency installation or metadata changes.
+The two Git commands must produce no output. On a host with ordinary watcher capacity, start `dev` normally and run the same Git checks after shutdown. An `EMFILE` watcher failure is recorded as `watcher_exhaustion`; use supported no-watch `start` or repair host capacity. It must not trigger dependency installation or metadata changes.
 
 To verify native Codex skill discovery locally without starting a model turn, run the opt-in App Server smoke test. It creates a temporary Git worktree, links the CKB skill beneath `.agents/skills`, and performs the same bounded `initialize` plus `skills/list` exchange that Root uses:
 
@@ -99,13 +114,13 @@ For an operator-owned Shea Halo candidate experiment, FailureReport also has one
 
 FailureReport's MVP is a local product runtime. It uses the same `codex login` credentials in two distinct roles: a tool-capable Eve Root model via `experimental_chatgpt()`, and a direct Codex App Server host transport for the diagnostic worker. The latter must be given an isolated worktree and must not be used as the Root model, because it does not support AI SDK custom tool schemas.
 
-To use the public Root MCP surface through Codex, start Eve (and therefore its default Channel) in one terminal:
+To use the public Root MCP surface through Codex, start the supported no-watch Eve runtime (and therefore its default Channel) in one terminal:
 
 ```bash
-pnpm --filter @Alive24/FailureReport dev --target-workspace /absolute/path/to/target-checkout
+pnpm --filter @Alive24/FailureReport start -- --target-workspace /absolute/path/to/target-checkout
 ```
 
-The command above runs `eve dev --no-ui`; when `FAILURE_REPORT_EVE_HOST` is unset, the adapter-owned local default is `http://127.0.0.1:2000`. This fallback is only for that local development path. Then load the repository-local Codex plugin at `packages/codex-plugin/failure-report`. Its `.mcp.json` starts the external `@failure-report/mcp-adapter` wrapper, which exposes the single `failure_report` tool and calls the default Eve Channel. `FAILURE_REPORT_EVE_HOST` can point the wrapper at a deployed Root, and `FAILURE_REPORT_EVE_BEARER_TOKEN` remains optional for Channels that require bearer auth.
+The command above runs `eve start` on `127.0.0.1:2000`; when `FAILURE_REPORT_EVE_HOST` is unset, the adapter-owned local default is `http://127.0.0.1:2000`. Then load the repository-local Codex plugin at `packages/codex-plugin/failure-report`. Its `.mcp.json` starts the external `@failure-report/mcp-adapter` wrapper, which exposes the single `failure_report` tool and calls the default Eve Channel. `FAILURE_REPORT_EVE_HOST` can point the wrapper at a deployed Root, and `FAILURE_REPORT_EVE_BEARER_TOKEN` remains optional for Channels that require bearer auth.
 
 The local MCP wrapper keeps an adapter-private durable operation ledger beside Eve's serialized session cursor. Before it sends a Root turn, it records the canonical Issue/report session key, `request_id`, request fingerprint, and delivery owner; immediately after Eve accepts the turn, it records the allocated resumable session cursor before waiting for the terminal stream event. A terminal cursor with a valid `sessionId` advances that durable cursor. If a failed or waiting terminal event returns only an incomplete cursor, the wrapper stores the terminal result but retains the last delivered resumable cursor, so replay and later same-Issue work remain safe across restart. Legacy terminal ledgers with an incomplete cursor keep their replay records and start a fresh Eve session for later work; incomplete cursors attached to active delivered ownership still fail closed. A retry with the same `request_id` drains that delivered turn or replays its terminal result instead of sending again, while different requests for the same canonical key remain durably queued. Independent keys still run concurrently. Ambiguous or corrupt ownership fails closed rather than risking a second Root run.
 
@@ -122,7 +137,7 @@ For a local diagnosis, Root accepts only a repository identity and a full immuta
 
 The actual `git fetch`, `git worktree`, test, and package-manager commands run in the host runtime. Eve is pinned to `just-bash` for Root orchestration; its virtual shell is not a replacement Git runtime. Root's host-side diagnostics adapters inspect the controlled workspace and Codex App Server runs directly on the host with the validated worktree as `cwd`, retaining the user's existing `~/.codex`, plugins, skills, MCP settings, authentication, Git credentials, model configuration, and thread persistence.
 
-The launcher provides `--target-workspace` as the normal local interface. A service wrapper may set the equivalent `FAILURE_REPORT_TARGET_WORKSPACE` environment variable before starting Eve. The process serves only that repository until it exits; a report for another repository fails closed instead of selecting, cloning, or accepting another host path.
+The shared supported/development/demo launcher provides `--target-workspace` as the normal local interface. A service wrapper may set the equivalent `FAILURE_REPORT_TARGET_WORKSPACE` environment variable before starting Eve. The process serves only that repository until it exits; a report for another repository fails closed instead of selecting, cloning, or accepting another host path. `demo:start` uses the same production and host-readiness mechanisms but deliberately places Eve state in a fresh temporary app root; it is for isolated demonstrations, not durable normal operation.
 
 The target `.shea/.../failureReport` hierarchy is a shared workspace convention, not a runtime dependency on Shea Symphony. FailureReport can create and use it independently; a later Shea workflow may consume the same handoff and project-owned configuration.
 
