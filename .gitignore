@@ -8,6 +8,7 @@ dist/
 .turbo/
 .eve/
 eve/.output/
+eve/.failure-report-runtime/
 coverage/
 .env
 .env.*

@@ -12,6 +12,7 @@ import {
   hostWorktreePathOperations,
   runHostGit,
 } from "../diagnostics/worktree.js";
+import { FailureReportRuntimeError } from "../runtime-failures.js";
 
 export const defaultTargetHandoffTemplatePath =
   ".shea/template/failureReport/implementation.md";
@@ -126,28 +127,36 @@ export async function loadHandoffTemplate(
   canonicalCheckout: string,
   configuredPath: string,
 ): Promise<{ content: string; canonical_path: string }> {
-  const canonicalRoot = await realpath(canonicalCheckout);
-  const candidate = resolve(canonicalRoot, configuredPath);
-  const canonicalPath = await realpath(candidate);
-  const fromRoot = relative(canonicalRoot, canonicalPath);
-  if (
-    fromRoot === "" ||
-    fromRoot === ".." ||
-    fromRoot.startsWith("../") ||
-    isAbsolute(fromRoot)
-  ) {
-    throw new Error(
-      "Configured handoff template must resolve to a file inside the target canonical checkout.",
+  try {
+    const canonicalRoot = await realpath(canonicalCheckout);
+    const candidate = resolve(canonicalRoot, configuredPath);
+    const canonicalPath = await realpath(candidate);
+    const fromRoot = relative(canonicalRoot, canonicalPath);
+    if (
+      fromRoot === "" ||
+      fromRoot === ".." ||
+      fromRoot.startsWith("../") ||
+      isAbsolute(fromRoot)
+    ) {
+      throw new Error("template escaped the target checkout");
+    }
+    if (!(await stat(canonicalPath)).isFile()) {
+      throw new Error("template is not a regular file");
+    }
+    const content = await readFile(canonicalPath, "utf8");
+    if (!content.trim()) {
+      throw new Error("template is empty");
+    }
+    return { content, canonical_path: canonicalPath };
+  } catch (error) {
+    if (error instanceof FailureReportRuntimeError) {
+      throw error;
+    }
+    throw new FailureReportRuntimeError(
+      "handoff_template_invalid",
+      "Configured target handoff template could not be validated safely.",
     );
   }
-  if (!(await stat(canonicalPath)).isFile()) {
-    throw new Error("Configured handoff template must resolve to a file.");
-  }
-  const content = await readFile(canonicalPath, "utf8");
-  if (!content.trim()) {
-    throw new Error("Configured handoff template must not be empty.");
-  }
-  return { content, canonical_path: canonicalPath };
 }
 
 /**

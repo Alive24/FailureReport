@@ -99,6 +99,8 @@ type DiagnosticSession = {
 
 The target `.shea/.../failureReport` paths are a shared convention rather than a dependency on the Shea Symphony runtime. FailureReport can operate on them independently; downstream Shea workflows may later consume the same target-owned handoff and configuration.
 
+The supported no-watch local launcher runs a bounded startup preflight before `eve start`: it verifies the process-owned checkout as the real Git top level, reads `origin`, performs the ordinary non-skippable fetch, prepares only missing target-owned `.shea` assets, proves create/remove authority in the ignored FailureReport worktree root, and validates the matching configured handoff template. This early boundary never substitutes for operation-time repository/full-SHA verification. Failures retain only a redacted typed category in private structured logs and map to bounded `needs_input` guidance; raw paths, credentials, endpoints, and subprocess output never enter Root results.
+
 ## Deterministic Handoff Boundary
 
 Root handles public `render_handoff` requests through a read-only gateway path. The caller must supply its persisted report binding, including expected workpad lineage/revision and immutable target revision, but Root renders only after rehydrating the latest provenance-verified entry. A stale or mismatched caller, invalid lineage, concurrent second-read change, incomplete finalization, conflicting snapshot ref, or target/completion/HEAD mismatch returns `needs_input`.

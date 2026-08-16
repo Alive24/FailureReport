@@ -20,6 +20,7 @@ import {
   TargetSheaConfigurationError,
   type TargetSheaWorkspace,
 } from "./target-shea.js";
+import type { FailureReportRuntimeFailureCategory } from "../runtime-failures.js";
 
 /**
  * Deterministic, Root-owned diagnostic-worktree lifecycle management.
@@ -31,7 +32,10 @@ import {
 
 /** Signals that preparing or resuming a diagnostic session would violate isolation. */
 export class DiagnosticSafetyError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly runtime_failure_category?: FailureReportRuntimeFailureCategory,
+  ) {
     super(message);
     this.name = "DiagnosticSafetyError";
   }
@@ -747,7 +751,7 @@ export class DiagnosticWorktreeManager {
       return await operation();
     } catch (error) {
       if (error instanceof DiagnosticTargetWorkspaceError) {
-        throw new DiagnosticSafetyError(error.message);
+        throw new DiagnosticSafetyError(error.message, error.category);
       }
       throw error;
     }
@@ -762,7 +766,7 @@ export class DiagnosticWorktreeManager {
       });
     } catch (error) {
       if (error instanceof TargetSheaConfigurationError) {
-        throw new DiagnosticSafetyError(error.message);
+        throw new DiagnosticSafetyError(error.message, error.category);
       }
       throw new DiagnosticSafetyError(
         "The target canonical checkout's FailureReport `.shea` workspace cannot be resolved safely.",

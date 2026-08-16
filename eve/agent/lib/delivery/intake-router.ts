@@ -9,6 +9,10 @@ import {
   type GithubProjectTracker,
 } from "../integrations/github/project-tracker.js";
 import { WorkpadNeedsInputError } from "../integrations/github/issue-workpad.js";
+import {
+  logRuntimeFailure,
+  runtimeFailureReason,
+} from "../runtime-failures.js";
 
 export type FailureReportIntakeRouterOptions = {
   environment?: HandoffDeliveryEnvironment;
@@ -36,10 +40,15 @@ export function createFailureReportIntakeRouter(
       policy =
         options.policy ??
         readHandoffDeliveryPolicy(options.environment ?? process.env);
-    } catch {
+    } catch (error) {
+      logRuntimeFailure(
+        "failure-report-intake-policy",
+        error,
+        "delivery_policy_invalid",
+      );
       return {
         status: "needs_input",
-        reason: "FAILURE_REPORT_HANDOFF_DELIVERY_POLICY is invalid.",
+        reason: runtimeFailureReason(error, "delivery_policy_invalid"),
       };
     }
     if (!policy) {
@@ -82,13 +91,17 @@ export function createFailureReportIntakeRouter(
         state: repositoryPolicy.tracker.intake_state,
       };
     } catch (error) {
-      if (error instanceof WorkpadNeedsInputError) {
-        return { status: "needs_input", reason: error.message };
-      }
+      logRuntimeFailure(
+        "failure-report-intake-tracker",
+        error,
+        "tracker_transition_failed",
+      );
       return {
         status: "needs_input",
         reason:
-          "Configured FailureReport intake routing could not be verified; inspect the Root host provider configuration and retry.",
+          error instanceof WorkpadNeedsInputError
+            ? error.message
+            : runtimeFailureReason(error, "tracker_transition_failed"),
       };
     }
   };

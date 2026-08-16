@@ -9,9 +9,12 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --exclude '**/.eve/**'",
-    "dev:preflight": "pnpm --filter @failure-report/protocol --filter @failure-report/ckb-domain-pack run build",
+    "dev:preflight": "pnpm --filter @failure-report/protocol --filter @failure-report/ckb-domain-pack run build && tsc -p tsconfig.json",
     "predev": "pnpm run dev:preflight",
     "dev": "node ./scripts/dev.mjs",
+    "runtime:build": "pnpm run dev:preflight && pnpm exec eve build --skip-sandbox-prewarm",
+    "prestart": "pnpm run runtime:build",
+    "start": "node ./scripts/start.mjs",
     "demo:start": "node ./scripts/demo-start.mjs",
     "eve:info": "eve info",
     "eval": "eve eval"

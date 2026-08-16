@@ -2,4 +2,4 @@
 
 import { launchEveRuntime } from "./runtime-launcher.mjs";
 
-await launchEveRuntime({ mode: "development" });
+await launchEveRuntime({ mode: "production" });

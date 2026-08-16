@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   prepareTargetSheaWorkspace,
   TargetSheaConfigurationError,
+  verifyTargetSheaWriteAuthority,
 } from "../agent/lib/diagnostics/target-shea.js";
 
 const temporaryRoots: string[] = [];
@@ -115,6 +116,40 @@ describe("target-owned FailureReport .shea workspace", () => {
     expect(
       (await lstat(join(promptDirectory, "intake.md"))).isSymbolicLink(),
     ).toBe(true);
+  });
+
+  it("proves write authority with a contained create/remove probe", async () => {
+    const calls: string[] = [];
+
+    await expect(
+      verifyTargetSheaWriteAuthority("/target/.shea/worktrees/failureReport", {
+        async mkdtemp(path) {
+          calls.push("create:" + path);
+          return path + "probe";
+        },
+        async rm(path) {
+          calls.push("remove:" + path);
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(calls).toEqual([
+      "create:/target/.shea/worktrees/failureReport/.failure-report-readiness-",
+      "remove:/target/.shea/worktrees/failureReport/.failure-report-readiness-probe",
+    ]);
+  });
+
+  it("classifies insufficient target write authority without leaking the filesystem error", async () => {
+    await expect(
+      verifyTargetSheaWriteAuthority("/private/target", {
+        async mkdtemp() {
+          throw new Error("EACCES /private/target secret");
+        },
+        async rm() {},
+      }),
+    ).rejects.toMatchObject({
+      category: "target_workspace_write_denied",
+      message: expect.not.stringContaining("/private/target"),
+    });
   });
 });
 

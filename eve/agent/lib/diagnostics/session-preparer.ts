@@ -17,6 +17,10 @@ import {
   DiagnosticSafetyError,
   DiagnosticWorktreeManager,
 } from "./worktree.js";
+import {
+  logRuntimeFailure,
+  runtimeFailureReason,
+} from "../runtime-failures.js";
 
 /** Root-controlled input for preparing one diagnostic session. */
 export type PrepareDiagnosticSessionInput = {
@@ -154,12 +158,14 @@ export function createDiagnosticSessionPreparer(
       };
     } catch (error) {
       if (error instanceof DiagnosticSafetyError) {
+        const category =
+          error.runtime_failure_category ?? "target_workspace_invalid";
+        logRuntimeFailure("diagnostic-session-preparation", error, category);
         return {
           status: "needs_input",
           domain_extensions: [...input.domain_extensions],
           report_id: input.report_id,
-          reason:
-            "The Root-owned diagnostic workspace could not be revalidated safely. Revalidate the Root-managed workspace and selected native skills, then retry.",
+          reason: runtimeFailureReason(error, category),
           preflight_failure: "workspace_invalid",
         };
       }

@@ -20,6 +20,7 @@ import { createFailureReportIntakeRouter } from "../agent/lib/delivery/intake-ro
 import { prepareHandoffDelivery } from "../agent/lib/delivery/handoff-template.js";
 import type { GithubIssueGateway } from "../agent/lib/integrations/github/issue-gateway.js";
 import type { GithubProjectTracker } from "../agent/lib/integrations/github/project-tracker.js";
+import { FailureReportRuntimeError } from "../agent/lib/runtime-failures.js";
 
 const template = `# Implementation Handoff
 
@@ -226,7 +227,10 @@ describe("handoff delivery policy and template", () => {
     ).resolves.toMatchObject({ content: template });
     await expect(
       loadHandoffTemplate(root, "templates/escape.md"),
-    ).rejects.toThrow("inside");
+    ).rejects.toMatchObject({ category: "handoff_template_invalid" });
+    await expect(
+      loadHandoffTemplate(root, "templates/missing.md"),
+    ).rejects.toMatchObject({ category: "handoff_template_invalid" });
     expect(() =>
       prepareHandoffDelivery({
         handoff: handoff(),
@@ -246,6 +250,48 @@ describe("handoff delivery policy and template", () => {
 });
 
 describe("configured tracker routing and delivery", () => {
+  it("distinguishes invalid delivery policy from tracker failures", async () => {
+    const runtimeLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const route = createFailureReportIntakeRouter({
+      environment: {
+        FAILURE_REPORT_HANDOFF_DELIVERY_POLICY: "{not-json",
+      },
+      tracker: { setIssueState: vi.fn() },
+    });
+
+    await expect(
+      route({ repository: "Alive24/CKBoost", issue_number: 56 }),
+    ).resolves.toMatchObject({
+      status: "needs_input",
+      reason: expect.stringContaining("deployment-owned JSON policy"),
+    });
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining('"category":"delivery_policy_invalid"'),
+    );
+
+    const trackerFailure = createFailureReportIntakeRouter({
+      policy: policy(),
+      tracker: {
+        setIssueState: vi
+          .fn()
+          .mockRejectedValue(new Error("raw tracker endpoint /private/path")),
+      },
+    });
+    const trackerResult = await trackerFailure({
+      repository: "Alive24/CKBoost",
+      issue_number: 56,
+    });
+    expect(trackerResult).toMatchObject({
+      status: "needs_input",
+      reason: expect.stringContaining("tracker readback or transition"),
+    });
+    expect(JSON.stringify(trackerResult)).not.toContain("/private/path");
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining('"category":"tracker_transition_failed"'),
+    );
+    runtimeLog.mockRestore();
+  });
+
   it("routes accepted intake only to Failure Report using deployment coordinates", async () => {
     const setIssueState = vi.fn().mockResolvedValue({
       item_id: "item-56",
@@ -460,5 +506,94 @@ describe("configured tracker routing and delivery", () => {
       reason: expect.stringContaining("FAILURE_REPORT_HANDOFF_DELIVERY_POLICY"),
     });
     expect(tracker.setIssueState).not.toHaveBeenCalled();
+  });
+
+  it("returns distinct safe template, GitHub gateway, and tracker guidance", async () => {
+    const runtimeLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const implementationHandoff = handoff();
+    const renderer = vi.fn().mockResolvedValue({
+      status: "completed",
+      report_id: "ckboost-56",
+      implementation_handoff: implementationHandoff,
+    });
+    const templateFailure = createDiagnosticHandoffDelivery({
+      gateway: {
+        publishHandoffComment: vi.fn(),
+      } as unknown as GithubIssueGateway,
+      policy: trackerlessPolicy(),
+      renderer,
+      templateLoader: vi
+        .fn()
+        .mockRejectedValue(
+          new FailureReportRuntimeError(
+            "handoff_template_invalid",
+            "secret template path /private/target",
+          ),
+        ),
+    });
+    const templateResult = await templateFailure(request);
+    expect(templateResult).toMatchObject({
+      status: "needs_input",
+      reason: expect.stringContaining("target-owned handoff template"),
+    });
+    expect(JSON.stringify(templateResult)).not.toContain("/private/target");
+
+    const gatewayFailure = createDiagnosticHandoffDelivery({
+      gateway: {
+        publishHandoffComment: vi
+          .fn()
+          .mockRejectedValue(new Error("token=secret https://api.github.com")),
+      } as unknown as GithubIssueGateway,
+      policy: trackerlessPolicy(),
+      renderer,
+      templateLoader: vi.fn().mockResolvedValue({
+        content: template,
+        canonical_path: "/unused/template.md",
+      }),
+    });
+    const gatewayResult = await gatewayFailure(request);
+    expect(gatewayResult).toMatchObject({
+      status: "needs_input",
+      reason: expect.stringContaining("GitHub Issue operation"),
+    });
+    expect(JSON.stringify(gatewayResult)).not.toContain("secret");
+
+    const trackerFailure = createDiagnosticHandoffDelivery({
+      gateway: {
+        publishHandoffComment: vi.fn().mockResolvedValue({
+          issue: {},
+          comment_ref: "9003",
+        }),
+      } as unknown as GithubIssueGateway,
+      policy: policy("Todo"),
+      renderer,
+      templateLoader: vi.fn().mockResolvedValue({
+        content: template,
+        canonical_path: "/unused/template.md",
+      }),
+      tracker: {
+        setIssueState: vi
+          .fn()
+          .mockRejectedValue(new Error("raw GraphQL endpoint and token")),
+      },
+    });
+    const trackerResult = await trackerFailure(request);
+    expect(trackerResult).toMatchObject({
+      status: "needs_input",
+      reason: expect.stringContaining("tracker readback or transition"),
+    });
+    expect(JSON.stringify(trackerResult)).not.toContain("GraphQL");
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '"boundary":"handoff-delivery-template","category":"handoff_template_invalid"',
+      ),
+    );
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining('"category":"github_gateway_failed"'),
+    );
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining('"category":"tracker_transition_failed"'),
+    );
+    runtimeLog.mockRestore();
   });
 });

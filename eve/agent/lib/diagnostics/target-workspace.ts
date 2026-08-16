@@ -1,18 +1,31 @@
 import { isAbsolute, resolve } from "node:path";
 
 import type { GitCommandRunner, WorktreePathOperations } from "./worktree.js";
+import {
+  FailureReportRuntimeError,
+  type FailureReportRuntimeFailureCategory,
+} from "../runtime-failures.js";
 
 /** Host-only process configuration for the one repository this runtime serves. */
 export const targetWorkspaceEnvironmentVariable =
   "FAILURE_REPORT_TARGET_WORKSPACE";
 
 /** Signals that Root could not safely bind or verify its configured workspace. */
-export class DiagnosticTargetWorkspaceError extends Error {
-  constructor(message: string) {
-    super(message);
+export class DiagnosticTargetWorkspaceError extends FailureReportRuntimeError {
+  constructor(
+    message: string,
+    category: FailureReportRuntimeFailureCategory = "target_workspace_invalid",
+  ) {
+    super(category, message);
     this.name = "DiagnosticTargetWorkspaceError";
   }
 }
+
+/** Startup-safe facts available before an Issue supplies a repository/SHA. */
+export type PreflightedDiagnosticTarget = {
+  canonical_path: string;
+  canonical_remote: string;
+};
 
 /** The private, process-bound checkout from which diagnostic worktrees are made. */
 export type ResolvedDiagnosticSource = {
@@ -74,6 +87,21 @@ export class DiagnosticTargetWorkspaceManager implements DiagnosticSourceResolve
     this.paths = options.paths;
     this.remoteForRepository =
       options.remoteForRepository ?? defaultRemoteForRepository;
+  }
+
+  /**
+   * Proves the process-owned host boundary before Eve accepts work. Exact
+   * repository and immutable revision verification remains in acquire/restore.
+   */
+  async preflight(): Promise<PreflightedDiagnosticTarget> {
+    const canonicalPath = await this.resolveConfiguredWorkspace();
+    await this.assertGitTopLevel(canonicalPath);
+    const canonicalRemote = await this.readOrigin(canonicalPath);
+    await this.fetch(canonicalPath);
+    return {
+      canonical_path: canonicalPath,
+      canonical_remote: canonicalRemote,
+    };
   }
 
   /** Fetches the bound checkout, then verifies the requested immutable SHA. */
@@ -216,6 +244,15 @@ export class DiagnosticTargetWorkspaceManager implements DiagnosticSourceResolve
     canonicalPath: string,
     canonicalRemote: string,
   ): Promise<void> {
+    const origin = await this.readOrigin(canonicalPath);
+    if (normalizeRemote(origin) !== normalizeRemote(canonicalRemote)) {
+      throw new DiagnosticTargetWorkspaceError(
+        "The bound target workspace origin does not match the diagnostic repository.",
+      );
+    }
+  }
+
+  private async readOrigin(canonicalPath: string): Promise<string> {
     let origin: string;
     try {
       origin = await this.git({
@@ -227,11 +264,12 @@ export class DiagnosticTargetWorkspaceManager implements DiagnosticSourceResolve
         "The bound target workspace has no readable origin remote.",
       );
     }
-    if (normalizeRemote(origin) !== normalizeRemote(canonicalRemote)) {
+    if (!origin.trim() || /[\r\n]/.test(origin)) {
       throw new DiagnosticTargetWorkspaceError(
-        "The bound target workspace origin does not match the diagnostic repository.",
+        "The bound target workspace has an invalid origin remote.",
       );
     }
+    return origin.trim();
   }
 
   private async fetch(canonicalPath: string): Promise<void> {
@@ -243,6 +281,7 @@ export class DiagnosticTargetWorkspaceManager implements DiagnosticSourceResolve
     } catch {
       throw new DiagnosticTargetWorkspaceError(
         "Root could not fetch the bound target workspace; verify host Git authentication, repository availability, and retry.",
+        "git_fetch_failed",
       );
     }
   }
