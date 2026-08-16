@@ -1,0 +1,4 @@
+interface:
+  display_name: "Shea Symphony Manual Merge"
+  short_description: "Land one approved issue with guarded merge evidence"
+  default_prompt: "Use $shea-symphony-manual-merge to land one operator-selected approved Merging issue, repairing only safe merge-lane blockers."
