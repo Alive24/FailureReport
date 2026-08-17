@@ -7,6 +7,7 @@ const pluginRoot = new URL(
   import.meta.url,
 );
 const manifestFile = new URL(".codex-plugin/plugin.json", pluginRoot);
+const mcpConfigFile = new URL(".mcp.json", pluginRoot);
 const readmeFile = new URL("README.md", pluginRoot);
 const skillsRoot = new URL("skills/", pluginRoot);
 const submissionSkillFile = new URL(
@@ -26,6 +27,7 @@ type PluginManifest = {
   version: string;
   description: string;
   skills: string;
+  mcpServers: string;
   interface: {
     shortDescription: string;
     longDescription: string;
@@ -33,11 +35,45 @@ type PluginManifest = {
   };
 };
 
+type PluginMcpServer = {
+  command: string;
+  args: string[];
+  cwd: string;
+  env_vars: string[];
+  tool_timeout_sec: number;
+};
+
 async function readManifest(): Promise<PluginManifest> {
   return JSON.parse(await readFile(manifestFile, "utf8")) as PluginManifest;
 }
 
 describe("FailureReport Codex plugin contract", () => {
+  it("packages a directly loadable source MCP server map", async () => {
+    const manifest = await readManifest();
+    const config = JSON.parse(await readFile(mcpConfigFile, "utf8")) as Record<
+      string,
+      PluginMcpServer
+    >;
+
+    expect(manifest.mcpServers).toBe("./.mcp.json");
+    expect(Object.keys(config)).toEqual(["failure-report"]);
+    expect(config).not.toHaveProperty("mcpServers");
+    expect(config).not.toHaveProperty("mcp_servers");
+    expect(config["failure-report"]).toMatchObject({
+      command: "pnpm",
+      args: ["--filter", "@failure-report/mcp-adapter", "mcp"],
+      cwd: "../../..",
+      tool_timeout_sec: 900,
+    });
+    expect(config["failure-report"]?.env_vars).toEqual(
+      expect.arrayContaining([
+        "FAILURE_REPORT_RUNTIME_MODE",
+        "FAILURE_REPORT_TRUSTED_REPOSITORIES",
+        "FAILURE_REPORT_REMOTE_REPOSITORY",
+      ]),
+    );
+  });
+
   it("packages the exact repository-owned skill inventory", async () => {
     const manifest = await readManifest();
     const skillDirectories = (
