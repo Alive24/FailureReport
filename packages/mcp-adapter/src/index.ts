@@ -9,6 +9,22 @@ import {
   type RootResult,
 } from "@failure-report/protocol";
 
+import {
+  createMcpRootInvoker,
+  defaultRootSessionStorePath,
+  type RootOperationRetentionOptions,
+} from "./eve-channel-root-invoker.js";
+import {
+  FileRootSessionStore,
+  type RootOperationStore,
+} from "./root-operation-store.js";
+import {
+  readRuntimeSupervisorConfig,
+  RuntimeSupervisedRootInvoker,
+  RuntimeSupervisor,
+  type RuntimeSupervisorDependencies,
+} from "./runtime-supervisor.js";
+
 export {
   buildRootInvocationMessage,
   createMcpRootInvoker,
@@ -27,6 +43,53 @@ export {
   type RootSessionOperationLedger,
   type RootSessionStore,
 } from "./eve-channel-root-invoker.js";
+export {
+  readRuntimeSupervisorConfig,
+  rootRequestRepository,
+  RuntimeSupervisedRootInvoker,
+  RuntimeSupervisor,
+  RuntimeSupervisorError,
+  type RuntimeSupervisorConfig,
+  type RuntimeSupervisorDependencies,
+  type RuntimeSupervisorFailureCategory,
+  type RuntimeSupervisorMode,
+  type TrustedRepositoryProvisioning,
+} from "./runtime-supervisor.js";
+
+export type SupervisedMcpRootCompositionOptions = {
+  environment?: NodeJS.ProcessEnv;
+  cwd?: string;
+  session_store?: RootOperationStore;
+  session_store_path?: string;
+  operation_retention?: RootOperationRetentionOptions;
+  supervisor?: RuntimeSupervisor;
+  supervisor_dependencies?: RuntimeSupervisorDependencies;
+};
+
+/** Creates the production stdio composition with readiness before Root delivery. */
+export function createSupervisedMcpRootInvoker(
+  options: SupervisedMcpRootCompositionOptions = {},
+): RuntimeSupervisedRootInvoker {
+  const environment = options.environment ?? process.env;
+  const config = readRuntimeSupervisorConfig(environment, options.cwd);
+  const store =
+    options.session_store ??
+    new FileRootSessionStore(
+      options.session_store_path ?? defaultRootSessionStorePath(environment),
+    );
+  const core = createMcpRootInvoker({
+    host: config.host,
+    ...(config.bearer ? { bearer: config.bearer } : {}),
+    session_store: store,
+    operation_retention: options.operation_retention,
+  });
+  return new RuntimeSupervisedRootInvoker(
+    core,
+    options.supervisor ??
+      new RuntimeSupervisor(config, options.supervisor_dependencies),
+    store,
+  );
+}
 
 /**
  * MCP adapter for the public Root contract.

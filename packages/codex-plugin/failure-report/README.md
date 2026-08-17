@@ -22,6 +22,7 @@ The plugin starts the outer `@failure-report/mcp-adapter` stdio wrapper. That wr
 ```text
 Codex plugin (.mcp.json)
   -> @failure-report/mcp-adapter (stdio)
+  -> private runtime supervisor (readiness + repository binding)
   -> Eve default Channel
   -> FailureReport Root
 ```
@@ -35,13 +36,23 @@ pnpm install
 pnpm build
 ```
 
-Start Eve first, in a separate normal host terminal:
+The installed adapter supervises Eve before it invokes Root. Ordinary reporters and Issue-selected diagnosis callers provide no checkout, runtime command, port, or process information. An operator privately selects one of two modes:
+
+- `managed-local`: resolve an Issue repository through an operator-owned trusted mapping, verify its canonical Git origin, reuse a healthy matching Eve process, or start one through FailureReport's production entrypoint.
+- `remote`: probe the configured deployment's health and authenticated repository binding. This mode never starts a local replacement.
+
+For managed-local mode, configure the Codex host environment before the plugin starts. The checkout values are private host configuration and must never be copied into an Issue, workpad, report, prompt, or MCP request:
 
 ```bash
-pnpm --filter @Alive24/FailureReport dev --target-workspace /absolute/path/to/target-checkout
+export FAILURE_REPORT_RUNTIME_MODE="managed-local"
+export FAILURE_REPORT_TRUSTED_REPOSITORIES='{"repositories":[{"repository":"owner/repository","checkout":"/absolute/operator-owned/checkout"}]}'
 ```
 
-That command runs `eve dev --no-ui`, whose documented local Channel endpoint is `http://127.0.0.1:2000`. Codex discovers installable plugins through configured marketplaces; it does not load an arbitrary plugin root directly. This repository intentionally contains no marketplace, so consumers should publish or configure a marketplace outside this bundle before installing it. Once installed, the plugin's `.mcp.json` starts `pnpm --filter @failure-report/mcp-adapter mcp` from the workspace root, so Codex receives the `failure_report` MCP tool automatically. With no `FAILURE_REPORT_EVE_HOST`, the adapter owns and uses that local endpoint. The plugin configuration deliberately declares only optional runtime environment variables; it does not embed a host or credentials.
+The mapping is exact and path-free at the public boundary: Issue content can select only `owner/repository`, and it cannot add or override a checkout. The supervisor uses `pnpm --filter @Alive24/FailureReport start -- --target-workspace <trusted-checkout>` internally, waits for `/eve/v1/health` and the authenticated `/failure-report/v1/runtime` binding proof, and calls Root only after both match. Concurrent requests single-flight through private locks. State and redacted startup logs default beneath the operating user's state directory; `FAILURE_REPORT_RUNTIME_STATE_ROOT` may select an operator-managed private volume.
+
+Optional operator settings are `FAILURE_REPORT_RUNTIME_ROOT` for the FailureReport source root (the plugin workspace root by default), `FAILURE_REPORT_RUNTIME_STATE_ROOT` for owner-only state and logs, `FAILURE_REPORT_RUNTIME_READINESS_TIMEOUT_MS` for bounded startup, `FAILURE_REPORT_RUNTIME_POLL_INTERVAL_MS` for readiness polling, and `FAILURE_REPORT_RUNTIME_IDLE_TIMEOUT_MS` for managed-process cleanup. Values are milliseconds; an idle timeout of `0` disables cleanup.
+
+Codex discovers installable plugins through configured marketplaces; it does not load an arbitrary plugin root directly. This repository intentionally contains no marketplace, so consumers should publish or configure a marketplace outside this bundle before installing it. Once installed, `.mcp.json` starts `pnpm --filter @failure-report/mcp-adapter mcp` from the repository source root, so Codex receives the `failure_report` tool automatically.
 
 For the repository's marketplace-free OpenSourceIRL demonstration, use the checked-in read-only MCP client after Eve starts:
 
@@ -51,14 +62,18 @@ pnpm --filter @failure-report/mcp-adapter demo:existing-issue -- Alive24/CKBoost
 
 See the [demo runbook](../../../docs/demos/opensourceirl-2026-07-31-runbook.md) for exact runtime configuration and presentation order.
 
-For a non-local Eve deployment, provide runtime environment variables to the Codex process before it starts the plugin:
+For a remote Eve deployment, pin both the host and repository identity:
 
 ```bash
+export FAILURE_REPORT_RUNTIME_MODE="remote"
 export FAILURE_REPORT_EVE_HOST="https://your-eve-host.example"
+export FAILURE_REPORT_REMOTE_REPOSITORY="owner/repository"
 export FAILURE_REPORT_EVE_BEARER_TOKEN="your-runtime-token"
 ```
 
-`FAILURE_REPORT_EVE_HOST` overrides the adapter's local development default for non-local Eve deployments. The bearer token is optional and only needed when the Eve Channel requires it. No credentials are stored in this plugin or its MCP configuration.
+The bearer token is optional only when the deployment's Eve Channel and runtime binding route permit the caller through another configured authentication path. Remote health, authentication, or binding failure returns operator-oriented pending guidance and never falls through to managed-local startup. For backward compatibility, an explicit `FAILURE_REPORT_EVE_HOST` with no mode is treated as remote, but new deployments should always set the mode and repository explicitly.
+
+When provisioning, startup, readiness, or binding is unavailable, the adapter returns a sanitized category and retry guidance. It preserves the Issue and does not start a Root turn; after the operator repairs private provisioning, retry the same `request_id`. A runtime with an active diagnostic session is never stopped by idle cleanup. No credentials are stored in this plugin or its MCP config.
 
 For adapter-only diagnostics outside Codex, run:
 

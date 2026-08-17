@@ -26,7 +26,7 @@ domain extensions    prepare/finalize diagnostic session
 
 Only Root is public, through `eve/agent/channels/eve.ts`. An extension namespace, domain id, worker name, provider id, Git worktree path, or native-skill source is never an MCP or Temporal API field.
 
-The MCP adapter may retain private delivery state for its outer-wrapper responsibility. It persists request ownership and the Eve Channel cursor before waiting for a long Root turn, serializes only requests sharing one canonical Issue/report session key, and reattaches after caller or process loss. It does not add fields to the public Root contract, expose Eve session identifiers, create an alternate Root, or change diagnostic workspace ownership.
+The MCP adapter may retain private delivery and runtime-supervisor state for its outer-wrapper responsibility. It persists request ownership and the Eve Channel cursor before waiting for a long Root turn, serializes only requests sharing one canonical Issue/report session key, and reattaches after caller or process loss. Before delivery, remote mode verifies a configured health endpoint and authenticated repository binding without local fallback; managed-local mode accepts checkout paths only from operator-owned trusted mappings, verifies the canonical origin, single-flights the production start path, and waits for matching readiness. It does not add paths or runtime metadata to the public Root contract, expose Eve session identifiers, create an alternate Root, or change diagnostic workspace ownership. Idle cleanup applies only to a supervisor-owned matching instance and never while the latest durable report says its diagnostic session is active.
 
 ## Responsibility Split
 
