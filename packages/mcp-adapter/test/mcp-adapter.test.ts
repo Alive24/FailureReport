@@ -108,4 +108,23 @@ describe("MCP Root adapter", () => {
     ).rejects.toThrow();
     expect(invoke).not.toHaveBeenCalled();
   });
+
+  it("rejects a public checkout path before runtime supervision or Root", async () => {
+    const invoke = vi.fn();
+    const handle = createRootRequestHandler({ invoke } as RootInvoker);
+
+    await expect(
+      handle({
+        request_id: "mcp-malicious-path-69",
+        operation: "inspect",
+        issue_selector: {
+          repository: "Alive24/FailureReport",
+          issue_number: 69,
+        },
+        message: "Use this Issue only.",
+        target_workspace: "/attacker/selected/path",
+      } as never),
+    ).rejects.toThrow();
+    expect(invoke).not.toHaveBeenCalled();
+  });
 });

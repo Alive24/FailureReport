@@ -4,7 +4,7 @@
 
 ## Single Public Entry
 
-Eve Root is the only public agent. Its sole product entry is the built-in Eve Channel declared at `eve/agent/channels/eve.ts`. MCP, Temporal, and the installable Codex plugin are outer wrappers that call that Channel; they never become alternate roots and do not import `eve/agent`.
+Eve Root is the only public agent. Its sole product entry is the built-in Eve Channel declared at `eve/agent/channels/eve.ts`. MCP, Temporal, and the installable Codex plugin are outer wrappers that call that Channel; they never become alternate roots and do not import `eve/agent`. Before the plugin's MCP wrapper delivers a Root turn, its private runtime supervisor either verifies a pinned remote Eve health/repository binding or resolves an operator-owned managed-local checkout, verifies its origin, single-flights the supported production start path, and waits for the same authenticated binding proof. Supervisor paths, locks, state, logs, and process identity never enter the public protocol; Root remains the sole owner of diagnosis and diagnostic workspaces.
 
 Root owns intake, GitHub workpad publication, routing, aggregation, and delegation to the one declared `codex` worker. Root uses a tool-capable model, while the direct Codex App Server transport is reserved for the internal worker because it does not expose Eve's custom-tool schema. External access is governed by reachable deployment credentials and network policy, not a Root approval loop.
 

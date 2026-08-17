@@ -1,10 +1,15 @@
-import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { execFile, spawn } from "node:child_process";
 import { lstat, mkdir, mkdtemp, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const targetWorkspaceVariable = "FAILURE_REPORT_TARGET_WORKSPACE";
+const targetRepositoryVariable = "FAILURE_REPORT_TARGET_REPOSITORY";
+const runtimeInstanceVariable = "FAILURE_REPORT_RUNTIME_INSTANCE_ID";
+const execFileAsync = promisify(execFile);
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDirectory, "..");
 const eveCli = resolve(appRoot, "node_modules", "eve", "bin", "eve.js");
@@ -39,6 +44,12 @@ export async function launchEveRuntime({ mode }) {
       [targetWorkspaceVariable]: canonicalTargetWorkspace,
     };
     await runReadinessPreflight(environment);
+    environment[targetRepositoryVariable] = await resolveRepositoryIdentity(
+      canonicalTargetWorkspace,
+    );
+    environment[runtimeInstanceVariable] =
+      validRuntimeInstanceId(environment[runtimeInstanceVariable]) ??
+      randomUUID();
     const runtimeRoot =
       mode === "demo"
         ? await createIsolatedRuntimeRoot()
@@ -62,6 +73,33 @@ export async function launchEveRuntime({ mode }) {
     );
     process.exitCode = 1;
   }
+}
+
+/** Derives the public repository identity only after host readiness verified origin. */
+export async function resolveRepositoryIdentity(targetWorkspace) {
+  const { stdout } = await execFileAsync(
+    "git",
+    ["remote", "get-url", "origin"],
+    { cwd: targetWorkspace },
+  );
+  const normalized = stdout
+    .trim()
+    .replace(/[?#].*$/, "")
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/, "");
+  const match = normalized.match(/(?:[:/])([^/:\s]+)\/([^/\s]+)$/);
+  const repository = match ? `${match[1]}/${match[2]}` : undefined;
+  if (!repository || !/^[^/\s]+\/[^/\s]+$/.test(repository)) {
+    throw new Error("The target workspace origin has no repository identity.");
+  }
+  return repository;
+}
+
+function validRuntimeInstanceId(value) {
+  const candidate = value?.trim();
+  return candidate && /^[a-zA-Z0-9._:-]+$/.test(candidate)
+    ? candidate
+    : undefined;
 }
 
 function spawnEve({ mode, runtimeRoot, environment, eveArguments }) {
