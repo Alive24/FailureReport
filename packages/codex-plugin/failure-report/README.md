@@ -1,6 +1,19 @@
 # FailureReport Codex plugin
 
-This is the installable, repository-local Codex plugin for FailureReport. It contributes the `failure-report` skill and configures one MCP server that exposes the public `failure_report` tool.
+This is the installable, repository-local Codex plugin for FailureReport. It contributes two source-owned skills:
+
+- `submit-failure-report` turns casual symptom language into a useful, privacy-safe GitHub Issue through adaptive evidence gathering, bounded experiments, duplicate checking, a complete preview, and explicit publication confirmation.
+- `failure-report` creates, resumes, inspects, and hands off the later durable diagnosis through Root.
+
+The plugin also configures one MCP server that exposes the public `failure_report` tool. GitHub Issue creation uses the participant's available GitHub integration or authenticated `gh` CLI; it does not require Eve, a FailureReport runtime, or a local checkout.
+
+## Participant submission
+
+A participant can start naturally, for example: “the first screen is slow” or “help me report this problem.” The submission skill asks only symptom-relevant questions, suggests a small number of safe checks when they would materially improve the report, and stops once another person can reproduce, compare, or continue the investigation.
+
+Before any GitHub write, the skill searches for likely open duplicates, removes or redacts secrets, unrelated personal data, and private host paths, and shows the exact repository, title, and complete public body. Creating a new Issue or adding evidence to an existing one always requires explicit confirmation after that preview. If GitHub write access is unavailable, the skill returns copy-ready Markdown without claiming publication.
+
+Submission and diagnosis are separate stages. After a successful Issue creation, starting FailureReport is optional and requires another explicit request. Participant submission never asks about checkouts, worktrees, branches, SHAs, Eve, MCP, ports, or local runtime configuration.
 
 ## Runtime composition
 
@@ -53,4 +66,4 @@ For adapter-only diagnostics outside Codex, run:
 pnpm --filter @failure-report/mcp-adapter mcp
 ```
 
-Use the `failure-report` skill to form requests for the single public `failure_report` tool. The tool's Root contract remains the boundary: domain subagents and Eve internals are not MCP APIs.
+Use `submit-failure-report` for evidence collection and confirmed Issue publication. Use `failure-report` only for the separate durable diagnosis stage and its single public `failure_report` tool. The tool's Root contract remains the boundary: domain subagents and Eve internals are not MCP APIs.
