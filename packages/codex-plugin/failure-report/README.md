@@ -17,7 +17,7 @@ Submission and diagnosis are separate stages. After a successful Issue creation,
 
 ## Runtime composition
 
-The plugin starts the outer `@failure-report/mcp-adapter` stdio wrapper. That wrapper talks to FailureReport through Eve's built-in Channel; it does not embed another agent host or client under `eve/`. The only Eve entry remains [`eve/agent/channels/eve.ts`](../../../eve/agent/channels/eve.ts).
+The plugin starts a generated, self-contained build of the outer `@failure-report/mcp-adapter` stdio wrapper from `mcp/server.mjs`. The bundle carries its JavaScript runtime dependencies inside the installed plugin, so it does not depend on the source repository or a pnpm workspace. The wrapper talks to FailureReport through Eve's built-in Channel; it does not embed another agent host or client under `eve/`. The only Eve entry remains [`eve/agent/channels/eve.ts`](../../../eve/agent/channels/eve.ts).
 
 ```text
 Codex plugin (.mcp.json)
@@ -50,9 +50,9 @@ export FAILURE_REPORT_TRUSTED_REPOSITORIES='{"repositories":[{"repository":"owne
 
 The mapping is exact and path-free at the public boundary: Issue content can select only `owner/repository`, and it cannot add or override a checkout. The supervisor uses `pnpm --filter @Alive24/FailureReport start -- --target-workspace <trusted-checkout>` internally, waits for `/eve/v1/health` and the authenticated `/failure-report/v1/runtime` binding proof, and calls Root only after both match. Concurrent requests single-flight through private locks. State and redacted startup logs default beneath the operating user's state directory; `FAILURE_REPORT_RUNTIME_STATE_ROOT` may select an operator-managed private volume.
 
-Optional operator settings are `FAILURE_REPORT_RUNTIME_ROOT` for the FailureReport source root (the plugin workspace root by default), `FAILURE_REPORT_RUNTIME_STATE_ROOT` for owner-only state and logs, `FAILURE_REPORT_RUNTIME_READINESS_TIMEOUT_MS` for bounded startup, `FAILURE_REPORT_RUNTIME_POLL_INTERVAL_MS` for readiness polling, and `FAILURE_REPORT_RUNTIME_IDLE_TIMEOUT_MS` for managed-process cleanup. Values are milliseconds; an idle timeout of `0` disables cleanup.
+For `managed-local`, set `FAILURE_REPORT_RUNTIME_ROOT` to the operator-owned FailureReport source checkout that supplies the production Eve runtime; this private path is separate from both the installed plugin cache and the target repository checkout. Remote mode does not use a local runtime root. Optional operator settings are `FAILURE_REPORT_RUNTIME_STATE_ROOT` for owner-only state and logs, `FAILURE_REPORT_RUNTIME_READINESS_TIMEOUT_MS` for bounded startup, `FAILURE_REPORT_RUNTIME_POLL_INTERVAL_MS` for readiness polling, and `FAILURE_REPORT_RUNTIME_IDLE_TIMEOUT_MS` for managed-process cleanup. Values are milliseconds; an idle timeout of `0` disables cleanup.
 
-Codex discovers installable plugins through configured marketplaces; it does not load an arbitrary plugin root directly. This repository intentionally contains no marketplace, so consumers should publish or configure a marketplace outside this bundle before installing it. Once installed, `.mcp.json` starts `pnpm --filter @failure-report/mcp-adapter mcp` from the repository source root, so Codex receives the `failure_report` tool automatically.
+Codex discovers installable plugins through configured marketplaces; it does not load an arbitrary plugin root directly. This repository intentionally contains no marketplace, so consumers should publish or configure a marketplace outside this bundle before installing it. Once installed, `.mcp.json` starts `node ./mcp/server.mjs` from the installed plugin root, so Codex receives the `failure_report` tool without access to this source workspace. Maintainers regenerate the committed artifact with `pnpm build:codex-plugin`; `pnpm check:codex-plugin` verifies that it matches the adapter and protocol sources.
 
 For the repository's marketplace-free OpenSourceIRL demonstration, use the checked-in read-only MCP client after Eve starts:
 

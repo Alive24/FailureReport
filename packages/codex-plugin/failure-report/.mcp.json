@@ -1,8 +1,8 @@
 {
   "failure-report": {
-    "command": "pnpm",
-    "args": ["--filter", "@failure-report/mcp-adapter", "mcp"],
-    "cwd": "../../..",
+    "command": "node",
+    "args": ["./mcp/server.mjs"],
+    "cwd": ".",
     "env_vars": [
       "FAILURE_REPORT_RUNTIME_MODE",
       "FAILURE_REPORT_EVE_HOST",
