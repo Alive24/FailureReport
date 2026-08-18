@@ -3,9 +3,10 @@ import { describe, expect, it } from "vitest";
 import { runtimeBindingResponse } from "../agent/channels/runtime-binding.js";
 
 describe("runtime binding channel", () => {
-  it("returns only repository identity and an opaque runtime instance", async () => {
+  it("returns only immutable target identity and an opaque runtime instance", async () => {
     const response = runtimeBindingResponse({
       FAILURE_REPORT_TARGET_REPOSITORY: "Alive24/FailureReport",
+      FAILURE_REPORT_TARGET_REVISION: "A".repeat(40),
       FAILURE_REPORT_RUNTIME_INSTANCE_ID: "instance-69",
       FAILURE_REPORT_TARGET_WORKSPACE: "/private/checkout",
     });
@@ -16,6 +17,7 @@ describe("runtime binding channel", () => {
       schema_version: "failure-report/runtime-binding/v1",
       status: "ready",
       repository: "Alive24/FailureReport",
+      revision: "a".repeat(40),
       instance_id: "instance-69",
     });
     expect(JSON.stringify(body)).not.toContain("/private/checkout");
@@ -31,5 +33,15 @@ describe("runtime binding channel", () => {
       schema_version: "failure-report/runtime-binding/v1",
       status: "not_ready",
     });
+  });
+
+  it("fails readiness closed when the revision is not immutable", async () => {
+    const response = runtimeBindingResponse({
+      FAILURE_REPORT_TARGET_REPOSITORY: "Alive24/FailureReport",
+      FAILURE_REPORT_TARGET_REVISION: "HEAD",
+      FAILURE_REPORT_RUNTIME_INSTANCE_ID: "instance-69",
+    });
+
+    expect(response.status).toBe(503);
   });
 });

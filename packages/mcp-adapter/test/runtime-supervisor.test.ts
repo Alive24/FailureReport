@@ -70,6 +70,7 @@ function matchingBinding(instanceId = "instance-69"): Response {
     schema_version: "failure-report/runtime-binding/v1",
     status: "ready",
     repository: "Alive24/FailureReport",
+    revision: "a".repeat(40),
     instance_id: instanceId,
   });
 }
@@ -208,6 +209,7 @@ describe("runtime-supervised Root invocation", () => {
           schema_version: "failure-report/runtime-binding/v1",
           status: "ready",
           repository: "Alive24/Other",
+          revision: "a".repeat(40),
           instance_id: "other-instance",
         }),
       );
@@ -222,6 +224,33 @@ describe("runtime-supervised Root invocation", () => {
     ).invoke(request);
 
     expect(result.summary).toContain("[wrong_repository_binding]");
+    expect(inner.invoke).not.toHaveBeenCalled();
+  });
+
+  it("rejects a healthy runtime without an immutable revision binding", async () => {
+    const inner: RootInvoker = { invoke: vi.fn() };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ ok: true }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schema_version: "failure-report/runtime-binding/v1",
+          status: "ready",
+          repository: "Alive24/FailureReport",
+          instance_id: "legacy-instance",
+        }),
+      );
+    const supervisor = new RuntimeSupervisor(await managedConfig(), {
+      fetch: fetcher,
+      validate_checkout: vi.fn().mockResolvedValue("/private/trusted"),
+    });
+
+    const result = await new RuntimeSupervisedRootInvoker(
+      inner,
+      supervisor,
+    ).invoke(request);
+
+    expect(result.summary).toContain("[binding_unverified]");
     expect(inner.invoke).not.toHaveBeenCalled();
   });
 

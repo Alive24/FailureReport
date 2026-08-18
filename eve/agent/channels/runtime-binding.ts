@@ -6,6 +6,11 @@ import {
   vercelOidc,
 } from "eve/channels/auth";
 
+import {
+  RuntimeTargetBindingError,
+  readRuntimeTargetBinding,
+} from "../lib/runtime-target-binding.js";
+
 const runtimeAuth = [vercelOidc(), localDev(), placeholderAuth()];
 
 /**
@@ -15,14 +20,23 @@ const runtimeAuth = [vercelOidc(), localDev(), placeholderAuth()];
 export function runtimeBindingResponse(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Response {
-  const repository = environment.FAILURE_REPORT_TARGET_REPOSITORY?.trim();
   const instanceId = environment.FAILURE_REPORT_RUNTIME_INSTANCE_ID?.trim();
-  if (
-    !repository ||
-    !/^[^/\s]+\/[^/\s]+$/.test(repository) ||
-    !instanceId ||
-    !/^[a-zA-Z0-9._:-]+$/.test(instanceId)
-  ) {
+  let target;
+  try {
+    target = readRuntimeTargetBinding(environment);
+  } catch (error) {
+    if (!(error instanceof RuntimeTargetBindingError)) {
+      throw error;
+    }
+    return Response.json(
+      {
+        schema_version: "failure-report/runtime-binding/v1",
+        status: "not_ready",
+      },
+      { status: 503, headers: { "cache-control": "no-store" } },
+    );
+  }
+  if (!instanceId || !/^[a-zA-Z0-9._:-]+$/.test(instanceId)) {
     return Response.json(
       {
         schema_version: "failure-report/runtime-binding/v1",
@@ -35,7 +49,8 @@ export function runtimeBindingResponse(
     {
       schema_version: "failure-report/runtime-binding/v1",
       status: "ready",
-      repository,
+      repository: target.repository,
+      revision: target.revision,
       instance_id: instanceId,
     },
     { headers: { "cache-control": "no-store" } },

@@ -12,6 +12,7 @@ import {
   WorkpadNeedsInputError,
   encodedWorkpadCommentRequestBytes,
   findExistingWorkpad,
+  rehydrateGithubIssueContext,
   prepareVerifiedWorkpadManifest,
   prepareIssueWorkpadMutation,
   type GithubIssueComment,
@@ -93,6 +94,46 @@ describe("GitHub Issue workpad", () => {
     expect(mutation.workpad_comment_body).toContain(
       "Canonical context — complete FailureReport snapshot",
     );
+  });
+
+  it("accepts only the canonical unpersisted context for the first workpad", async () => {
+    const target = issue();
+    const report = await loadReport();
+    const initialContext = rehydrateGithubIssueContext(target, undefined);
+    const mutation = prepareIssueWorkpadMutation(
+      target,
+      { ...report, shared_context: initialContext },
+      "2026-07-15T10:01:00Z",
+      rootGh,
+    );
+
+    expect(mutation.mode).toBe("create");
+    expect(mutation.report.shared_context).toMatchObject({
+      repository: target.repository,
+      issue_number: target.issue_number,
+      workpad_revision: 0,
+      workpad_logical_session_id: expect.any(String),
+      workpad_entry_id: expect.any(String),
+      workpad_producer_id: "root-gh",
+    });
+
+    expect(() =>
+      prepareIssueWorkpadMutation(
+        target,
+        {
+          ...report,
+          shared_context: {
+            ...initialContext,
+            workpad_comment_ref: "missing-comment",
+            workpad_logical_session_id: "orphaned-session",
+            workpad_entry_id: "orphaned-session/revision-0",
+            workpad_producer_id: "root-gh",
+          },
+        },
+        "2026-07-15T10:01:00Z",
+        rootGh,
+      ),
+    ).toThrow("no verified workpad lineage");
   });
 
   it("appends same-producer history in the verified comment without rewriting prior bytes", async () => {

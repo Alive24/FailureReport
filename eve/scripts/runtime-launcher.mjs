@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 
 const targetWorkspaceVariable = "FAILURE_REPORT_TARGET_WORKSPACE";
 const targetRepositoryVariable = "FAILURE_REPORT_TARGET_REPOSITORY";
+const targetRevisionVariable = "FAILURE_REPORT_TARGET_REVISION";
 const runtimeInstanceVariable = "FAILURE_REPORT_RUNTIME_INSTANCE_ID";
 const execFileAsync = promisify(execFile);
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
@@ -45,6 +46,9 @@ export async function launchEveRuntime({ mode }) {
     };
     await runReadinessPreflight(environment);
     environment[targetRepositoryVariable] = await resolveRepositoryIdentity(
+      canonicalTargetWorkspace,
+    );
+    environment[targetRevisionVariable] = await resolveTargetRevision(
       canonicalTargetWorkspace,
     );
     environment[runtimeInstanceVariable] =
@@ -93,6 +97,25 @@ export async function resolveRepositoryIdentity(targetWorkspace) {
     throw new Error("The target workspace origin has no repository identity.");
   }
   return repository;
+}
+
+/** Resolves the trusted checkout's current commit to a full immutable SHA. */
+export async function resolveTargetRevision(
+  targetWorkspace,
+  runGit = execFileAsync,
+) {
+  const { stdout } = await runGit(
+    "git",
+    ["rev-parse", "--verify", "HEAD^{commit}"],
+    { cwd: targetWorkspace },
+  );
+  const revision = stdout.trim();
+  if (!/^[0-9a-f]{40,64}$/i.test(revision)) {
+    throw new Error(
+      "The target workspace HEAD did not resolve to a full immutable Git SHA.",
+    );
+  }
+  return revision.toLowerCase();
 }
 
 function validRuntimeInstanceId(value) {

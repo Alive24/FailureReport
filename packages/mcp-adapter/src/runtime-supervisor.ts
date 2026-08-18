@@ -94,6 +94,7 @@ type RuntimeBinding = {
   schema_version: "failure-report/runtime-binding/v1";
   status: "ready";
   repository: string;
+  revision: string;
   instance_id: string;
 };
 
@@ -950,6 +951,8 @@ function parseRuntimeBinding(value: unknown): RuntimeBinding {
     value.schema_version !== "failure-report/runtime-binding/v1" ||
     value.status !== "ready" ||
     !isRepository(value.repository) ||
+    typeof value.revision !== "string" ||
+    !/^[0-9a-f]{40,64}$/i.test(value.revision) ||
     typeof value.instance_id !== "string" ||
     !/^[a-zA-Z0-9._:-]+$/.test(value.instance_id)
   ) {

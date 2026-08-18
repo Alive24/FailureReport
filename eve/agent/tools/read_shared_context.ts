@@ -12,6 +12,11 @@ import {
   findExistingWorkpad,
   rehydrateGithubIssueContext,
 } from "../lib/integrations/github/issue-workpad.js";
+import {
+  type RuntimeTargetBinding,
+  RuntimeTargetBindingError,
+  readRuntimeTargetBinding,
+} from "../lib/runtime-target-binding.js";
 
 /**
  * Finds a verified workpad only when the Issue contains a managed marker.
@@ -32,7 +37,8 @@ export function findVerifiedWorkpadForRead(
 }
 
 /**
- * Rehydrates the public Root response shape from one read-only Issue snapshot.
+ * Rehydrates Root's tool response from one read-only Issue snapshot and the
+ * process-owned target identity. Neither value comes from public request data.
  *
  * Keeping this transformation pure makes the no-workpad entry state directly
  * testable and ensures the read tool cannot publish or otherwise mutate GitHub.
@@ -40,12 +46,17 @@ export function findVerifiedWorkpadForRead(
 export function rehydrateSharedContext(
   issue: GithubIssueSnapshot,
   workpad: ExistingWorkpad | undefined,
+  runtimeTarget: RuntimeTargetBinding,
 ) {
   return {
     status: "ok" as const,
     issue,
     shared_context: rehydrateGithubIssueContext(issue, workpad),
     report: workpad?.report ?? null,
+    // Root receives this only from its authenticated, process-owned tool. It
+    // supplies the first report's immutable target without widening the public
+    // Issue-selector or MCP request schema.
+    runtime_target: runtimeTarget,
     // `null` explicitly means that this existing Issue has not received its
     // first FailureReport workpad yet. The full shared context remains usable
     // for a later Root request without callers fabricating workpad metadata.
@@ -66,7 +77,7 @@ export function rehydrateSharedContext(
  */
 export default defineTool({
   description:
-    "Rehydrate public FailureReport shared context from a provenance-verified GitHub Issue workpad lineage.",
+    "Rehydrate FailureReport shared context and the private immutable runtime target from a provenance-verified GitHub Issue workpad lineage.",
   inputSchema: z
     .object({
       repository: z.string().regex(/^[^/\s]+\/[^/\s]+$/),
@@ -76,20 +87,37 @@ export default defineTool({
   async execute(input) {
     let issue: GithubIssueSnapshot | null = null;
     try {
+      const runtimeTarget = readRuntimeTargetBinding(
+        process.env,
+        input.repository,
+      );
       const gateway = await getDefaultGithubIssueGateway();
       issue = await gateway.readIssue(input.repository, input.issue_number);
       const workpad = findVerifiedWorkpadForRead(issue, () =>
         gateway.getWorkpadProducerConfiguration(),
       );
 
-      return rehydrateSharedContext(issue, workpad);
+      if (
+        workpad &&
+        workpad.report.target.repository !== runtimeTarget.repository
+      ) {
+        throw new RuntimeTargetBindingError(
+          "The existing workpad target does not match FailureReport's private runtime target binding.",
+        );
+      }
+
+      return rehydrateSharedContext(issue, workpad, runtimeTarget);
     } catch (error) {
-      if (error instanceof WorkpadNeedsInputError) {
+      if (
+        error instanceof WorkpadNeedsInputError ||
+        error instanceof RuntimeTargetBindingError
+      ) {
         return {
           status: "needs_input" as const,
           issue: null,
           shared_context: null,
           report: null,
+          runtime_target: null,
           workpad: null,
           workpad_comment_ref: null,
           workpad_revision: null,

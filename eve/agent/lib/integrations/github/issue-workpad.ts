@@ -253,7 +253,11 @@ export function prepareIssueWorkpadMutation(
       "FailureReport is already bound to a different GitHub Issue.",
     );
   }
-  if (!current && existingContext) {
+  if (
+    !current &&
+    existingContext &&
+    !isCanonicalUnpersistedContext(issue, existingContext)
+  ) {
     throw new WorkpadNeedsInputError(
       "FailureReport has shared context but no verified workpad lineage; reload requires input.",
     );
@@ -377,6 +381,31 @@ export function prepareIssueWorkpadMutation(
     entry,
     report: entry.report,
   };
+}
+
+/**
+ * Distinguishes the canonical revision-zero result of `read_shared_context`
+ * from an orphaned or caller-invented persisted lineage. The former carries no
+ * publication authority and is safe for the first Root-owned append.
+ */
+function isCanonicalUnpersistedContext(
+  issue: GithubIssueSnapshot,
+  context: GithubIssueContext,
+): boolean {
+  return (
+    context.provider === "github_issue" &&
+    context.repository === issue.repository &&
+    context.issue_number === issue.issue_number &&
+    context.issue_url === issue.issue_url &&
+    context.workpad_marker === workpadMarker &&
+    context.workpad_revision === 0 &&
+    context.workpad_comment_ref === undefined &&
+    context.workpad_logical_session_id === undefined &&
+    context.workpad_entry_id === undefined &&
+    context.workpad_producer_id === undefined &&
+    context.workpad_predecessor_comment_ref === undefined &&
+    context.synced_at === undefined
+  );
 }
 
 type BuildWorkpadEntryInput = {
