@@ -1,0 +1,4 @@
+interface:
+  display_name: "Submit a Failure Report"
+  short_description: "Gather evidence and confirm a useful GitHub Issue"
+  default_prompt: "Use $submit-failure-report — the first screen is slow. Help me report the problem."

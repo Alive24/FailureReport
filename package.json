@@ -14,14 +14,17 @@
     }
   },
   "scripts": {
-    "build": "turbo run build",
-    "check": "turbo run check",
+    "build": "turbo run build && pnpm run build:codex-plugin",
+    "build:codex-plugin": "node packages/mcp-adapter/scripts/build-codex-plugin-bundle.mjs",
+    "check": "turbo run check && pnpm run check:codex-plugin",
+    "check:codex-plugin": "node packages/mcp-adapter/scripts/build-codex-plugin-bundle.mjs --check",
     "halo:trace-capture-real": "pnpm --filter @Alive24/FailureReport run dev:preflight && node eve/scripts/real-root-codex-trace-capture.mjs",
     "test": "turbo run test",
     "format:check": "prettier --check ."
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
+    "esbuild": "^0.27.7",
     "prettier": "^3.6.2",
     "turbo": "^2.5.8",
     "typescript": "^5.9.3",

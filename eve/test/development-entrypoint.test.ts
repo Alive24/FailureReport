@@ -69,6 +69,11 @@ describe("Eve development entrypoint", () => {
     );
     expect(launcher).toContain("--target-workspace");
     expect(launcher).toContain("FAILURE_REPORT_TARGET_WORKSPACE");
+    expect(launcher).toContain("FAILURE_REPORT_TARGET_REPOSITORY");
+    expect(launcher).toContain("FAILURE_REPORT_TARGET_REVISION");
+    expect(launcher).toContain("FAILURE_REPORT_RUNTIME_INSTANCE_ID");
+    expect(launcher).toContain("resolveRepositoryIdentity");
+    expect(launcher).toContain("resolveTargetRevision");
     expect(launcher).toContain('["dev", "--no-ui"');
     expect(launcher).toContain('"start"');
     expect(launcher).toContain("host-runtime-preflight-cli.js");

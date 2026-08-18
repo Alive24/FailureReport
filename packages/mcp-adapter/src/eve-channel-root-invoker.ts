@@ -893,7 +893,7 @@ export function buildRootInvocationMessage(request: RootRequest): string {
     "Keep request_id unchanged. Do not expose internal subagent identities to the caller.",
     "If request data contains issue_selector, call read_shared_context first. A null workpad is valid;",
     "return needs_input when it reports needs_input; otherwise return its shared_context as result.issue",
-    "and never ask the caller to invent workpad fields.",
+    "and use its private runtime_target for a first report. Never ask the caller for a SHA or invent workpad fields.",
     "",
     "ROOT_REQUEST_DATA",
     JSON.stringify(request, null, 2),

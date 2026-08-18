@@ -1,7 +1,7 @@
 {
   "name": "failure-report",
-  "version": "0.1.0",
-  "description": "Use FailureReport's Eve-backed MCP tool for durable software failure investigations.",
+  "version": "0.2.0",
+  "description": "Gather useful failure evidence, create privacy-safe GitHub Issues, and use FailureReport for durable investigations.",
   "author": {
     "name": "Alive24",
     "url": "https://github.com/Alive24"
@@ -13,16 +13,16 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "FailureReport",
-    "shortDescription": "Durable failure investigations through Eve.",
-    "longDescription": "Start, resume, and hand off evidence-backed software failure investigations through FailureReport's Eve-backed MCP tool.",
+    "shortDescription": "Report and investigate software failures.",
+    "longDescription": "Guide participants through focused evidence collection and confirmed GitHub Issue creation, then start, resume, and hand off durable FailureReport investigations when explicitly requested.",
     "developerName": "Alive24",
     "category": "Productivity",
     "capabilities": ["Interactive"],
     "websiteURL": "https://github.com/Alive24/FailureReport",
     "defaultPrompt": [
+      "The first screen is slow. Help me report the problem.",
       "Start a durable FailureReport investigation for this software failure.",
-      "Inspect the current FailureReport context for this GitHub Issue.",
-      "Resume this evidence-backed FailureReport investigation."
+      "Inspect the current FailureReport context for this GitHub Issue."
     ],
     "brandColor": "#1D4ED8"
   },

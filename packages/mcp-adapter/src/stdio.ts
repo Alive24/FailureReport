@@ -1,13 +1,13 @@
-import { createMcpRootInvoker, runFailureReportMcpServer } from "./index.js";
+import {
+  createSupervisedMcpRootInvoker,
+  runFailureReportMcpServer,
+} from "./index.js";
 
 /**
  * Local MCP process entry point.
- * Environment variables override only the Eve endpoint/authentication; the public
- * surface always remains the one-tool MCP wrapper over Eve's default Channel.
+ * Environment variables select only private runtime supervision and Channel
+ * authentication; the public surface remains the one-tool Root wrapper.
  */
-const invoker = createMcpRootInvoker({
-  host: process.env.FAILURE_REPORT_EVE_HOST,
-  bearer: process.env.FAILURE_REPORT_EVE_BEARER_TOKEN,
-});
+const invoker = createSupervisedMcpRootInvoker();
 
 await runFailureReportMcpServer(invoker);

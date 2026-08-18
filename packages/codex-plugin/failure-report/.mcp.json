@@ -1,14 +1,24 @@
 {
-  "mcpServers": {
-    "failure-report": {
-      "command": "pnpm",
-      "args": ["--filter", "@failure-report/mcp-adapter", "mcp"],
-      "cwd": "../../..",
-      "env_vars": [
-        "FAILURE_REPORT_EVE_HOST",
-        "FAILURE_REPORT_EVE_BEARER_TOKEN"
-      ],
-      "tool_timeout_sec": 900
-    }
+  "failure-report": {
+    "command": "node",
+    "args": ["./mcp/server.mjs"],
+    "cwd": ".",
+    "env_vars": [
+      "FAILURE_REPORT_RUNTIME_MODE",
+      "FAILURE_REPORT_EVE_HOST",
+      "FAILURE_REPORT_EVE_BEARER_TOKEN",
+      "FAILURE_REPORT_REMOTE_REPOSITORY",
+      "FAILURE_REPORT_TRUSTED_REPOSITORIES",
+      "FAILURE_REPORT_RUNTIME_ROOT",
+      "FAILURE_REPORT_RUNTIME_STATE_ROOT",
+      "FAILURE_REPORT_RUNTIME_READINESS_TIMEOUT_MS",
+      "FAILURE_REPORT_RUNTIME_POLL_INTERVAL_MS",
+      "FAILURE_REPORT_RUNTIME_IDLE_TIMEOUT_MS",
+      "FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ID",
+      "FAILURE_REPORT_GITHUB_WORKPAD_PRODUCER_ACTOR_ID",
+      "FAILURE_REPORT_GITHUB_WORKPAD_PRODUCERS",
+      "FAILURE_REPORT_HANDOFF_DELIVERY_POLICY"
+    ],
+    "tool_timeout_sec": 900
   }
 }

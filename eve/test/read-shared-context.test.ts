@@ -34,6 +34,7 @@ describe("read_shared_context", () => {
     const result = rehydrateSharedContext(
       issue,
       findVerifiedWorkpadForRead(issue, getProducerConfiguration),
+      { repository: "Alive24/CKBoost", revision: "a".repeat(40) },
     );
 
     expect(result.status).toBe("ok");
@@ -46,6 +47,10 @@ describe("read_shared_context", () => {
       workpad_revision: 0,
     });
     expect(result.report).toBeNull();
+    expect(result.runtime_target).toEqual({
+      repository: "Alive24/CKBoost",
+      revision: "a".repeat(40),
+    });
     expect(result.workpad).toBeNull();
     expect(result.workpad_comment_ref).toBeNull();
     expect(result.workpad_revision).toBeNull();
@@ -92,6 +97,7 @@ describe("read_shared_context", () => {
     const result = rehydrateSharedContext(
       persistedIssue,
       findVerifiedWorkpadForRead(persistedIssue, () => rootGh),
+      report.target,
     );
 
     expect(result.shared_context).toMatchObject({
